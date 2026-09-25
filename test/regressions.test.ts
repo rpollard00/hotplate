@@ -55,6 +55,17 @@ test("model-filtered chain evidence agrees with the overview", async () => {
   } finally { await store.close(); }
 });
 
+test("unknown-model filters include the same wrapper evidence in every view", async () => {
+  const store = openHotplateStore({ databasePath: ":memory:" });
+  try {
+    await store.record(fact(1, { kind: "wrapper-observed", skill, wrapperSource: "unknown-pasted-or-transformed" }));
+    for (const filter of [{ modelProvider: null }, { modelId: null }]) {
+      const items = (await store.querySkillChain(filter)).runs.flatMap(run => run.steps.flatMap(step => step.kind === "observations" ? step.items : []));
+      assert.equal(items.length, (await store.queryOverview(filter)).wrapperObservedCount);
+    }
+  } finally { await store.close(); }
+});
+
 test("same-turn reads remain one group despite result times and advancing leaves", async () => {
   const store = openHotplateStore({ databasePath: ":memory:" });
   try {

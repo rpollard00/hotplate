@@ -48,6 +48,32 @@ test("overflow preserves the full loss count through shutdown", async () => {
   });
 });
 
+test("an input at flush finalization drains before shutdown", async () => {
+  await fixture(async (path, ctx) => {
+    const store = openHotplateStore({ databasePath: path });
+    const record = store.record.bind(store);
+    let scheduled = false;
+    let closed: Promise<void> | undefined;
+    const collector = new HotplateCollector({ openStore: () => store });
+    store.record = (observations, options) => {
+      const result = record(observations, options);
+      if (!scheduled) {
+        scheduled = true;
+        queueMicrotask(() => queueMicrotask(() => {
+          input(collector, ctx);
+          closed = collector.shutdown("quit", ctx);
+        }));
+      }
+      return result;
+    };
+    await collector.sessionStart({ type: "session_start", reason: "startup" }, ctx, () => []);
+    await nextTick();
+    assert.ok(closed);
+    await closed;
+    assert.equal((await overview(path)).commandIntentCount, 1);
+  });
+});
+
 test("shutdown awaits the active SQLite retry before closing", async () => {
   await fixture(async (path, ctx) => {
     const collector = new HotplateCollector({ openStore: () => openHotplateStore({ databasePath: path }) });
