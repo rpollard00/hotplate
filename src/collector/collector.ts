@@ -193,7 +193,10 @@ export class HotplateCollector {
     this.#flushPromise = nextTick().then(() => this.#drain()).catch(() => {
       for (const item of this.#queue.splice(0)) this.#rememberLoss(item, "db-error");
       this.#reportFailure();
-    }).finally(() => { this.#flushPromise = null; });
+    }).finally(() => {
+      this.#flushPromise = null;
+      if (this.#queue.length > 0) return this.#scheduleFlush();
+    });
     return this.#flushPromise;
   }
 

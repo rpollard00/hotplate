@@ -801,7 +801,9 @@ function chainEvidenceIncluded(evidence: ChainObservation["evidence"], filter: C
 
   if (evidence.kind === "wrapper-observed") {
     if (filter.includeWrapperObserved === false) return false;
-    return filter.source === undefined && filter.modelProvider === undefined && filter.modelId === undefined;
+    return filter.source === undefined
+      && (filter.modelProvider === undefined || filter.modelProvider === null)
+      && (filter.modelId === undefined || filter.modelId === null);
   }
 
   if (filter.includeReadResult === false) return false;
