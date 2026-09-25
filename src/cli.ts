@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, unlinkSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openHotplateStore, type Observation } from "./index.js";
@@ -229,7 +229,7 @@ function requireNext(argv: readonly string[], index: number, flag: string): stri
 }
 
 function parsePort(value: string): number {
-  const port = Number.parseInt(value, 10);
+  const port = /^\d+$/.test(value) ? Number(value) : NaN;
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new Error(`Invalid port ${value}`);
   }
@@ -248,5 +248,7 @@ if (isCliEntrypoint()) {
 }
 
 function isCliEntrypoint(): boolean {
-  return process.argv[1] === fileURLToPath(import.meta.url);
+  if (!process.argv[1]) return false;
+  try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return false; }
 }

@@ -1,14 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { setImmediate } from "node:timers";
+import { setImmediate as nextTick } from "node:timers/promises";
 import type {
-  ExtensionContext,
-  InputEvent,
-  MessageEndEvent,
-  SessionStartEvent,
-  SessionTreeEvent,
-  SlashCommandInfo,
-  ToolResultEvent,
-  TurnStartEvent,
+  ExtensionContext, InputEvent, MessageEndEvent, SessionStartEvent, SessionTreeEvent,
+  SlashCommandInfo, ToolResultEvent, TurnStartEvent,
 } from "@earendil-works/pi-coding-agent";
 import type { Evidence, GapReason, HotplateStore, ModelRef, Observation, ObservationScope, SegmentReason } from "../domain.js";
 import { openHotplateStore } from "../store.js";
@@ -17,6 +11,12 @@ import { buildSkillCatalog, commandIntentSkillName, skillFromReadPath, skillWrap
 const MAX_QUEUE = 1_000;
 const SHUTDOWN_DEADLINE_MS = 500;
 
+type CollectorContext = {
+  cwd: string;
+  sessionManager: Pick<ExtensionContext["sessionManager"], "getLeafId" | "getSessionId" | "getSessionFile">;
+  ui: Pick<ExtensionContext["ui"], "setStatus">;
+};
+type CaptureState = { kind: "inactive" } | { kind: "active" | "closing"; store: HotplateStore; abort: AbortController };
 export type HotplateCollectorOptions = {
   openStore?: () => HotplateStore;
   producerId?: string;
@@ -27,27 +27,20 @@ export class HotplateCollector {
   readonly #openStore: () => HotplateStore;
   readonly #producerId: string;
   readonly #now: () => Date;
-
-  #store: HotplateStore | null = null;
+  #state: CaptureState = { kind: "inactive" };
   #catalog: SkillCatalog = { byPath: new Map(), skills: [] };
   #queue: Observation[] = [];
-  #flushing = false;
-  #closed = false;
+  #gaps = new Map<string, Observation>();
+  #flushPromise: Promise<void> | null = null;
+  #shutdownPromise: Promise<void> | null = null;
   #sequence = 0;
-  #pendingQueueOverflow = 0;
-  #pendingDbDropped = 0;
-  #lastInputIntentKey: string | null = null;
-  #pendingInputSkillNames: string[] = [];
+  #dropped = 0;
+  #warned = false;
+  #context: CollectorContext | null = null;
   #toolCallModels = new Map<string, ModelRef>();
   #scope: ObservationScope = {
-    projectCwd: process.cwd(),
-    sessionId: null,
-    sessionFile: null,
-    segmentId: randomUUID(),
-    segmentReason: "unknown",
-    runId: null,
-    turnId: null,
-    leafId: null,
+    projectCwd: process.cwd(), sessionId: null, sessionFile: null,
+    segmentId: randomUUID(), segmentReason: "unknown", runId: null, turnId: null, leafId: null,
   };
 
   constructor(options: HotplateCollectorOptions = {}) {
@@ -56,261 +49,188 @@ export class HotplateCollector {
     this.#now = options.now ?? (() => new Date());
   }
 
-  sessionStart(event: SessionStartEvent, ctx: ExtensionContext, commands: () => readonly SlashCommandInfo[]): void {
+  async sessionStart(event: SessionStartEvent, ctx: CollectorContext, commands: () => readonly SlashCommandInfo[]): Promise<void> {
+    if (this.#state.kind !== "inactive") await this.shutdown("reload", ctx);
+    this.#shutdownPromise = null;
+    this.#context = ctx;
+    this.#startSegment(event.reason, ctx);
     this.#safe(() => {
-      this.#closed = false;
-      this.#store ??= this.#openStore();
+      this.#state = { kind: "active", store: this.#openStore(), abort: new AbortController() };
       this.#catalog = buildSkillCatalog(commands());
-      this.#startSegment(event.reason, ctx);
-      if (this.#catalog.skills.length > 0) {
-        this.#enqueue({ kind: "catalog-snapshot", skills: this.#catalog.skills }, ctx);
-      }
+      this.#enqueue({ kind: "catalog-snapshot", skills: this.#catalog.skills });
     });
   }
 
-  input(event: InputEvent, ctx: ExtensionContext): void {
+  input(event: InputEvent, _ctx: CollectorContext): void {
     this.#safe(() => {
       const skillName = commandIntentSkillName(event.text);
-      if (!skillName) {
-        return;
-      }
-      const intentKey = `${event.source}\u0000${skillName}\u0000${event.text}`;
-      if (this.#lastInputIntentKey === intentKey) {
-        return;
-      }
-      this.#lastInputIntentKey = intentKey;
-      this.#pendingInputSkillNames.push(skillName);
-      this.#enqueue({ kind: "command-intent", skillName, source: event.source }, ctx);
+      if (skillName) this.#enqueue({ kind: "command-intent", skillName, source: event.source }, { ...this.#scope, runId: null, turnId: null });
     });
   }
 
-  beforeAgentStart(prompt: string, ctx: ExtensionContext): void {
+  beforeAgentStart(_prompt: string, ctx: CollectorContext): void {
     this.#safe(() => {
+      this.#toolCallModels.clear();
       this.#scope = { ...this.#scope, runId: randomUUID(), turnId: null, leafId: ctx.sessionManager.getLeafId() ?? null };
-      for (const skill of skillWrappersFromPrompt(prompt, this.#catalog)) {
-        const matchedIndex = this.#pendingInputSkillNames.findIndex((name) => name === skill.name);
-        const wrapperSource = matchedIndex >= 0 ? "expanded-prompt" : "unknown-pasted-or-transformed";
-        if (matchedIndex >= 0) {
-          this.#pendingInputSkillNames.splice(matchedIndex, 1);
-        }
-        this.#enqueue({ kind: "wrapper-observed", skill, wrapperSource }, ctx);
-      }
-      this.#pendingInputSkillNames = [];
-      this.#lastInputIntentKey = null;
     });
   }
 
-  agentStart(ctx: ExtensionContext): void {
-    this.#safe(() => {
-      if (this.#scope.runId === null) {
-        this.#scope = { ...this.#scope, runId: randomUUID(), turnId: null, leafId: ctx.sessionManager.getLeafId() ?? null };
-      }
-    });
+  agentStart(ctx: CollectorContext): void {
+    if (this.#scope.runId === null) this.beforeAgentStart("", ctx);
   }
 
-  turnStart(event: TurnStartEvent, ctx: ExtensionContext): void {
+  agentEnd(): void {
+    this.#toolCallModels.clear();
+    this.#scope = { ...this.#scope, runId: null, turnId: null };
+  }
+
+  turnStart(event: TurnStartEvent, ctx: CollectorContext): void {
     this.#safe(() => {
+      this.#toolCallModels.clear();
       const runId = this.#scope.runId ?? randomUUID();
-      this.#scope = {
-        ...this.#scope,
-        runId,
-        turnId: `${runId}:turn:${event.turnIndex}`,
-        leafId: ctx.sessionManager.getLeafId() ?? null,
-      };
+      this.#scope = { ...this.#scope, runId, turnId: `${runId}:turn:${event.turnIndex}`, leafId: ctx.sessionManager.getLeafId() ?? null };
     });
   }
 
   messageEnd(event: MessageEndEvent): void {
     this.#safe(() => {
-      if (event.message.role !== "assistant") {
-        return;
-      }
-      const model = modelFromAssistantMessage(event.message);
-      for (const block of event.message.content) {
-        if (block.type === "toolCall") {
-          this.#toolCallModels.set(block.id, model);
+      if (event.message.role === "user") {
+        const text = typeof event.message.content === "string" ? event.message.content
+          : event.message.content.filter(block => block.type === "text").map(block => block.text).join("\n");
+        for (const skill of skillWrappersFromPrompt(text, this.#scope.projectCwd)) {
+          this.#enqueue({ kind: "wrapper-observed", skill, wrapperSource: "unknown-pasted-or-transformed" });
+        }
+      } else if (event.message.role === "assistant") {
+        const model = { provider: event.message.provider, id: event.message.responseModel ?? event.message.model };
+        for (const block of event.message.content) {
+          if (block.type === "toolCall" && block.name === "read") this.#toolCallModels.set(block.id, model);
         }
       }
     });
   }
 
-  toolResult(event: ToolResultEvent, ctx: ExtensionContext): void {
+  toolResult(event: ToolResultEvent, ctx: CollectorContext): void {
     this.#safe(() => {
-      if (event.toolName !== "read") {
-        return;
-      }
-
-      const inputPath = stringRecordValue(event.input, "path");
-      if (inputPath === null) {
-        return;
-      }
-
-      const skill = skillFromReadPath(inputPath, ctx.cwd, this.#catalog);
-      if (!skill) {
-        return;
-      }
-
-      this.#enqueue(
-        {
-          kind: "read-result",
-          skill,
-          toolCallId: event.toolCallId,
-          outcome: event.isError ? "error" : "success",
-          model: this.#toolCallModels.get(event.toolCallId) ?? null,
-        },
-        ctx,
-      );
+      const model = this.#toolCallModels.get(event.toolCallId) ?? null;
       this.#toolCallModels.delete(event.toolCallId);
+      if (event.toolName !== "read" || typeof event.input.path !== "string") return;
+      const skill = skillFromReadPath(event.input.path, ctx.cwd, this.#catalog);
+      if (skill) this.#enqueue({ kind: "read-result", skill, toolCallId: event.toolCallId, outcome: event.isError ? "error" : "success", model });
     });
   }
 
-  sessionTree(event: SessionTreeEvent, ctx: ExtensionContext): void {
+  sessionTree(event: SessionTreeEvent, ctx: CollectorContext): void {
     this.#safe(() => {
-      if (event.newLeafId !== event.oldLeafId) {
-        this.#startSegment("branch", ctx);
-      }
+      if (event.newLeafId !== event.oldLeafId) this.#startSegment("branch", ctx);
     });
   }
 
-  async shutdown(reason: Exclude<SegmentReason, "startup" | "branch" | "unknown"> | "quit", ctx: ExtensionContext): Promise<void> {
-    await this.#safeAsync(async () => {
-      this.#closed = true;
-      if (this.#pendingQueueOverflow > 0) {
-        this.#enqueueGap(this.#pendingQueueOverflow, "queue-overflow", ctx);
-        this.#pendingQueueOverflow = 0;
-      }
-      if (this.#pendingDbDropped > 0) {
-        this.#enqueueGap(this.#pendingDbDropped, "db-error", ctx);
-        this.#pendingDbDropped = 0;
-      }
-      await this.#flush();
-      if (this.#queue.length > 0) {
-        const dropped = this.#queue.length;
-        this.#queue = [];
-        this.#enqueueGap(dropped, "shutdown-deadline", ctx);
-        await this.#flush();
-      }
-      await this.#store?.close({ deadlineMs: SHUTDOWN_DEADLINE_MS });
-      this.#store = null;
-      this.#scope = { ...this.#scope, segmentReason: reason === "quit" ? "unknown" : reason };
-    });
+  shutdown(_reason: Exclude<SegmentReason, "startup" | "branch" | "unknown"> | "quit", _ctx: CollectorContext): Promise<void> {
+    if (this.#shutdownPromise) return this.#shutdownPromise;
+    const state = this.#state;
+    if (state.kind === "inactive") return Promise.resolve();
+    this.#state = { ...state, kind: "closing" };
+    this.#shutdownPromise = this.#close(state);
+    return this.#shutdownPromise;
   }
 
-  #startSegment(reason: SegmentReason, ctx: ExtensionContext): void {
+  async #close(state: Exclude<CaptureState, { kind: "inactive" }>): Promise<void> {
+    const timeout = setTimeout(() => state.abort.abort(), SHUTDOWN_DEADLINE_MS);
+    try {
+      await this.#scheduleFlush();
+    } finally {
+      clearTimeout(timeout);
+      try { await state.store.close(); } catch { this.#reportFailure(); }
+      this.#state = { kind: "inactive" };
+      this.#toolCallModels.clear();
+    }
+  }
+
+  #startSegment(reason: SegmentReason, ctx: CollectorContext): void {
     this.#scope = {
-      projectCwd: ctx.cwd,
-      sessionId: ctx.sessionManager.getSessionId() ?? null,
-      sessionFile: ctx.sessionManager.getSessionFile() ?? null,
-      segmentId: randomUUID(),
-      segmentReason: reason,
-      runId: null,
-      turnId: null,
-      leafId: ctx.sessionManager.getLeafId() ?? null,
+      projectCwd: ctx.cwd, sessionId: ctx.sessionManager.getSessionId() ?? null,
+      sessionFile: ctx.sessionManager.getSessionFile() ?? null, segmentId: randomUUID(), segmentReason: reason,
+      runId: null, turnId: null, leafId: ctx.sessionManager.getLeafId() ?? null,
     };
-    this.#pendingInputSkillNames = [];
-    this.#lastInputIntentKey = null;
     this.#toolCallModels.clear();
   }
 
-  #enqueue(evidence: Evidence, ctx: ExtensionContext): void {
-    if (this.#closed && evidence.kind !== "capture-gap") {
-      return;
-    }
-
-    if (this.#pendingQueueOverflow > 0) {
-      this.#enqueueGap(this.#pendingQueueOverflow, "queue-overflow", ctx);
-      this.#pendingQueueOverflow = 0;
-    }
-    if (this.#pendingDbDropped > 0) {
-      this.#enqueueGap(this.#pendingDbDropped, "db-error", ctx);
-      this.#pendingDbDropped = 0;
-    }
-
-    if (this.#queue.length >= MAX_QUEUE) {
-      this.#pendingQueueOverflow += 1;
-      return;
-    }
-
-    this.#queue.push({
-      id: `${this.#producerId}:${this.#sequence + 1}`,
-      producerId: this.#producerId,
-      sequence: this.#sequence + 1,
-      observedAt: this.#now().toISOString(),
-      scope: { ...this.#scope, leafId: ctx.sessionManager.getLeafId() ?? null },
-      evidence,
-    });
+  #fact(evidence: Evidence, scope = this.#scope): Observation {
     this.#sequence += 1;
-    this.#scheduleFlush();
+    return { id: `${this.#producerId}:${this.#sequence}`, producerId: this.#producerId,
+      sequence: this.#sequence, observedAt: this.#now().toISOString(), scope: { ...scope }, evidence };
   }
 
-  #enqueueGap(dropped: number, reason: GapReason, ctx: ExtensionContext): void {
-    if (dropped <= 0 || this.#queue.length >= MAX_QUEUE) {
+  #enqueue(evidence: Evidence, scope = this.#scope): void {
+    if (this.#state.kind === "closing") return;
+    const observation = this.#fact(evidence, scope);
+    if (this.#state.kind === "inactive") {
+      this.#rememberLoss(observation, "db-error");
       return;
     }
-    this.#queue.push({
-      id: `${this.#producerId}:${this.#sequence + 1}`,
-      producerId: this.#producerId,
-      sequence: this.#sequence + 1,
-      observedAt: this.#now().toISOString(),
-      scope: { ...this.#scope, leafId: ctx.sessionManager.getLeafId() ?? null },
-      evidence: { kind: "capture-gap", dropped, reason },
-    });
-    this.#sequence += 1;
+    if (this.#queue.length >= MAX_QUEUE) this.#rememberLoss(observation, "queue-overflow");
+    else this.#queue.push(observation);
+    void this.#scheduleFlush();
   }
 
-  #scheduleFlush(): void {
-    if (this.#flushing) {
-      return;
+  #rememberLoss(observation: Observation, reason: GapReason): void {
+    const count = observation.evidence.kind === "capture-gap" ? observation.evidence.dropped : 1;
+    const gapReason = observation.evidence.kind === "capture-gap" ? observation.evidence.reason : reason;
+    const key = JSON.stringify([observation.scope, gapReason]);
+    const previous = this.#gaps.get(key);
+    if (previous?.evidence.kind === "capture-gap") {
+      this.#gaps.set(key, { ...previous, evidence: { ...previous.evidence, dropped: previous.evidence.dropped + count } });
+    } else if (this.#gaps.size < MAX_QUEUE) {
+      this.#gaps.set(key, observation.evidence.kind === "capture-gap" ? observation
+        : this.#fact({ kind: "capture-gap", dropped: count, reason: gapReason }, observation.scope));
     }
-    this.#flushing = true;
-    setImmediate(() => {
-      void this.#safeAsync(async () => {
-        await this.#flush();
-      });
-    });
+    if (observation.evidence.kind !== "capture-gap") this.#dropped += count;
+    this.#reportFailure();
   }
 
-  async #flush(): Promise<void> {
-    const store = this.#store;
-    if (!store) {
-      this.#queue = [];
-      this.#flushing = false;
-      return;
-    }
+  #scheduleFlush(): Promise<void> {
+    if (this.#flushPromise) return this.#flushPromise;
+    this.#flushPromise = nextTick().then(() => this.#drain()).catch(() => {
+      for (const item of this.#queue.splice(0)) this.#rememberLoss(item, "db-error");
+      this.#reportFailure();
+    }).finally(() => { this.#flushPromise = null; });
+    return this.#flushPromise;
+  }
 
-    while (this.#queue.length > 0) {
-      const batch = this.#queue;
-      this.#queue = [];
-      const summary = await store.record(batch);
-      if (summary.dropped > 0) {
-        this.#pendingDbDropped += summary.dropped;
+  async #drain(): Promise<void> {
+    const state = this.#state;
+    if (state.kind === "inactive") return;
+    const gaps = [...this.#gaps.values()];
+    this.#gaps.clear();
+    let batch = [...this.#queue.splice(0), ...gaps];
+    while (batch.length > 0) {
+      if (state.abort.signal.aborted) {
+        for (const item of batch) this.#rememberLoss(item, "shutdown-deadline");
+      } else {
+        try {
+          const summary = await state.store.record(batch, { signal: state.abort.signal });
+          for (const item of batch.slice(batch.length - summary.dropped)) {
+            this.#rememberLoss(item, state.abort.signal.aborted ? "shutdown-deadline" : "db-error");
+          }
+        } catch {
+          for (const item of batch) this.#rememberLoss(item, "db-error");
+        }
       }
+      batch = this.#queue.splice(0);
     }
-    this.#flushing = false;
   }
 
   #safe(work: () => void): void {
-    try {
-      work();
-    } catch {
-      this.#pendingDbDropped += 1;
+    try { work(); } catch {
+      this.#rememberLoss(this.#fact({ kind: "capture-gap", dropped: 1, reason: "db-error" }), "db-error");
     }
   }
 
-  async #safeAsync(work: () => Promise<void>): Promise<void> {
-    try {
-      await work();
-    } catch {
-      this.#pendingDbDropped += 1;
+  #reportFailure(): void {
+    try { this.#context?.ui.setStatus("hotplate", `Hotplate: capture incomplete (${this.#dropped} lost). Check HOTPLATE_DB and /reload.`); } catch {}
+    if (!this.#warned) {
+      this.#warned = true;
+      process.stderr.write(`${JSON.stringify({ type: "hotplate_capture_incomplete", action: "Check HOTPLATE_DB and reload pi" })}\n`);
     }
   }
-}
-
-function modelFromAssistantMessage(message: Extract<MessageEndEvent["message"], { role: "assistant" }>): ModelRef {
-  return { provider: message.provider, id: message.responseModel ?? message.model };
-}
-
-function stringRecordValue(record: Record<string, unknown>, key: string): string | null {
-  const value = record[key];
-  return typeof value === "string" ? value : null;
 }

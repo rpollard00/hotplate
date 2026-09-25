@@ -3,7 +3,6 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import { createAssistantMessageEventStream, type Api, type AssistantMessage, type Model, type SimpleStreamOptions, type TranscriptContext } from "@earendil-works/pi-ai";
 import {
@@ -50,8 +49,8 @@ test("local pi package load captures SDK skill rows and serves dashboard JSON", 
     const session = await createSessionFromLocalPackage(fixture);
     try {
       await session.prompt("/skill:integration-skill", { source: "interactive" });
-      await delay(150);
     } finally {
+      await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
       session.dispose();
     }
 

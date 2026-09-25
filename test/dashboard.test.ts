@@ -82,6 +82,11 @@ test("dashboard serves filtered data, static assets, and rejects unsafe origins"
       assert.equal(badHost, 403);
       const badOrigin = await fetch(`${server.url}/api/dashboard`, { headers: { Origin: "http://evil.example" } });
       assert.equal(badOrigin.status, 403);
+      const wrongPort = new URL(server.url);
+      wrongPort.port = String(Number(wrongPort.port) + 1);
+      assert.equal((await fetch(`${server.url}/api/dashboard`, { headers: { Origin: wrongPort.origin } })).status, 403);
+      assert.equal((await fetch(`${server.url}/api/dashboard`, { headers: { Origin: server.url } })).status, 200);
+      assert.equal(await requestStatus(`${server.url}/api/dashboard`, { Host: wrongPort.host }), 403);
     } finally {
       await server.close();
     }

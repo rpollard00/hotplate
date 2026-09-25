@@ -42,5 +42,5 @@ for (let index = 0; index < count; index += 1) {
 }
 
 const summary = await store.record(observations);
-await store.close({ deadlineMs: 100 });
+await store.close();
 process.stdout.write(`${JSON.stringify(summary)}\n`);

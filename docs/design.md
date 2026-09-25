@@ -31,6 +31,8 @@ The observation evidence types are:
 These evidence types stay separate.
 A command intent is not a successful load.
 A wrapper is not proof of a user command.
+The collector observes wrappers in delivered user messages, including queued messages.
+Wrapper provenance remains unknown. Name matching does not establish command expansion.
 A failed read is not a successful model load.
 
 ## Identity and lifecycle
@@ -59,7 +61,10 @@ The default database path is:
 Writer connections use WAL and schema version 1.
 Queries use parameterized SQL.
 Observation IDs are unique, so retries do not duplicate rows.
-Busy handling uses short bounded waits.
+Busy handling uses a 25 ms timeout and three retries.
+Write retries yield between attempts and honor cancellation.
+The collector owns one drain promise and waits for it before closing the database.
+Shutdown cancels the drain after 500 ms. Synchronous SQLite calls are not preemptible.
 Persistent lock contention drops observations and reports capture gaps when possible.
 
 A read-only dashboard open does not migrate or create a missing database.
@@ -89,8 +94,10 @@ It is not a privileged system-wide collector.
 Other processes in the same OS account can access files that the account can read.
 Use a separate OS account when this boundary is not sufficient.
 
-Hotplate makes a best effort to restrict database and directory permissions.
+Hotplate restricts database permissions and creates new directories with private permissions.
+It preserves existing parent-directory permissions.
 The OS and filesystem decide the final permission behavior.
+Hotplate does not read files referenced by pasted wrappers. Content versions remain unknown.
 
 ## Known limits
 

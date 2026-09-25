@@ -130,8 +130,8 @@ class SqliteHotplateStore implements HotplateStore {
     }
   }
 
-  async record(input: Observation | readonly Observation[]): Promise<CaptureWriteSummary> {
-    if (this.#closed || this.#readOnly) {
+  async record(input: Observation | readonly Observation[], options: { signal?: AbortSignal } = {}): Promise<CaptureWriteSummary> {
+    if (this.#closed || this.#readOnly || options.signal?.aborted) {
       return { accepted: 0, duplicate: 0, dropped: observationCount(input) };
     }
 
@@ -151,6 +151,7 @@ class SqliteHotplateStore implements HotplateStore {
     }
 
     for (let attempt = 0; attempt <= this.#busyRetries; attempt += 1) {
+      if (this.#closed || options.signal?.aborted) return { accepted: 0, duplicate: 0, dropped: valid.length + invalid };
       try {
         const written = this.#write(valid);
         return { ...written, dropped: invalid };
@@ -159,7 +160,11 @@ class SqliteHotplateStore implements HotplateStore {
         if (!isBusyError(error) || attempt === this.#busyRetries) {
           return { accepted: 0, duplicate: 0, dropped: valid.length + invalid };
         }
-        await delay(Math.min(5 * (attempt + 1), 25));
+        try {
+          await delay(Math.min(5 * (attempt + 1), 25), undefined, { signal: options.signal });
+        } catch {
+          return { accepted: 0, duplicate: 0, dropped: valid.length + invalid };
+        }
       }
     }
 
@@ -406,7 +411,7 @@ class SqliteHotplateStore implements HotplateStore {
     };
   }
 
-  async close(_options: { deadlineMs?: number } = {}): Promise<void> {
+  async close(): Promise<void> {
     if (this.#closed) {
       return;
     }

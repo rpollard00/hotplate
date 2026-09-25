@@ -197,7 +197,7 @@ export type CaptureHealthView = {
 };
 
 export interface HotplateStore {
-  record(observation: Observation | readonly Observation[]): Promise<CaptureWriteSummary>;
+  record(observation: Observation | readonly Observation[], options?: { signal?: AbortSignal }): Promise<CaptureWriteSummary>;
 
   queryOverview(filter: DashboardFilter): Promise<OverviewView>;
   querySkillTable(filter: DashboardFilter): Promise<SkillTableView>;
@@ -205,5 +205,5 @@ export interface HotplateStore {
   querySkillChain(filter: ChainFilter): Promise<SkillChainView>;
   queryCaptureHealth(filter: DashboardFilter): Promise<CaptureHealthView>;
 
-  close(options?: { deadlineMs?: number }): Promise<void>;
+  close(): Promise<void>;
 }

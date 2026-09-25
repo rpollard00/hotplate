@@ -57,7 +57,8 @@ export const dashboardHtml = `<!doctype html>
         </label>
         <div class="filter-actions">
           <button type="submit">Apply</button>
-          <button type="button" id="reset-filters">Reset</button>
+          <button type="button" id="reset-filters" class="secondary">Reset</button>
+          <button type="button" id="refresh-data" class="secondary">Refresh</button>
         </div>
       </form>
     </section>
@@ -97,7 +98,7 @@ export const dashboardHtml = `<!doctype html>
       <div class="section-header">
         <div>
           <h2 id="chains-heading">Observed-order skill chains</h2>
-          <p>Chains split by project, session, segment, and run. Gaps mark filtered or dropped observations.</p>
+          <p>Observed order, not proven dependency. Reads from one model turn form one group. Gaps mark filtered or dropped observations.</p>
         </div>
         <p class="pill" id="chain-filter-label">All skills</p>
       </div>
@@ -214,6 +215,8 @@ tr:last-child td { border-bottom: 0; }
   color: var(--accent-strong);
   font-size: 0.8rem;
   width: fit-content;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 .bars { display: grid; gap: 0.65rem; }
 .bar-row { display: grid; grid-template-columns: minmax(8rem, 12rem) 1fr auto; gap: 0.6rem; align-items: center; }
@@ -224,7 +227,7 @@ tr:last-child td { border-bottom: 0; }
 .chain-run { border: 1px solid var(--line); border-radius: 18px; padding: 0.85rem; background: white; }
 .chain-title { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
 .chain-steps { display: flex; flex-wrap: wrap; gap: 0.55rem; align-items: stretch; }
-.chain-step, .chain-gap { border-radius: 16px; padding: 0.65rem; border: 1px solid var(--line); background: #fffaf1; max-width: 20rem; }
+.chain-step, .chain-gap { overflow-wrap: anywhere; min-width: 0; border-radius: 16px; padding: 0.65rem; border: 1px solid var(--line); background: #fffaf1; max-width: 20rem; }
 .chain-gap { background: #f5eee5; color: var(--muted); border-style: dashed; }
 .chain-items { display: grid; gap: 0.35rem; }
 .evidence-button { border-radius: 12px; text-align: left; background: white; color: var(--ink); border-color: var(--line); padding: 0.45rem 0.55rem; }
@@ -240,7 +243,7 @@ tr:last-child td { border-bottom: 0; }
 `;
 
 export const dashboardJs = `const state = {
-  optionsLoaded: false,
+  requestId: 0,
   chainSkillName: null,
 };
 
@@ -270,6 +273,7 @@ els.filterForm.addEventListener("submit", (event) => {
   event.preventDefault();
   loadDashboard();
 });
+document.getElementById("refresh-data").addEventListener("click", loadDashboard);
 els.resetFilters.addEventListener("click", () => {
   els.filterForm.reset();
   state.chainSkillName = null;
@@ -325,13 +329,16 @@ function dateTimeValue(value) {
 }
 
 async function loadDashboard() {
+  const requestId = ++state.requestId;
   setStatus(null, "Loading");
   try {
     const response = await fetch(\`/api/dashboard?\${filterParams().toString()}\`, { headers: { Accept: "application/json" } });
     if (!response.ok) throw new Error(\`HTTP \${response.status}\`);
     const payload = await response.json();
-    renderPayload(payload);
+    if (requestId === state.requestId) renderPayload(payload);
   } catch (error) {
+    if (requestId !== state.requestId) return;
+    clearDashboard();
     setStatus("error", "Error");
     showMessage("error", "Dashboard error", error instanceof Error ? error.message : "Unknown error");
   }
@@ -493,6 +500,7 @@ function renderSkillTable(rows) {
     path.textContent = row.canonicalPath ?? "Intent only, no canonical path";
     stack.append(button, path);
     if (row.cataloged) stack.append(badge("catalog"));
+    else if (row.canonicalPath) stack.append(badge("not in observed catalog"));
     if (row.cataloged && row.uniqueObservedRunActivations === 0 && row.successfulReadCount === 0 && row.wrapperObservedCount === 0) stack.append(badge("zero observed loads"));
     name.append(stack);
     tr.append(

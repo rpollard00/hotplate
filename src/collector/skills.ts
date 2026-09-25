@@ -1,6 +1,7 @@
-import { createHash } from "node:crypto";
-import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { basename, dirname, resolve } from "node:path";
+import { realpathSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { SlashCommandInfo } from "@earendil-works/pi-coding-agent";
 import type { SkillRef } from "../domain.js";
 
@@ -22,7 +23,7 @@ export function buildSkillCatalog(commands: readonly SlashCommandInfo[]): SkillC
     const skill: SkillRef = {
       name,
       canonicalPath,
-      version: hashFile(canonicalPath),
+      version: null,
     };
     byPath.set(canonicalPath, skill);
   }
@@ -31,11 +32,11 @@ export function buildSkillCatalog(commands: readonly SlashCommandInfo[]): SkillC
 }
 
 export function commandIntentSkillName(input: string): string | null {
-  const match = input.match(/^\s*\/skill:([a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)(?:\s|$)/i);
+  const match = input.match(/^\/skill:([^ ]+)(?: |$)/);
   return match?.[1] ?? null;
 }
 
-export function skillWrappersFromPrompt(prompt: string, catalog: SkillCatalog): readonly SkillRef[] {
+export function skillWrappersFromPrompt(prompt: string, cwd = process.cwd()): readonly SkillRef[] {
   const skills: SkillRef[] = [];
   const wrapperPattern = /<skill\s+name="([^"]+)"\s+location="([^"]+)"\s*>/g;
   for (const match of prompt.matchAll(wrapperPattern)) {
@@ -44,17 +45,17 @@ export function skillWrappersFromPrompt(prompt: string, catalog: SkillCatalog): 
     if (!name || !location) {
       continue;
     }
-    const canonicalPath = canonicalizePath(location);
-    skills.push(catalog.byPath.get(canonicalPath) ?? { name, canonicalPath, version: hashFile(canonicalPath) });
+    const canonicalPath = canonicalizePath(location, cwd);
+    skills.push({ name, canonicalPath, version: null });
   }
   return skills;
 }
 
 export function skillFromReadPath(inputPath: string, cwd: string, catalog: SkillCatalog): SkillRef | null {
-  const canonicalPath = canonicalizePath(resolve(cwd, inputPath));
+  const canonicalPath = canonicalizePath(inputPath, cwd);
   const cataloged = catalog.byPath.get(canonicalPath);
   if (cataloged) {
-    return cataloged;
+    return { ...cataloged, version: null };
   }
 
   if (basename(canonicalPath) !== "SKILL.md") {
@@ -64,25 +65,21 @@ export function skillFromReadPath(inputPath: string, cwd: string, catalog: Skill
   return {
     name: basename(dirname(canonicalPath)),
     canonicalPath,
-    version: existsSync(canonicalPath) ? hashFile(canonicalPath) : null,
+    version: null,
   };
 }
 
-function canonicalizePath(path: string): string {
-  const absolute = resolve(path);
+function canonicalizePath(path: string, cwd = process.cwd()): string {
+  let normalized = path.replace(/[\u00a0\u2000-\u200a\u202f\u205f\u3000]/g, " ");
+  if (normalized.startsWith("@")) normalized = normalized.slice(1);
+  if (normalized === "~") normalized = homedir();
+  else if (normalized.startsWith("~/")) normalized = join(homedir(), normalized.slice(2));
+  if (normalized.startsWith("file://")) normalized = fileURLToPath(normalized);
+  const absolute = resolve(cwd, normalized);
   try {
     return realpathSync.native(absolute);
   } catch {
     return absolute;
-  }
-}
-
-function hashFile(path: string): string | null {
-  try {
-    const content = readFileSync(path);
-    return `sha256:${createHash("sha256").update(content).digest("hex")}`;
-  } catch {
-    return null;
   }
 }
 

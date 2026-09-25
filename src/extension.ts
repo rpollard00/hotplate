@@ -2,10 +2,11 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { HotplateCollector } from "./collector/collector.js";
 
 export default function hotplateExtension(pi: ExtensionAPI): void {
+  if (process.env.HOTPLATE_DISABLED === "1") return;
   const collector = new HotplateCollector();
 
   pi.on("session_start", (event, ctx) => {
-    collector.sessionStart(event, ctx, () => pi.getCommands());
+    return collector.sessionStart(event, ctx, () => pi.getCommands());
   });
 
   pi.on("input", (event, ctx) => {
@@ -19,6 +20,10 @@ export default function hotplateExtension(pi: ExtensionAPI): void {
 
   pi.on("agent_start", (_event, ctx) => {
     collector.agentStart(ctx);
+  });
+
+  pi.on("agent_end", () => {
+    collector.agentEnd();
   });
 
   pi.on("turn_start", (event, ctx) => {

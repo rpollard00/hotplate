@@ -1,4 +1,5 @@
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -170,6 +171,49 @@ test("repeated handled commands remain separate intents without inferred loads",
     } finally { await open.store.close(); }
   } finally {
     restoreHotplateDb(previousDb);
+    await rm(fixture.rootDir, { recursive: true, force: true });
+  }
+});
+
+test("pi SDK preserves intent but does not infer a load after an input transform", async () => {
+  const fixture = await createFixture();
+  const previousDb = process.env.HOTPLATE_DB;
+  process.env.HOTPLATE_DB = fixture.databasePath;
+  try {
+    const session = await createSession(fixture, [pi => {
+      pi.on("input", () => ({ action: "transform", text: "Read a file instead." }));
+    }]);
+    try { await session.prompt("/skill:test-skill"); }
+    finally { await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }); session.dispose(); }
+    const open = openHotplateReadStore({ databasePath: fixture.databasePath });
+    assert.equal(open.kind, "ready");
+    if (open.kind !== "ready") return;
+    try {
+      const overview = await open.store.queryOverview({});
+      assert.equal(overview.commandIntentCount, 1);
+      assert.equal(overview.wrapperObservedCount, 0);
+    } finally { await open.store.close(); }
+  } finally {
+    restoreHotplateDb(previousDb);
+    await rm(fixture.rootDir, { recursive: true, force: true });
+  }
+});
+
+test("disabled capture leaves pi working and does not create the database", async () => {
+  const fixture = await createFixture();
+  const previousDb = process.env.HOTPLATE_DB;
+  const disabled = process.env.HOTPLATE_DISABLED;
+  process.env.HOTPLATE_DB = fixture.databasePath;
+  process.env.HOTPLATE_DISABLED = "1";
+  try {
+    const session = await createSession(fixture);
+    try { await session.prompt("/skill:test-skill"); }
+    finally { session.dispose(); }
+    assert.equal(existsSync(fixture.databasePath), false);
+  } finally {
+    restoreHotplateDb(previousDb);
+    if (disabled === undefined) delete process.env.HOTPLATE_DISABLED;
+    else process.env.HOTPLATE_DISABLED = disabled;
     await rm(fixture.rootDir, { recursive: true, force: true });
   }
 });
