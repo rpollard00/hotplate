@@ -12,6 +12,7 @@
     "useUnknownInCatchVariables": true,
     "declaration": true,
     "sourceMap": true,
+    "skipLibCheck": true,
     "outDir": "dist"
   },
   "include": ["src/**/*.ts", "test/**/*.ts"]

@@ -3,9 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Local pi skill analytics storage and dashboard core.",
+  "description": "Local pi skill analytics storage and collector.",
   "exports": {
-    ".": "./dist/src/index.js"
+    ".": "./dist/src/index.js",
+    "./extension": "./dist/src/extension.js"
+  },
+  "pi": {
+    "extensions": ["./src/extension.ts"]
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -15,7 +19,12 @@
   "engines": {
     "node": ">=24.19.0"
   },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
   "devDependencies": {
+    "@earendil-works/pi-ai": "^0.87.1",
+    "@earendil-works/pi-coding-agent": "^0.87.1",
     "@types/node": "^24.0.0",
     "typescript": "^5.6.0"
   }
