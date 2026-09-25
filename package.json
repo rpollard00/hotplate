@@ -6,7 +6,11 @@
   "description": "Local pi skill analytics storage and collector.",
   "exports": {
     ".": "./dist/src/index.js",
-    "./extension": "./dist/src/extension.js"
+    "./extension": "./dist/src/extension.js",
+    "./server": "./dist/src/server.js"
+  },
+  "bin": {
+    "hotplate": "./dist/src/cli.js"
   },
   "pi": {
     "extensions": ["./src/extension.ts"]
@@ -14,7 +18,9 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test dist/test/**/*.test.js"
+    "test": "npm run build && node --test dist/test/**/*.test.js",
+    "dashboard": "npm run build && node dist/src/cli.js serve",
+    "dashboard:demo": "npm run build && node dist/src/cli.js demo --db ./dist/demo/hotplate-demo.sqlite --force"
   },
   "engines": {
     "node": ">=24.19.0"

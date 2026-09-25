@@ -1,0 +1,252 @@
+#!/usr/bin/env node
+import { existsSync, mkdirSync, unlinkSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { openHotplateStore, type Observation } from "./index.js";
+import { startDashboardServer } from "./server.js";
+
+type ServeArgs = {
+  command: "serve";
+  databasePath?: string;
+  host?: string;
+  port?: number;
+};
+
+type DemoArgs = {
+  command: "demo";
+  databasePath: string;
+  force: boolean;
+};
+
+type CliArgs = ServeArgs | DemoArgs | { command: "help" };
+
+export async function main(argv = process.argv.slice(2)): Promise<void> {
+  const args = parseArgs(argv);
+  if (args.command === "help") {
+    process.stdout.write(helpText());
+    return;
+  }
+
+  if (args.command === "demo") {
+    await seedDemoDatabase({ databasePath: args.databasePath, force: args.force });
+    process.stdout.write(`Seeded Hotplate demo database at ${args.databasePath}\n`);
+    return;
+  }
+
+  const serverOptions: { databasePath?: string; host?: string; port?: number } = {};
+  if (args.databasePath !== undefined) serverOptions.databasePath = args.databasePath;
+  if (args.host !== undefined) serverOptions.host = args.host;
+  if (args.port !== undefined) serverOptions.port = args.port;
+  const running = await startDashboardServer(serverOptions);
+  process.stdout.write(`Hotplate dashboard: ${running.url}\n`);
+  process.stdout.write(`Database: ${running.databasePath}\n`);
+  process.stdout.write("Press Ctrl-C to stop.\n");
+
+  const stop = async (): Promise<void> => {
+    await running.close();
+    process.exit(0);
+  };
+  process.once("SIGINT", () => void stop());
+  process.once("SIGTERM", () => void stop());
+}
+
+export async function seedDemoDatabase(options: { databasePath: string; force?: boolean }): Promise<void> {
+  if (options.databasePath === ":memory:") {
+    throw new Error("Demo database path must be a file path");
+  }
+  const databasePath = resolve(options.databasePath);
+  if (existsSync(databasePath)) {
+    if (!options.force) {
+      throw new Error("Demo database already exists. Pass --force to replace the explicit demo path.");
+    }
+    unlinkSync(databasePath);
+    unlinkIfExists(`${databasePath}-wal`);
+    unlinkIfExists(`${databasePath}-shm`);
+  }
+  mkdirSync(dirname(databasePath), { recursive: true, mode: 0o700 });
+
+  const store = openHotplateStore({ databasePath });
+  try {
+    const result = await store.record(demoObservations());
+    if (result.dropped > 0) {
+      throw new Error(`Demo seed dropped ${result.dropped} observations`);
+    }
+  } finally {
+    await store.close();
+  }
+}
+
+function demoObservations(): readonly Observation[] {
+  const projectA = "/demo/hotplate-alpha";
+  const projectB = "/demo/hotplate-beta";
+  return [
+    observation("demo-001", 1, projectA, "session-a", "segment-a", "run-a", "turn-1", {
+      kind: "catalog-snapshot",
+      skills: [skill("plan"), skill("typescript"), skill("unused-catalog"), skill("<script>alert(1)</script>")],
+    }),
+    observation("demo-002", 2, projectA, "session-a", "segment-a", "run-a", "turn-1", {
+      kind: "command-intent",
+      skillName: "plan",
+      source: "interactive",
+    }),
+    observation("demo-003", 3, projectA, "session-a", "segment-a", "run-a", "turn-1", {
+      kind: "wrapper-observed",
+      skill: skill("plan"),
+      wrapperSource: "expanded-prompt",
+    }),
+    observation("demo-004", 4, projectA, "session-a", "segment-a", "run-a", "turn-2", {
+      kind: "read-result",
+      skill: skill("typescript"),
+      toolCallId: "tool-1",
+      outcome: "success",
+      model: { provider: "openai", id: "gpt-4.1" },
+    }),
+    observation("demo-005", 5, projectA, "session-a", "segment-a", "run-a", "turn-2", {
+      kind: "wrapper-observed",
+      skill: skill("<script>alert(1)</script>"),
+      wrapperSource: "unknown-pasted-or-transformed",
+    }),
+    observation("demo-006", 6, projectA, "session-a", "segment-a", "run-a", "turn-3", {
+      kind: "read-result",
+      skill: skill("plan"),
+      toolCallId: "tool-2",
+      outcome: "error",
+      model: { provider: "anthropic", id: "claude-sonnet-4" },
+    }),
+    observation("demo-007", 7, projectA, "session-a", "segment-a", "run-a", "turn-3", {
+      kind: "capture-gap",
+      dropped: 2,
+      reason: "queue-overflow",
+    }),
+    observation("demo-008", 8, projectA, "session-a", "segment-a", "run-b", "turn-1", {
+      kind: "command-intent",
+      skillName: "typescript",
+      source: "rpc",
+    }),
+    observation("demo-009", 9, projectA, "session-a", "segment-a", "run-b", "turn-1", {
+      kind: "read-result",
+      skill: skill("typescript"),
+      toolCallId: "tool-3",
+      outcome: "success",
+      model: { provider: "openai", id: "gpt-4.1-mini" },
+    }),
+    observation("demo-010", 10, projectB, "session-b", "segment-b", "run-c", "turn-1", {
+      kind: "catalog-snapshot",
+      skills: [skill("review"), skill("unused-catalog")],
+    }),
+    observation("demo-011", 11, projectB, "session-b", "segment-b", "run-c", "turn-1", {
+      kind: "command-intent",
+      skillName: "review",
+      source: "extension",
+    }),
+    observation("demo-012", 12, projectB, "session-b", "segment-b", "run-c", "turn-2", {
+      kind: "read-result",
+      skill: skill("review"),
+      toolCallId: "tool-4",
+      outcome: "success",
+      model: null,
+    }),
+  ];
+}
+
+function observation(id: string, sequence: number, projectCwd: string, sessionId: string, segmentId: string, runId: string, turnId: string, evidence: Observation["evidence"]): Observation {
+  return {
+    id,
+    producerId: "hotplate-demo",
+    sequence,
+    observedAt: new Date(Date.UTC(2026, 0, 1, 12, sequence, 0)).toISOString(),
+    scope: {
+      projectCwd,
+      sessionId,
+      sessionFile: `/demo/sessions/${sessionId}.jsonl`,
+      segmentId,
+      segmentReason: "startup",
+      runId,
+      turnId,
+      leafId: `leaf-${turnId}`,
+    },
+    evidence,
+  };
+}
+
+function skill(name: string): { name: string; canonicalPath: string; version: string } {
+  return { name, canonicalPath: `/demo/skills/${encodeURIComponent(name)}/SKILL.md`, version: "demo-v1" };
+}
+
+function unlinkIfExists(path: string): void {
+  if (existsSync(path)) {
+    unlinkSync(path);
+  }
+}
+
+function parseArgs(argv: readonly string[]): CliArgs {
+  const [command = "serve", ...rest] = argv;
+  if (command === "help" || command === "--help" || command === "-h") {
+    return { command: "help" };
+  }
+  if (command === "serve") {
+    return parseServeArgs(rest);
+  }
+  if (command === "demo") {
+    return parseDemoArgs(rest);
+  }
+  throw new Error(`Unknown command ${command}`);
+}
+
+function parseServeArgs(argv: readonly string[]): ServeArgs {
+  const args: ServeArgs = { command: "serve" };
+  for (let index = 0; index < argv.length; index += 1) {
+    const value = argv[index];
+    if (value === "--db") args.databasePath = requireNext(argv, index += 1, "--db");
+    else if (value === "--host") args.host = requireNext(argv, index += 1, "--host");
+    else if (value === "--port") args.port = parsePort(requireNext(argv, index += 1, "--port"));
+    else throw new Error(`Unknown serve option ${value}`);
+  }
+  return args;
+}
+
+function parseDemoArgs(argv: readonly string[]): DemoArgs {
+  let databasePath: string | null = null;
+  let force = false;
+  for (let index = 0; index < argv.length; index += 1) {
+    const value = argv[index];
+    if (value === "--db") databasePath = requireNext(argv, index += 1, "--db");
+    else if (value === "--force") force = true;
+    else throw new Error(`Unknown demo option ${value}`);
+  }
+  if (databasePath === null) {
+    throw new Error("Demo command requires --db <path>");
+  }
+  return { command: "demo", databasePath: resolve(databasePath), force };
+}
+
+function requireNext(argv: readonly string[], index: number, flag: string): string {
+  const value = argv[index];
+  if (!value) {
+    throw new Error(`${flag} requires a value`);
+  }
+  return value;
+}
+
+function parsePort(value: string): number {
+  const port = Number.parseInt(value, 10);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    throw new Error(`Invalid port ${value}`);
+  }
+  return port;
+}
+
+function helpText(): string {
+  return `Hotplate dashboard\n\nUsage:\n  hotplate serve [--db path] [--host 127.0.0.1] [--port 7345]\n  hotplate demo --db path [--force]\n\nThe serve command opens a loopback-only, read-only dashboard.\nThe demo command writes only to the explicit --db path.\n`;
+}
+
+if (isCliEntrypoint()) {
+  main().catch((error: unknown) => {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(1);
+  });
+}
+
+function isCliEntrypoint(): boolean {
+  return process.argv[1] === fileURLToPath(import.meta.url);
+}
