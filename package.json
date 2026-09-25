@@ -12,6 +12,13 @@
   "bin": {
     "hotplate": "./dist/src/cli.js"
   },
+  "files": [
+    "dist/src/",
+    "docs/",
+    "src/",
+    "README.md",
+    "package.json"
+  ],
   "pi": {
     "extensions": ["./src/extension.ts"]
   },
@@ -19,6 +26,8 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test dist/test/**/*.test.js",
+    "check": "npm run typecheck && npm test",
+    "pack:dry": "npm pack --dry-run",
     "dashboard": "npm run build && node dist/src/cli.js serve",
     "dashboard:demo": "npm run build && node dist/src/cli.js demo --db ./dist/demo/hotplate-demo.sqlite --force"
   },
