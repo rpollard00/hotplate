@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.audit/
+.pi/subagents/
+*.sqlite
+*.sqlite-*
+coverage/
