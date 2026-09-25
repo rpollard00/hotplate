@@ -113,13 +113,20 @@ class SqliteHotplateStore implements HotplateStore {
     this.#databasePath = options.databasePath;
     this.#readOnly = options.readOnly;
     this.#busyRetries = options.busyRetries;
-    execWithBusyRetry(this.#db, "PRAGMA foreign_keys = ON", this.#busyRetries);
-    if (!this.#readOnly) {
-      execWithBusyRetry(this.#db, "PRAGMA journal_mode = WAL", this.#busyRetries);
-      execWithBusyRetry(this.#db, "PRAGMA synchronous = NORMAL", this.#busyRetries);
-      migrate(this.#db, this.#busyRetries);
-    } else {
-      assertReadableSchema(this.#db);
+    try {
+      execWithBusyRetry(this.#db, "PRAGMA foreign_keys = ON", this.#busyRetries);
+      if (!this.#readOnly) {
+        execWithBusyRetry(this.#db, "PRAGMA journal_mode = WAL", this.#busyRetries);
+        execWithBusyRetry(this.#db, "PRAGMA synchronous = NORMAL", this.#busyRetries);
+        migrate(this.#db, this.#busyRetries);
+        secureDatabaseFiles(this.#databasePath);
+      } else {
+        assertReadableSchema(this.#db);
+        this.#db.exec("BEGIN");
+      }
+    } catch (error) {
+      this.#db.close();
+      throw error;
     }
   }
 
@@ -309,7 +316,7 @@ class SqliteHotplateStore implements HotplateStore {
         SUM(CASE WHEN outcome = 'success' THEN 1 ELSE 0 END) AS successful_read_count,
         SUM(CASE WHEN outcome = 'error' THEN 1 ELSE 0 END) AS failed_read_count,
         COUNT(*) AS read_result_count,
-        COUNT(DISTINCT project_cwd || X'1F' || IFNULL(session_id, '') || X'1F' || segment_id || X'1F' || IFNULL(run_id, '') || X'1F' || skill_name || X'1F' || skill_path) AS unique_activations
+        COUNT(DISTINCT CASE WHEN outcome = 'success' THEN json_array(project_cwd, session_id, segment_id, run_id, skill_name, skill_path) END) AS unique_activations
       FROM observations ${where.sql} AND skill_name IS NOT NULL AND skill_path IS NOT NULL
       GROUP BY skill_name, skill_path, model_provider, model_id
       ORDER BY skill_name, skill_path, model_provider, model_id
@@ -747,7 +754,9 @@ function getChainRun(runs: Map<string, MutableChainRun>, row: Record<string, unk
 
 function addChainObservation(run: MutableChainRun, observation: ChainObservation, turnId: string | null, leafId: string | null): void {
   const last = run.steps.at(-1);
-  if (last?.kind === "observations" && last.observedAt === observation.observedAt && last.turnId === turnId && last.leafId === leafId) {
+  const sameReadTurn = turnId !== null && last?.kind === "observations" && last.turnId === turnId
+    && observation.evidence.kind === "read-result" && last.items.every(item => item.evidence.kind === "read-result");
+  if (last?.kind === "observations" && sameReadTurn) {
     run.steps[run.steps.length - 1] = { ...last, items: [...last.items, observation] };
     return;
   }
@@ -780,6 +789,8 @@ function chainEvidenceIncluded(evidence: ChainObservation["evidence"], filter: C
 
   if (evidence.kind === "command-intent") {
     if (filter.includeCommandIntent === false) return false;
+    if (filter.modelProvider !== undefined && filter.modelProvider !== null) return false;
+    if (filter.modelId !== undefined && filter.modelId !== null) return false;
     return filter.source === undefined || evidence.source === filter.source;
   }
 
@@ -1010,7 +1021,6 @@ function boundedBusyTimeout(value: number | undefined): number {
 
 function createPrivateDirectory(path: string): void {
   mkdirSync(path, { recursive: true, mode: 0o700 });
-  chmodBestEffort(path, 0o700);
 }
 
 function secureDatabaseFiles(databasePath: string): void {
@@ -1025,15 +1035,13 @@ function secureDatabaseFiles(databasePath: string): void {
 function chmodBestEffort(path: string, mode: number): void {
   try {
     chmodSync(path, mode);
-  } catch {
-  }
+  } catch {}
 }
 
 function rollbackBestEffort(db: DatabaseSync): void {
   try {
     db.exec("ROLLBACK");
-  } catch {
-  }
+  } catch {}
 }
 
 function execWithBusyRetry(db: DatabaseSync, sql: string, retries: number): void {

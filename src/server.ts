@@ -99,7 +99,10 @@ export function createHotplateHttpServer(options: { databasePath?: string; host?
   }
 
   return createServer((request, response) => {
-    void handleRequest({ request, response, databasePath, host });
+    void handleRequest({ request, response, databasePath, host }).catch(() => {
+      if (response.headersSent) response.destroy();
+      else sendText(response, 500, "Dashboard request failed");
+    });
   });
 }
 
@@ -149,12 +152,13 @@ async function handleRequest(options: { request: IncomingMessage; response: Serv
 
 async function readDashboardPayload(databasePath: string, params: URLSearchParams): Promise<DashboardPayload> {
   const filterOptions = readFilterOptions(databasePath);
-  const open = openHotplateReadStore({ databasePath });
-  if (open.kind === "missing") {
-    return { kind: "missing", databasePath: open.databasePath, filterOptions };
-  }
-
+  let reader: HotplateReadonlyStore | undefined;
   try {
+    const open = openHotplateReadStore({ databasePath });
+    if (open.kind === "missing") {
+      return { kind: "missing", databasePath: open.databasePath, filterOptions };
+    }
+    reader = open.store;
     const parsed = parseDashboardParams(params);
     const overview = await open.store.queryOverview(parsed.filter);
     const skills = await open.store.querySkillTable(parsed.filter);
@@ -178,12 +182,12 @@ async function readDashboardPayload(databasePath: string, params: URLSearchParam
   } catch (error) {
     return {
       kind: "error",
-      databasePath: open.databasePath,
+      databasePath,
       message: error instanceof Error ? error.message : "Unknown dashboard read error",
       filterOptions,
     };
   } finally {
-    await open.store.close();
+    await reader?.close();
   }
 }
 
@@ -355,8 +359,14 @@ function isSafeRequestHost(request: IncomingMessage, configuredHost: string): bo
   if (typeof hostHeader !== "string") {
     return false;
   }
-  const hostname = hostNameFromAuthority(hostHeader);
-  return hostname !== null && isAllowedLoopbackName(hostname, configuredHost);
+  try {
+    const authority = new URL(`http://${hostHeader}`);
+    return authority.username === "" && authority.password === "" && authority.pathname === "/"
+      && isAllowedLoopbackName(authority.hostname, configuredHost)
+      && Number(authority.port || "80") === request.socket.localPort;
+  } catch {
+    return false;
+  }
 }
 
 function isSafeOrigin(request: IncomingMessage, configuredHost: string): boolean {
@@ -369,27 +379,17 @@ function isSafeOrigin(request: IncomingMessage, configuredHost: string): boolean
   }
   try {
     const parsed = new URL(origin);
-    return parsed.protocol === "http:" && isAllowedLoopbackName(parsed.hostname, configuredHost);
+    const target = new URL(`http://${request.headers.host}`);
+    return parsed.protocol === "http:" && isAllowedLoopbackName(parsed.hostname, configuredHost)
+      && parsed.origin === target.origin && parsed.username === "" && parsed.password === "";
   } catch {
     return false;
   }
 }
 
-function hostNameFromAuthority(authority: string): string | null {
-  const trimmed = authority.trim().toLowerCase();
-  if (!trimmed) {
-    return null;
-  }
-  if (trimmed.startsWith("[")) {
-    const end = trimmed.indexOf("]");
-    return end > 1 ? trimmed.slice(1, end) : null;
-  }
-  return trimmed.split(":")[0] ?? null;
-}
-
 function isAllowedLoopbackName(hostname: string, configuredHost: string): boolean {
-  const normalized = hostname.toLowerCase();
-  const configured = configuredHost.toLowerCase();
+  const normalized = hostname.replace(/^\[(.*)]$/, "$1").toLowerCase();
+  const configured = configuredHost.replace(/^\[(.*)]$/, "$1").toLowerCase();
   return normalized === configured || isLoopbackHost(normalized);
 }
 
