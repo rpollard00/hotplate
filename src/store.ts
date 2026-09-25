@@ -1026,7 +1026,6 @@ function chmodBestEffort(path: string, mode: number): void {
   try {
     chmodSync(path, mode);
   } catch {
-    // Best effort only. The OS can reject chmod on some filesystems.
   }
 }
 
@@ -1034,7 +1033,6 @@ function rollbackBestEffort(db: DatabaseSync): void {
   try {
     db.exec("ROLLBACK");
   } catch {
-    // No transaction is active.
   }
 }
 
