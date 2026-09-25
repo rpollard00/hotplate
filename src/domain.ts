@@ -1,3 +1,10 @@
+export type MachineId = string & { readonly __brand: "MachineId" };
+export type SourceId = string & { readonly __brand: "SourceId" };
+export type CollectorOrigin = string & { readonly __brand: "CollectorOrigin" };
+
+export type SourceIdentity = { machineId: MachineId; sourceId: SourceId };
+export type CaptureEnrollment = { sourceId: SourceId; collectorOrigin: CollectorOrigin };
+
 export type InputSource = "interactive" | "rpc" | "extension";
 
 export type ModelRef =
@@ -77,6 +84,7 @@ export type CaptureWriteSummary = {
 };
 
 export type DashboardFilter = {
+  machineId?: MachineId;
   projectCwd?: string;
   sessionId?: string | null;
   runId?: string | null;
@@ -111,6 +119,7 @@ export type OverviewView = {
 };
 
 export type SkillTableRow = {
+  machineId: MachineId;
   skillName: string;
   canonicalPath: string | null;
   version: string | null;
@@ -132,6 +141,7 @@ export type SkillTableView = {
 };
 
 export type ModelMatrixRow = {
+  machineId: MachineId;
   skillName: string;
   canonicalPath: string;
   model: ModelRef;
@@ -171,6 +181,8 @@ export type SkillChainStep =
     };
 
 export type SkillChainRun = {
+  machineId: MachineId;
+  sourceId: SourceId | "local";
   sessionId: string | null;
   segmentId: string;
   runId: string | null;
@@ -196,9 +208,18 @@ export type CaptureHealthView = {
   lastGapAt: string | null;
 };
 
+export type DashboardFilterOptions = {
+  machines: readonly MachineId[];
+  projects: readonly string[];
+  modelProviders: readonly string[];
+  modelIds: readonly string[];
+  timeRange: { firstObservedAt: string | null; lastObservedAt: string | null };
+};
+
 export interface HotplateStore {
   record(observation: Observation | readonly Observation[], options?: { signal?: AbortSignal }): Promise<CaptureWriteSummary>;
 
+  queryFilterOptions(filter: DashboardFilter): Promise<DashboardFilterOptions>;
   queryOverview(filter: DashboardFilter): Promise<OverviewView>;
   querySkillTable(filter: DashboardFilter): Promise<SkillTableView>;
   queryModelMatrix(filter: DashboardFilter): Promise<ModelMatrixView>;

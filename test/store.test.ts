@@ -59,7 +59,7 @@ test("path resolution and migrations do not create a missing read-only database"
     assert.equal(mode & 0o077, 0);
 
     const db = new DatabaseSync(dbPath, { readOnly: true });
-    assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 1);
+    assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 2);
     db.close();
 
     const read = openHotplateReadStore({ databasePath: dbPath });

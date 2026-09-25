@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Local pi skill analytics storage and collector.",
+  "description": "Live Pi skill analytics with local SQLite and optional authenticated LAN aggregation.",
   "exports": {
     ".": "./dist/src/index.js",
     "./extension": "./dist/src/extension.js",
@@ -15,6 +15,7 @@
   "files": [
     "dist/src/",
     "docs/",
+    "examples/",
     "src/",
     "README.md",
     "package.json"

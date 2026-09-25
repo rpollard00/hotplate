@@ -1,0 +1,30 @@
+services:
+  hotplate:
+    build: .
+    image: hotplate:local
+    init: true
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:7345:7345"
+    volumes:
+      - hotplate-data:/data
+    secrets:
+      - source: aggregate-configuration
+        target: hotplate.json
+      - source: aggregate-credentials
+        target: hotplate-credentials.json
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 15s
+
+volumes:
+  hotplate-data:
+
+secrets:
+  aggregate-configuration:
+    file: ${HOTPLATE_AGGREGATE_CONFIG:?Set HOTPLATE_AGGREGATE_CONFIG to the private aggregate configuration file}
+  aggregate-credentials:
+    file: ${HOTPLATE_CREDENTIALS_FILE:?Set HOTPLATE_CREDENTIALS_FILE to the private credentials file}

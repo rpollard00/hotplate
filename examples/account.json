@@ -1,0 +1,6 @@
+{
+  "sourceId": "REPLACE_WITH_PERSISTENT_UUID",
+  "endpoint": "https://hotplate.lan",
+  "tokenFile": "./ingest-token",
+  "databasePath": "./analytics.sqlite"
+}

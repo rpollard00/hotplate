@@ -1,4 +1,10 @@
 export type {
+  CaptureEnrollment,
+  CollectorOrigin,
+  DashboardFilterOptions,
+  MachineId,
+  SourceId,
+  SourceIdentity,
   CaptureHealthReasonRow,
   CaptureHealthView,
   CaptureWriteSummary,
@@ -23,6 +29,8 @@ export type {
   SkillTableRow,
   SkillTableView,
 } from "./domain.js";
+
+export { parseMachineId, parseSourceId, parseCollectorOrigin } from "./observation.js";
 
 export {
   openHotplateReadStore,

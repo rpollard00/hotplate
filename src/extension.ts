@@ -1,9 +1,18 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { HotplateCollector } from "./collector/collector.js";
+import { readAccountConfiguration } from "./network-config.js";
+import { openCaptureStore, openHotplateStore } from "./store.js";
 
 export default function hotplateExtension(pi: ExtensionAPI): void {
   if (process.env.HOTPLATE_DISABLED === "1") return;
-  const collector = new HotplateCollector();
+  const collector = new HotplateCollector({
+    openStore: () => {
+      const path = process.env.HOTPLATE_CONFIG;
+      if (path === undefined) return openHotplateStore();
+      const configuration = readAccountConfiguration({ path });
+      return openCaptureStore({ databasePath: configuration.databasePath, enrollment: configuration.enrollment });
+    },
+  });
 
   pi.on("session_start", (event, ctx) => {
     return collector.sessionStart(event, ctx, () => pi.getCommands());

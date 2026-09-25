@@ -230,10 +230,10 @@ export class HotplateCollector {
   }
 
   #reportFailure(): void {
-    try { this.#context?.ui.setStatus("hotplate", `Hotplate: capture incomplete (${this.#dropped} lost). Check HOTPLATE_DB and /reload.`); } catch {}
+    try { this.#context?.ui.setStatus("hotplate", `Hotplate: capture incomplete (${this.#dropped} lost). Check HOTPLATE_DB or HOTPLATE_CONFIG and /reload.`); } catch {}
     if (!this.#warned) {
       this.#warned = true;
-      process.stderr.write(`${JSON.stringify({ type: "hotplate_capture_incomplete", action: "Check HOTPLATE_DB and reload pi" })}\n`);
+      process.stderr.write(`${JSON.stringify({ type: "hotplate_capture_incomplete", action: "Check HOTPLATE_DB or HOTPLATE_CONFIG and reload pi" })}\n`);
     }
   }
 }

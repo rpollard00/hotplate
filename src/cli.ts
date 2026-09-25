@@ -4,6 +4,9 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openHotplateStore, type Observation } from "./index.js";
 import { startDashboardServer } from "./server.js";
+import { readAccountConfiguration, readAggregationConfiguration } from "./network-config.js";
+import { readRelayStatus, runRelay } from "./relay.js";
+import { startAggregationServer } from "./aggregation.js";
 
 type ServeArgs = {
   command: "serve";
@@ -18,7 +21,8 @@ type DemoArgs = {
   force: boolean;
 };
 
-type CliArgs = ServeArgs | DemoArgs | { command: "help" };
+type NetworkArgs = { command: "relay"; configPath: string; status: boolean } | { command: "aggregate"; configPath: string };
+type CliArgs = ServeArgs | DemoArgs | NetworkArgs | { command: "help" };
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {
   const args = parseArgs(argv);
@@ -30,6 +34,11 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   if (args.command === "demo") {
     await seedDemoDatabase({ databasePath: args.databasePath, force: args.force });
     process.stdout.write(`Seeded Hotplate demo database at ${args.databasePath}\n`);
+    return;
+  }
+
+  if (args.command === "relay" || args.command === "aggregate") {
+    await runNetworkCommand(args);
     return;
   }
 
@@ -48,6 +57,37 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   };
   process.once("SIGINT", () => void stop());
   process.once("SIGTERM", () => void stop());
+}
+
+async function runNetworkCommand(args: NetworkArgs): Promise<void> {
+  const abort = new AbortController();
+  const stop = (): void => abort.abort();
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
+  try {
+    if (args.command === "relay") {
+      const configuration = readAccountConfiguration({ path: args.configPath });
+      if (args.status) {
+        const status = await readRelayStatus({ configuration });
+        process.stdout.write(`${JSON.stringify(status)}\n`);
+        process.stderr.write("Pending bytes count payloads only. The retained backlog has no size limit or automatic eviction. Monitor disk space.\n");
+      } else {
+        await runRelay({ configuration, signal: abort.signal });
+      }
+    } else {
+      const configuration = readAggregationConfiguration({ path: args.configPath });
+      const running = await startAggregationServer({ configuration });
+      try {
+        process.stdout.write(`Hotplate aggregate: ${running.url}\n`);
+        if (!abort.signal.aborted) await new Promise<void>(resolve => abort.signal.addEventListener("abort", () => resolve(), { once: true }));
+      } finally { await running.close(); }
+    }
+  } catch {
+    throw new Error(`Hotplate ${args.command} stopped. Check the configuration, credentials, database binding, and listener. Pending deliveries remain retained.`);
+  } finally {
+    process.off("SIGINT", stop);
+    process.off("SIGTERM", stop);
+  }
 }
 
 export async function seedDemoDatabase(options: { databasePath: string; force?: boolean }): Promise<void> {
@@ -190,7 +230,21 @@ function parseArgs(argv: readonly string[]): CliArgs {
   if (command === "demo") {
     return parseDemoArgs(rest);
   }
-  throw new Error(`Unknown command ${command}`);
+  if (command === "relay" || command === "aggregate") return parseNetworkArgs(command, rest);
+  throw new Error("Unknown command. Run hotplate help.");
+}
+
+function parseNetworkArgs(command: "relay" | "aggregate", argv: readonly string[]): NetworkArgs {
+  let configPath: string | undefined;
+  let status = false;
+  for (let index = 0; index < argv.length; index += 1) {
+    const value = argv[index];
+    if (value === "--config" && configPath === undefined) configPath = requireNext(argv, index += 1, "--config");
+    else if (value === "--status" && command === "relay" && !status) status = true;
+    else throw new Error("Invalid network command options. Use --config <path> and, for relay status only, --status.");
+  }
+  if (!configPath || configPath.startsWith("--")) throw new Error("Network commands require --config <path>.");
+  return command === "relay" ? { command, configPath, status } : { command, configPath };
 }
 
 function parseServeArgs(argv: readonly string[]): ServeArgs {
@@ -237,7 +291,7 @@ function parsePort(value: string): number {
 }
 
 function helpText(): string {
-  return `Hotplate dashboard\n\nUsage:\n  hotplate serve [--db path] [--host 127.0.0.1] [--port 7345]\n  hotplate demo --db path [--force]\n\nThe serve command opens a loopback-only, read-only dashboard.\nThe demo command writes only to the explicit --db path.\n`;
+  return `Hotplate dashboard\n\nUsage:\n  hotplate serve [--db path] [--host 127.0.0.1] [--port 7345]\n  hotplate demo --db path [--force]\n  hotplate relay --config path [--status]\n  hotplate aggregate --config path\n\nRelay status reports enrollment, pending count/bytes/oldest time, and blocked count without delivery.\nNetwork commands require explicit configuration. Capture enrolls only with HOTPLATE_CONFIG in Pi.\nThe serve command opens a loopback-only, read-only dashboard.\nThe demo command writes only to the explicit --db path.\n`;
 }
 
 if (isCliEntrypoint()) {

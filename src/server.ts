@@ -1,7 +1,6 @@
-import { existsSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { DatabaseSync } from "node:sqlite";
+import { parseMachineId } from "./observation.js";
 import { dashboardCss, dashboardHtml, dashboardJs } from "./dashboard/assets.js";
 import {
   openHotplateReadStore,
@@ -11,6 +10,7 @@ import {
 import type {
   ChainFilter,
   DashboardFilter,
+  DashboardFilterOptions,
   InputSource,
   SkillChainView,
   SkillTableView,
@@ -33,12 +33,7 @@ type RunningDashboardServer = {
   close(): Promise<void>;
 };
 
-type FilterOptions = {
-  projects: readonly string[];
-  modelProviders: readonly string[];
-  modelIds: readonly string[];
-  timeRange: { firstObservedAt: string | null; lastObservedAt: string | null };
-};
+type FilterOptions = DashboardFilterOptions;
 
 type SourceSplitRow = {
   label: string;
@@ -118,13 +113,20 @@ async function handleRequest(options: { request: IncomingMessage; response: Serv
     sendText(response, 403, "Forbidden origin");
     return;
   }
+  await respondDashboard({ request, response, databasePath });
+}
+
+// Listeners must authorize the request before calling this shared responder.
+export async function respondDashboard(args: { request: IncomingMessage; response: ServerResponse; databasePath: string }): Promise<void> {
+  const { request, response, databasePath } = args;
+  setSecurityHeaders(response);
   if (request.method !== "GET" && request.method !== "HEAD") {
     response.setHeader("allow", "GET, HEAD");
     sendText(response, 405, "Method not allowed");
     return;
   }
 
-  const url = new URL(request.url ?? "/", `http://${request.headers.host ?? host}`);
+  const url = new URL(request.url ?? "/", "http://dashboard.invalid");
   if (url.pathname === "/" || url.pathname === "/index.html") {
     send(response, 200, "text/html; charset=utf-8", dashboardHtml, request.method === "HEAD");
     return;
@@ -151,7 +153,7 @@ async function handleRequest(options: { request: IncomingMessage; response: Serv
 }
 
 async function readDashboardPayload(databasePath: string, params: URLSearchParams): Promise<DashboardPayload> {
-  const filterOptions = readFilterOptions(databasePath);
+  let filterOptions = emptyFilterOptions();
   let reader: HotplateReadonlyStore | undefined;
   try {
     const open = openHotplateReadStore({ databasePath });
@@ -160,6 +162,7 @@ async function readDashboardPayload(databasePath: string, params: URLSearchParam
     }
     reader = open.store;
     const parsed = parseDashboardParams(params);
+    filterOptions = await reader.queryFilterOptions(parsed.filter);
     const overview = await open.store.queryOverview(parsed.filter);
     const skills = await open.store.querySkillTable(parsed.filter);
     const matrix = await open.store.queryModelMatrix(parsed.filter);
@@ -193,6 +196,8 @@ async function readDashboardPayload(databasePath: string, params: URLSearchParam
 
 function parseDashboardParams(params: URLSearchParams): { filter: DashboardFilter; chainSkillName: string | null } {
   const filter: DashboardFilter = {};
+  const machineId = nonEmptyParam(params, "machineId");
+  if (machineId !== null) filter.machineId = parseMachineId(machineId);
   const projectCwd = nonEmptyParam(params, "projectCwd");
   const source = nonEmptyParam(params, "source");
   const modelProvider = nonEmptyParam(params, "modelProvider");
@@ -261,73 +266,8 @@ function sum(values: readonly number[]): number {
   return values.reduce((total, value) => total + value, 0);
 }
 
-function readFilterOptions(databasePath: string): FilterOptions {
-  if (databasePath !== ":memory:" && !existsSync(databasePath)) {
-    return emptyFilterOptions();
-  }
-
-  try {
-    const db = new DatabaseSync(databasePath, { readOnly: true, timeout: 25, allowExtension: false });
-    try {
-      if (schemaVersion(db) !== 1) {
-        return emptyFilterOptions();
-      }
-      const projects = stringColumn(db, `
-        SELECT project_cwd AS value FROM observations
-        UNION
-        SELECT project_cwd AS value FROM catalog_skills
-        ORDER BY value
-      `);
-      const modelProviders = stringColumn(db, `
-        SELECT DISTINCT model_provider AS value FROM observations
-        WHERE model_provider IS NOT NULL
-        ORDER BY value
-      `);
-      const modelIds = stringColumn(db, `
-        SELECT DISTINCT model_id AS value FROM observations
-        WHERE model_id IS NOT NULL
-        ORDER BY value
-      `);
-      const time = db.prepare("SELECT MIN(observed_at) AS first_observed_at, MAX(observed_at) AS last_observed_at FROM observations").get();
-      return {
-        projects,
-        modelProviders,
-        modelIds,
-        timeRange: {
-          firstObservedAt: nullableString(time?.first_observed_at),
-          lastObservedAt: nullableString(time?.last_observed_at),
-        },
-      };
-    } finally {
-      db.close();
-    }
-  } catch {
-    return emptyFilterOptions();
-  }
-}
-
 function emptyFilterOptions(): FilterOptions {
-  return { projects: [], modelProviders: [], modelIds: [], timeRange: { firstObservedAt: null, lastObservedAt: null } };
-}
-
-function schemaVersion(db: DatabaseSync): number {
-  const row = db.prepare("PRAGMA user_version").get();
-  return typeof row?.user_version === "number" ? row.user_version : 0;
-}
-
-function stringColumn(db: DatabaseSync, sql: string): readonly string[] {
-  return db.prepare(sql).all().map((row) => requireString(row.value));
-}
-
-function requireString(value: unknown): string {
-  if (typeof value !== "string") {
-    throw new Error("Expected string value");
-  }
-  return value;
-}
-
-function nullableString(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
+  return { machines: [], projects: [], modelProviders: [], modelIds: [], timeRange: { firstObservedAt: null, lastObservedAt: null } };
 }
 
 function setSecurityHeaders(response: ServerResponse): void {

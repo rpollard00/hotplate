@@ -9,9 +9,9 @@ export const dashboardHtml = `<!doctype html>
 <body>
   <header class="shell hero">
     <div>
-      <p class="eyebrow">Local pi skill analytics</p>
+      <p class="eyebrow">Live pi skill analytics</p>
       <h1>Hotplate</h1>
-      <p class="lede">Read-only dashboard for local observations. Evidence labels keep command intent, wrappers, and model reads separate.</p>
+      <p class="lede">Read-only dashboard for captured observations. Evidence labels keep command intent, wrappers, and model reads separate.</p>
     </div>
     <div class="status-card" id="status-card">
       <span class="status-dot" aria-hidden="true"></span>
@@ -26,6 +26,11 @@ export const dashboardHtml = `<!doctype html>
         <p>Totals and tables use these filters. The chain skill button filters the chain view only.</p>
       </div>
       <form id="filter-form" class="filter-grid">
+        <label>Machine
+          <select id="machine-filter" name="machineId">
+            <option value="">All machines</option>
+          </select>
+        </label>
         <label>Project
           <select id="project-filter" name="projectCwd">
             <option value="">All projects</option>
@@ -252,6 +257,7 @@ const els = {
   statusText: document.getElementById("status-text"),
   messagePanel: document.getElementById("message-panel"),
   filterForm: document.getElementById("filter-form"),
+  machineFilter: document.getElementById("machine-filter"),
   projectFilter: document.getElementById("project-filter"),
   sourceFilter: document.getElementById("source-filter"),
   modelProviderFilter: document.getElementById("model-provider-filter"),
@@ -274,6 +280,12 @@ els.filterForm.addEventListener("submit", (event) => {
   loadDashboard();
 });
 document.getElementById("refresh-data").addEventListener("click", loadDashboard);
+els.machineFilter.addEventListener("change", () => {
+  els.projectFilter.value = "";
+  els.modelProviderFilter.value = "";
+  els.modelIdFilter.value = "";
+  loadDashboard();
+});
 els.resetFilters.addEventListener("click", () => {
   els.filterForm.reset();
   state.chainSkillName = null;
@@ -307,6 +319,7 @@ function clearMessage() {
 
 function filterParams() {
   const params = new URLSearchParams();
+  addIfPresent(params, "machineId", els.machineFilter.value);
   addIfPresent(params, "projectCwd", els.projectFilter.value);
   addIfPresent(params, "source", els.sourceFilter.value);
   addIfPresent(params, "modelProvider", els.modelProviderFilter.value);
@@ -385,6 +398,7 @@ function clearDashboard() {
 
 function renderFilterOptions(options) {
   if (!options) return;
+  setOptions(els.machineFilter, "All machines", options.machines.map((machine) => ({ value: machine, label: machine })));
   setOptions(els.projectFilter, "All projects", options.projects.map((project) => ({ value: project, label: project })));
   setOptions(els.modelProviderFilter, "All providers", options.modelProviders.map((provider) => ({ value: provider, label: provider })));
   setOptions(els.modelIdFilter, "All models", options.modelIds.map((model) => ({ value: model, label: model })));
@@ -480,7 +494,7 @@ function renderSkillTable(rows) {
     els.skillTable.replaceChildren(empty("No skills match this filter."));
     return;
   }
-  const table = makeTable(["Skill", "Evidence", "Reads", "Activations", "Last observed"]);
+  const table = makeTable(["Machine", "Skill", "Evidence", "Reads", "Activations", "Last observed"]);
   const body = table.querySelector("tbody");
   for (const row of rows) {
     const tr = document.createElement("tr");
@@ -504,6 +518,7 @@ function renderSkillTable(rows) {
     if (row.cataloged && row.uniqueObservedRunActivations === 0 && row.successfulReadCount === 0 && row.wrapperObservedCount === 0) stack.append(badge("zero observed loads"));
     name.append(stack);
     tr.append(
+      cell(row.machineId),
       name,
       cell(\`intent \${row.commandIntentCount} · wrappers \${row.wrapperObservedCount}\`),
       cell(\`success \${row.successfulReadCount} · failed \${row.failedReadCount}\`),
@@ -520,12 +535,13 @@ function renderModelMatrix(rows) {
     els.modelMatrix.replaceChildren(empty("No model read results match this filter."));
     return;
   }
-  const table = makeTable(["Skill", "Provider", "Model", "Reads", "Activations"]);
+  const table = makeTable(["Machine", "Skill", "Provider", "Model", "Reads", "Activations"]);
   const body = table.querySelector("tbody");
   for (const row of rows) {
     const model = row.model;
     const tr = document.createElement("tr");
     tr.append(
+      cell(row.machineId),
       cell(row.skillName),
       cell(model ? model.provider : "Unknown"),
       cell(model ? model.id : "Unknown"),
@@ -552,7 +568,7 @@ function renderRun(run) {
   article.className = "chain-run";
   const title = document.createElement("div");
   title.className = "chain-title";
-  title.append(badge(run.projectCwd), badge(\`session \${run.sessionId ?? "unknown"}\`), badge(\`segment \${run.segmentId}\`), badge(\`run \${run.runId ?? "unknown"}\`));
+  title.append(badge(\`machine \${run.machineId}\`), badge(\`account source \${run.sourceId}\`), badge(run.projectCwd), badge(\`session \${run.sessionId ?? "unknown"}\`), badge(\`segment \${run.segmentId}\`), badge(\`run \${run.runId ?? "unknown"}\`));
   const steps = document.createElement("div");
   steps.className = "chain-steps";
   for (const step of run.steps) steps.append(renderStep(step));
