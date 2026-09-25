@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "installation": "REPLACE-WITH-A-NEW-UUID",
+  "sshTarget": "root@media.media",
+  "hostName": "media",
+  "network": "br0",
+  "networkDriver": "macvlan",
+  "address": "192.168.88.12",
+  "origin": "http://192.168.88.12:7345",
+  "appdata": "/mnt/user/appdata/hotplate",
+  "aggregateFile": "/private/hotplate/aggregate.json",
+  "credentialsFile": "/private/hotplate/credentials.json",
+  "releaseDirectory": "/private/hotplate/releases"
+}

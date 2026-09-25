@@ -274,6 +274,13 @@ Ingestion limits include 100 observations and 1 MiB per request, 8,192 bytes per
 An oversized catalog snapshot remains intact locally. The relay does not split it into synthetic observations.
 These network limits do not restrict local capture acceptance.
 
+### Deploy to Unraid over SSH
+
+Use the [Unraid deployment guide](docs/unraid.md) for a dedicated `br0` address without published host ports.
+It documents private bootstrap configuration and the `scripts/deploy-unraid build`, `plan`, `apply`, and `status` commands.
+Updates retain cold backups and previous release evidence. Interrupted deployments fail closed without automatic database restoration.
+The Unraid pipeline keeps credentials fixed across updates. Credential rotation requires separate reviewed maintenance.
+
 ### Rotate credentials
 
 1. Add a new random token for the same source UUID and machine identity to the server credentials.

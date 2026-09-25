@@ -1,0 +1,221 @@
+#!/usr/bin/env node
+import assert from "node:assert/strict";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { execFileSync, spawn } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { setTimeout as delay } from "node:timers/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { exchange } from "./deploy-unraid";
+
+const root = resolve(import.meta.dirname, "..");
+const id = randomUUID();
+const prefix = `hotplate-deploy-smoke-${id}`;
+const directory = mkdtempSync(join(tmpdir(), `${prefix}-`));
+const network = `${prefix}-net`;
+const controllerImage = `${prefix}:controller`;
+const imageTag = `hotplate-release:${id}`;
+const checks = [];
+const hash = buffer => createHash("sha256").update(buffer).digest("hex");
+const docker = (args, options = {}) => execFileSync("docker", args, { cwd: root, encoding: "utf8", maxBuffer: 4 * 1024 * 1024, ...options });
+const socket = JSON.parse(docker(["context", "inspect"]))[0].Endpoints.docker.Host;
+assert.ok(socket.startsWith("unix://"), "Smoke requires a local Unix Docker socket");
+const dockerRoot = docker(["info", "--format", "{{.DockerRootDir}}"]).trim();
+const locks = join(directory, "locks");
+mkdirSync(locks, { mode: 0o700 });
+const controllerPath = join(directory, "controller.sh");
+writeFileSync(controllerPath, readFileSync(join(root, "scripts/unraid-controller.sh")), { mode: 0o600 });
+const controllerFile = join(directory, "Dockerfile");
+writeFileSync(controllerFile, `FROM node:24.19.0-bookworm-slim\nRUN apt-get update && apt-get install -y --no-install-recommends docker.io jq util-linux && rm -rf /var/lib/apt/lists/*\nCOPY docker-wrapper /usr/local/bin/docker\nCOPY tar-wrapper /usr/local/bin/tar\nRUN chmod 755 /usr/local/bin/docker /usr/local/bin/tar\n`);
+writeFileSync(join(directory, "docker-wrapper"), `#!/bin/bash
+set -e
+if [[ $1 == ps ]]; then
+  ids=$(/usr/bin/docker "$@")
+  for container in $ids; do
+    label=$(/usr/bin/docker inspect --format '{{index .Config.Labels "io.hotplate.smoke-controller"}}' "$container")
+    if [[ $label != ${id} ]]; then echo "$container"; fi
+  done
+  exit 0
+fi
+if [[ \${HOTPLATE_TEST_FAILURE:-} == disconnect && $1 == network && $2 == disconnect ]]; then /usr/bin/docker "$@"; exit 1; fi
+if [[ \${HOTPLATE_TEST_FAILURE:-} == stop-intent && $1 == update && $2 == --restart && $3 == no ]]; then /usr/bin/docker "$@"; /usr/bin/docker kill "$HOTPLATE_TEST_CONTROLLER"; exit 1; fi
+if [[ \${HOTPLATE_TEST_FAILURE:-} == start-intent && $1 == create ]]; then /usr/bin/docker kill "$HOTPLATE_TEST_CONTROLLER"; exit 1; fi
+exec /usr/bin/docker "$@"
+`);
+writeFileSync(join(directory, "tar-wrapper"), `#!/bin/bash
+if [[ \${HOTPLATE_TEST_FAILURE:-} == backup && $1 == -C ]]; then exit 1; fi
+exec /usr/bin/tar "$@"
+`);
+let controllerBuilt = false;
+let imageBuilt = false;
+let networkCreated = false;
+let unhealthyTag;
+const installations = new Set();
+function controller(request, failure = "") {
+  return spawn("docker", ["run", "--rm", "-i", "--hostname", "deploy-smoke", "--name", `${prefix}-controller-${request.operation}`, "--label", `io.hotplate.smoke=${id}`, "--label", `io.hotplate.smoke-controller=${id}`,
+    "--mount", `type=bind,source=${directory},target=${directory}`,
+    "--mount", `type=bind,source=${locks},target=/run/hotplate-deploy`,
+    "--mount", `type=bind,source=${socket.slice(7)},target=/var/run/docker.sock`,
+    "--env", `HOTPLATE_TEST_FAILURE=${failure}`, "--env", `HOTPLATE_TEST_CONTROLLER=${prefix}-controller-${request.operation}`, "--env", `HOTPLATE_TEST_OPERATION=${request.operation}`,
+    controllerImage, "bash", "-c", 'mkdir -p "$1"; exec bash -c "$(cat "$2")"', "smoke", dockerRoot, controllerPath], { stdio: ["pipe", "pipe", "pipe"] });
+}
+function helper(command, args = []) {
+  return docker(["run", "--rm", "--mount", `type=bind,source=${directory},target=${directory}`, controllerImage, command, ...args]);
+}
+function journal(target) { return JSON.parse(helper("cat", [join(target.appdata, "journal.json")])); }
+function inspect(id) { return JSON.parse(docker(["inspect", id]))[0]; }
+let release;
+let archive;
+const credentials = { ingest: [{ sourceId: randomUUID(), machineId: "deployment-smoke", token: randomBytes(32).toString("hex") }], dashboard: { username: "smoke-reader", password: randomBytes(32).toString("hex") } };
+function target(suffix, address) {
+  const installation = randomUUID(); installations.add(installation);
+  return { version: 1, installation, hostName: "deploy-smoke", network, networkDriver: "bridge", address, origin: `http://${address}:7345`, appdata: join(directory, suffix) };
+}
+function request(target, command = "apply") {
+  const aggregate = { databasePath: "/data/aggregate.sqlite", host: "0.0.0.0", port: 7345, publicOrigin: target.origin, credentialsFile: "/run/secrets/hotplate-credentials.json", trustedHttp: true };
+  return { command, target, operation: randomUUID(), release: command === "status" ? null : release, secrets: command === "status" ? null : { aggregate: Buffer.from(JSON.stringify(aggregate)).toString("base64"), credentials: Buffer.from(JSON.stringify(credentials)).toString("base64") } };
+}
+async function probe(target) {
+  const child = spawn("docker", ["run", "--rm", "-i", "--network", network, "--label", `io.hotplate.smoke=${id}`, controllerImage, "node", "--input-type=module", "-e", `
+    let input=''; for await (const chunk of process.stdin) input+=chunk;
+    const {origin,dashboard}=JSON.parse(input);
+    for(const path of ['/health','/api/dashboard']) {
+      const response=await fetch(origin+path,{headers:{Authorization:'Basic '+Buffer.from(dashboard.username+':'+dashboard.password).toString('base64')},signal:AbortSignal.timeout(5000)});
+      if(response.status!==200) process.exit(2); await response.body.cancel();
+    }
+  `], { stdio: ["pipe", "pipe", "pipe"] });
+  child.stdin.end(JSON.stringify({ origin: target.origin, dashboard: credentials.dashboard }));
+  await new Promise((resolve, reject) => child.once("close", code => code === 0 ? resolve() : reject(new Error("Local bridge probe failed"))));
+}
+async function apply(target, failure = "", acknowledge = () => probe(target), override = null) {
+  const value = override ?? request(target);
+  await exchange(controller(value, failure), value, archive, acknowledge);
+  return value;
+}
+async function refusal(target, command = "plan") {
+  const value = request(target, command);
+  await assert.rejects(exchange(controller(value), value, null, () => assert.fail()));
+}
+try {
+  docker(["build", "--tag", controllerImage, directory], { stdio: "inherit" }); controllerBuilt = true;
+  docker(["build", "--platform", "linux/amd64", "--tag", imageTag, "."], { stdio: "inherit" }); imageBuilt = true;
+  docker(["network", "create", "--label", `io.hotplate.smoke=${id}`, network]); networkCreated = true;
+  const subnet = JSON.parse(docker(["network", "inspect", network]))[0].IPAM.Config[0].Subnet;
+  const octets = subnet.split("/")[0].split(".");
+  const ip = number => [...octets.slice(0, 3), String(number)].join(".");
+  archive = join(directory, "image.tar");
+  docker(["save", "--output", archive, imageTag]);
+  release = { version: 1, revision: "a".repeat(40), tag: imageTag, imageId: JSON.parse(docker(["image", "inspect", imageTag]))[0].Id, platform: "linux/amd64", archiveSha256: hash(readFileSync(archive)), archiveBytes: statSync(archive).size, controllerSha256: hash(readFileSync(controllerPath)) };
+  const primary = target("primary", ip(12));
+  const plan = request(primary, "plan");
+  await exchange(controller(plan), plan, null, () => assert.fail());
+  assert.throws(() => statSync(primary.appdata));
+  checks.push("Plan does not create appdata");
+  await apply(primary);
+  let current = journal(primary);
+  assert.equal(current.state, "Healthy");
+  const first = current.candidate;
+  assert.equal(inspect(first).HostConfig.RestartPolicy.Name, "unless-stopped");
+  docker(["exec", first, "node", "-e", "require('node:fs').writeFileSync('/data/persistence-proof','retained')"]);
+  await apply(primary);
+  current = journal(primary);
+  assert.notEqual(current.candidate, first);
+  assert.equal(inspect(first).State.Running, false);
+  assert.equal(inspect(first).HostConfig.RestartPolicy.Name, "no");
+  assert.deepEqual(inspect(first).NetworkSettings.Networks, {});
+  assert.equal(docker(["exec", current.candidate, "cat", "/data/persistence-proof"]).trim(), "retained");
+  assert.match(helper("tar", ["-tf", current.backup.path]), /aggregate.sqlite/);
+  assert.match(helper("tar", ["-tf", current.backup.path]), /persistence-proof/);
+  assert.equal(helper("sha256sum", [current.backup.path]).split(" ")[0], current.backup.sha256);
+  checks.push("Bootstrap and update retain UID1000 data, checked cold backup, stopped old container and private configuration");
+  const wrong = { ...primary, installation: randomUUID() };
+  await refusal(wrong);
+  const unmarked = target("unmarked", ip(13));
+  mkdirSync(unmarked.appdata, { mode: 0o700 });
+  await refusal(unmarked);
+  checks.push("Foreign marker and unmarked appdata are refused");
+  const foreignName = `${prefix}-foreign`;
+  docker(["run", "-d", "--name", foreignName, "--label", `io.hotplate.smoke=${id}`, "--network", network, "--mount", `type=bind,source=${primary.appdata}/data,target=/foreign`, "--entrypoint", "sleep", controllerImage, "300"]);
+  await refusal(primary);
+  docker(["rm", "-f", foreignName]);
+  checks.push("Unexpected data writer is refused without mutation");
+  const corrupt = request(primary);
+  corrupt.release = { ...release, archiveSha256: "0".repeat(64) };
+  await assert.rejects(apply(primary, "", undefined, corrupt));
+  assert.equal(journal(primary).state, "Healthy");
+  assert.equal(inspect(current.candidate).HostConfig.RestartPolicy.Name, "unless-stopped");
+  checks.push("Corrupt upload refuses load and preserves old availability");
+  for (const failure of ["backup", "disconnect"]) {
+    await assert.rejects(apply(primary, failure));
+    assert.equal(journal(primary).state, "Healthy");
+    assert.equal(inspect(current.candidate).State.Running, true);
+    assert.equal(inspect(current.candidate).HostConfig.RestartPolicy.Name, "unless-stopped");
+    await probe(primary);
+  }
+  checks.push("Backup/disconnect failures restore exact old network and restart policy before candidate intent");
+  let releaseProbe;
+  let entered;
+  const held = new Promise(resolve => { releaseProbe = resolve; });
+  const reached = new Promise(resolve => { entered = resolve; });
+  const active = apply(primary, "", async () => { entered(); await held; await probe(primary); });
+  await reached;
+  const competing = request(primary);
+  await assert.rejects(exchange(controller(competing), competing, null, () => assert.fail()));
+  releaseProbe();
+  await active;
+  checks.push("Competing controller is refused while acknowledgment retains the lock");
+  await assert.rejects(apply(primary, "", () => { throw new Error("Probe unavailable"); }));
+  current = journal(primary);
+  assert.equal(current.state, "RecoveryRequired");
+  assert.equal(inspect(current.evidence.candidate).State.Running, false);
+  assert.equal(inspect(current.evidence.candidate).HostConfig.RestartPolicy.Name, "no");
+  assert.ok(statSync(primary.appdata));
+  await refusal(primary);
+  checks.push("Missing acknowledgment stops candidate, preserves backup, and blocks later apply");
+  const health = target("health", ip(14));
+  unhealthyTag = `hotplate-release:${randomUUID()}`;
+  docker(["build", "--tag", unhealthyTag, "-"], { input: `FROM ${imageTag}\nHEALTHCHECK --interval=1s --start-period=1s --timeout=1s --retries=1 CMD ["node", "-e", "process.exit(1)"]\n` });
+  const healthyArchive = archive;
+  archive = join(directory, "unhealthy.tar");
+  docker(["save", "--output", archive, unhealthyTag]);
+  const unhealthy = request(health);
+  unhealthy.release = { ...release, tag: unhealthyTag, imageId: JSON.parse(docker(["image", "inspect", unhealthyTag]))[0].Id, archiveSha256: hash(readFileSync(archive)), archiveBytes: statSync(archive).size };
+  await assert.rejects(apply(health, "", undefined, unhealthy));
+  archive = healthyArchive;
+  const healthJournal = journal(health);
+  assert.equal(healthJournal.state, "RecoveryRequired");
+  assert.equal(inspect(healthJournal.evidence.candidate).State.Running, false);
+  checks.push("Failed Docker health stops owned candidate without restoring data");
+  const timeout = target("ack-timeout", ip(17));
+  await assert.rejects(apply(timeout, "", () => delay(35_000)));
+  const timedOut = journal(timeout);
+  assert.equal(timedOut.state, "RecoveryRequired");
+  assert.equal(inspect(timedOut.evidence.candidate).State.Running, false);
+  checks.push("Acknowledgment timeout stops candidate and preserves recovery evidence");
+  const status = request(timeout, "status");
+  await exchange(controller(status), status, null, () => assert.fail());
+  const interrupted = target("interrupted", ip(15));
+  await apply(interrupted);
+  await assert.rejects(apply(interrupted, "stop-intent"));
+  assert.equal(journal(interrupted).state, "StopIntent");
+  await refusal(interrupted);
+  const start = target("start-interrupted", ip(16));
+  await assert.rejects(apply(start, "start-intent"));
+  assert.equal(journal(start).state, "StartIntent");
+  await refusal(start);
+  checks.push("SIGKILL at stop/start intent retains incomplete journal and blocks apply");
+  console.log(JSON.stringify({ kind: "passed", checks, limitation: "Local rootless bridge probes do not prove Unraid macvlan workstation reachability." }, null, 2));
+} finally {
+  for (const installation of installations) {
+    const ids = docker(["ps", "-aq", "--filter", `label=io.hotplate.installation=${installation}`]).trim().split(/\s+/).filter(Boolean);
+    if (ids.length) docker(["rm", "-f", ...ids]);
+  }
+  const helpers = docker(["ps", "-aq", "--filter", `label=io.hotplate.smoke=${id}`]).trim().split(/\s+/).filter(Boolean);
+  if (helpers.length) docker(["rm", "-f", ...helpers]);
+  if (networkCreated) docker(["network", "rm", network]);
+  if (controllerBuilt) helper("sh", ["-c", 'find "$1" -mindepth 1 -delete', "cleanup", directory]);
+  if (unhealthyTag) docker(["image", "rm", unhealthyTag]);
+  if (imageBuilt) docker(["image", "rm", imageTag]);
+  if (controllerBuilt) docker(["image", "rm", controllerImage]);
+  rmSync(directory, { recursive: true, force: true });
+}

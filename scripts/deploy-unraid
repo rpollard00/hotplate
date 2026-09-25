@@ -1,0 +1,174 @@
+#!/usr/bin/env node
+import { createHash, randomUUID } from "node:crypto";
+import { spawn, execFileSync } from "node:child_process";
+import { createReadStream, readFileSync, realpathSync, statSync, writeFileSync, mkdirSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { createInterface } from "node:readline";
+
+const root = resolve(import.meta.dirname, "..");
+const controller = readFileSync(join(root, "scripts/unraid-controller.sh"));
+const digest = data => createHash("sha256").update(data).digest("hex");
+const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const pathPattern = /^\/(?:[A-Za-z0-9_-][A-Za-z0-9._-]*\/)+[A-Za-z0-9_-][A-Za-z0-9._-]*$/;
+function requireValue(condition) { if (!condition) throw new Error("Invalid deployment configuration or release."); }
+function exactKeys(value, keys) {
+  requireValue(value && typeof value === "object" && !Array.isArray(value));
+  requireValue(Object.keys(value).sort().join() === [...keys].sort().join());
+}
+function privateFile(path) {
+  requireValue(isAbsolute(path) && realpathSync(path) === path && path !== root && !path.startsWith(`${root}/`));
+  const stat = statSync(path);
+  requireValue(stat.isFile() && stat.size <= 1024 * 1024 && (stat.mode & 0o077) === 0 && stat.uid === process.getuid());
+  return readFileSync(path);
+}
+export function readConfiguration(path) {
+  const config = JSON.parse(privateFile(resolve(path)));
+  exactKeys(config, ["version", "installation", "sshTarget", "hostName", "network", "networkDriver", "address", "origin", "appdata", "aggregateFile", "credentialsFile", "releaseDirectory"]);
+  requireValue(config.version === 1 && uuid.test(config.installation));
+  requireValue(/^root@[A-Za-z0-9][A-Za-z0-9.-]*$/.test(config.sshTarget));
+  requireValue(/^[A-Za-z0-9][A-Za-z0-9.-]*$/.test(config.hostName));
+  requireValue(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$/.test(config.network));
+  requireValue(["macvlan", "bridge"].includes(config.networkDriver));
+  requireValue(typeof config.address === "string" && config.address.split(".").length === 4 && config.address.split(".").every(x => /^(0|[1-9][0-9]{0,2})$/.test(x) && Number(x) <= 255));
+  requireValue(config.origin === `http://${config.address}:7345`);
+  requireValue(pathPattern.test(config.appdata) && !config.appdata.split("/").some(x => x === "." || x === ".."));
+  requireValue(isAbsolute(config.releaseDirectory) && resolve(config.releaseDirectory) !== root && !resolve(config.releaseDirectory).startsWith(`${root}/`));
+  for (const key of ["aggregateFile", "credentialsFile"]) requireValue(typeof config[key] === "string" && !resolve(config[key]).startsWith(`${root}/`));
+  return config;
+}
+async function readSecrets(config) {
+  const aggregate = privateFile(config.aggregateFile);
+  const credentials = privateFile(config.credentialsFile);
+  const value = JSON.parse(aggregate);
+  exactKeys(value, ["databasePath", "host", "port", "publicOrigin", "credentialsFile", "trustedHttp"]);
+  requireValue(value.databasePath === "/data/aggregate.sqlite" && value.host === "0.0.0.0" && value.port === 7345 && value.publicOrigin === config.origin && value.credentialsFile === "/run/secrets/hotplate-credentials.json" && value.trustedHttp === true);
+  const { readAggregationCredentials } = await import(pathToFileURL(join(root, "dist/src/network-config.js")));
+  const parsed = readAggregationCredentials(config.credentialsFile);
+  return { aggregate: aggregate.toString("base64"), credentials: credentials.toString("base64"), dashboard: parsed.dashboard };
+}
+function run(command, args, options = {}) {
+  return execFileSync(command, args, { cwd: root, encoding: "utf8", maxBuffer: 1024 * 1024, ...options });
+}
+async function hashFile(path) {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(path)) hash.update(chunk);
+  return hash.digest("hex");
+}
+export function validateRelease(release) {
+  exactKeys(release, ["version", "revision", "tag", "imageId", "platform", "archiveSha256", "archiveBytes", "controllerSha256"]);
+  requireValue(release.version === 1 && /^[0-9a-f]{40}$/.test(release.revision));
+  requireValue(/^hotplate-release:[0-9a-f-]{36}$/.test(release.tag));
+  requireValue(/^sha256:[0-9a-f]{64}$/.test(release.imageId) && release.platform === "linux/amd64");
+  requireValue(/^[0-9a-f]{64}$/.test(release.archiveSha256) && release.controllerSha256 === digest(controller));
+  requireValue(Number.isSafeInteger(release.archiveBytes) && release.archiveBytes > 0 && release.archiveBytes < 20 * 1024 ** 3);
+  return release;
+}
+async function build(config) {
+  run("npm", ["run", "check"], { stdio: "inherit" });
+  const revision = run("jj", ["log", "--no-graph", "-r", "@", "-T", "commit_id"]).trim();
+  const tag = `hotplate-release:${randomUUID()}`;
+  const directory = join(config.releaseDirectory, tag.split(":")[1]);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  run("docker", ["build", "--platform", "linux/amd64", "--tag", tag, "."], { stdio: "inherit" });
+  const image = JSON.parse(run("docker", ["image", "inspect", tag]))[0];
+  requireValue(image.Os === "linux" && image.Architecture === "amd64");
+  const archive = join(directory, "image.tar");
+  run("docker", ["image", "save", "--output", archive, tag], { timeout: 600_000 });
+  const release = { version: 1, revision, tag, imageId: image.Id, platform: "linux/amd64", archiveSha256: await hashFile(archive), archiveBytes: statSync(archive).size, controllerSha256: digest(controller) };
+  validateRelease(release);
+  writeFileSync(join(directory, "release.json"), `${JSON.stringify(release, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+  console.log(`Built ${join(directory, "release.json")}`);
+}
+export async function probe(origin, dashboard) {
+  for (const path of ["/health", "/api/dashboard"]) {
+    const response = await fetch(`${origin}${path}`, {
+      headers: { Authorization: `Basic ${Buffer.from(`${dashboard.username}:${dashboard.password}`).toString("base64")}` },
+      redirect: "error", signal: AbortSignal.timeout(5000),
+    });
+    await response.body?.cancel();
+    requireValue(response.status === 200);
+  }
+}
+export async function exchange(child, request, archive, acknowledge) {
+  let stderrBytes = 0;
+  let stdoutBytes = 0;
+  child.stdout.on("data", chunk => { stdoutBytes += chunk.length; if (stdoutBytes > 65536) { child.stdout.destroy(); child.kill(); } });
+  let probeSeen = false;
+  let resultSeen = false;
+  const finished = new Promise((resolve, reject) => {
+    child.once("error", () => reject(new Error("Cannot start deployment transport.")));
+    child.once("close", code => code === 0 ? resolve() : reject(new Error("Controller refused or stopped. Run status; inspect private recovery evidence.")));
+  });
+  finished.catch(() => {});
+  child.stdin.on("error", () => {});
+  child.stderr.on("data", chunk => { stderrBytes += chunk.length; if (stderrBytes > 65536) child.kill(); });
+  const timer = setTimeout(() => child.kill(), 20 * 60_000);
+  try {
+    child.stdin.write(`${JSON.stringify(request)}\n`);
+    const upload = archive ? (async () => {
+      for await (const chunk of createReadStream(archive)) {
+        if (!child.stdin.write(chunk)) await new Promise((resolve, reject) => {
+          const drained = () => { child.stdin.off("error", failed); resolve(); };
+          const failed = error => { child.stdin.off("drain", drained); reject(error); };
+          child.stdin.once("drain", drained);
+          child.stdin.once("error", failed);
+        });
+      }
+    })() : Promise.resolve();
+    upload.catch(() => child.kill());
+    for await (const line of createInterface({ input: child.stdout, crlfDelay: Infinity })) {
+      requireValue(stdoutBytes <= 65536);
+      const event = JSON.parse(line);
+      if (event.kind === "Probe") {
+        requireValue(request.command === "apply" && !probeSeen && event.operation === request.operation && /^[0-9a-f]{64}$/.test(event.candidate));
+        probeSeen = true;
+        await upload;
+        try {
+          await acknowledge(event.candidate);
+          child.stdin.end(`${JSON.stringify({ operation: request.operation, candidate: event.candidate })}\n`);
+        } catch { child.stdin.end("{}\n"); }
+      } else {
+        requireValue(event.kind === "Result" && !resultSeen && ["Ready", "Healthy", "RecoveryRequired"].includes(event.state));
+        resultSeen = true;
+        if (request.command === "status") {
+          requireValue(["Ready", "Prepared", "StopIntent", "BackupReady", "StartIntent", "Healthy", "RecoveryRequired"].includes(event.journalState) && Array.isArray(event.containers));
+          const containers = event.containers.map(container => {
+            requireValue(/^[0-9a-f]{64}$/.test(container.id) && typeof container.running === "boolean" && ["none", "starting", "healthy", "unhealthy"].includes(container.health) && ["no", "always", "unless-stopped", "on-failure"].includes(container.restartPolicy));
+            return { id: container.id, running: container.running, health: container.health, restartPolicy: container.restartPolicy };
+          });
+          console.log(JSON.stringify({ kind: "Result", state: event.state, journalState: event.journalState, containers }));
+        } else {
+          requireValue(event.operation === request.operation);
+          console.log(JSON.stringify({ kind: "Result", state: event.state, operation: event.operation }));
+        }
+      }
+    }
+    await upload;
+    await finished;
+    requireValue(resultSeen);
+  } catch (error) {
+    child.stdin.destroy();
+    child.kill();
+    throw error;
+  } finally { clearTimeout(timer); }
+}
+export async function main(args) {
+  const [command, configFlag, configPath, releaseFlag, releasePath] = args;
+  requireValue(["build", "plan", "apply", "status"].includes(command) && configFlag === "--config" && configPath);
+  requireValue(["plan", "apply"].includes(command) ? args.length === 5 && releaseFlag === "--release" && releasePath : args.length === 3);
+  const config = readConfiguration(configPath);
+  if (command === "build") return build(config);
+  const release = releasePath ? validateRelease(JSON.parse(readFileSync(resolve(releasePath)))) : null;
+  const archive = releasePath ? join(dirname(resolve(releasePath)), "image.tar") : null;
+  const secrets = command === "status" ? null : await readSecrets(config);
+  if (command === "apply") requireValue(statSync(archive).size === release.archiveBytes && await hashFile(archive) === release.archiveSha256);
+  const { sshTarget, aggregateFile, credentialsFile, releaseDirectory, ...target } = config;
+  const request = { command, target, release, operation: randomUUID(), secrets: secrets ? { aggregate: secrets.aggregate, credentials: secrets.credentials } : null };
+  const remoteCommand = `bash -c "$(printf %s '${controller.toString("base64")}' | base64 -d)"`;
+  const child = spawn("ssh", ["-T", "-o", "StrictHostKeyChecking=yes", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=10", "-o", "ServerAliveCountMax=3", sshTarget, remoteCommand], { stdio: ["pipe", "pipe", "pipe"] });
+  await exchange(child, request, command === "apply" ? archive : null, () => probe(config.origin, secrets.dashboard));
+}
+if (process.argv[1] && resolve(process.argv[1]) === import.meta.filename) {
+  main(process.argv.slice(2)).catch(() => { console.error("Deployment failed. Check configuration, local build, or status. No database restore was attempted."); process.exitCode = 1; });
+}
