@@ -21,11 +21,14 @@ function config(value) { writeFileSync(path, JSON.stringify(value), { mode: 0o60
 
 test("deploy-unraid accepts an explicit private target configuration", () => {
   assert.deepEqual(config(configuration), configuration);
+  const publicTarget = { ...configuration, origin: `http://${configuration.address}` };
+  assert.deepEqual(config(publicTarget), publicTarget);
 });
 test("deploy-unraid refuses shell syntax, unknown keys, noncanonical addresses and paths", () => {
   for (const mutation of [
     { sshTarget: "root@host;touch /tmp/unwanted" }, { network: "br0$(id)" }, { hostName: "$(id)" },
     { address: "192.168.088.12" }, { address: "300.1.1.1" }, { origin: "http://other:7345" },
+    ...[":80", ":7346", "/", ":7345/", "?query"].map(suffix => ({ origin: `http://${configuration.address}${suffix}` })),
     { appdata: "/mnt/user/../appdata" }, { appdata: "/tmp/x,y" }, { installation: "other" },
     { unexpected: true }, { releaseDirectory: process.cwd() },
   ]) assert.throws(() => config({ ...configuration, ...mutation }));
@@ -65,7 +68,7 @@ test("deploy-unraid probes require healthy application payloads, not only HTTP 2
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   t.after(() => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); });
   const origin = `http://127.0.0.1:${server.address().port}`;
-  const credentials = { username: "test", password: "synthetic-password" };
+  const credentials = { kind: "basic", username: "test", password: "synthetic-password" };
   await probe(origin, credentials);
   dashboard = { kind: "error" };
   await assert.rejects(probe(origin, credentials));
@@ -76,4 +79,49 @@ test("deploy-unraid probes require healthy application payloads, not only HTTP 2
 test("deploy-unraid refuses a mismatched operation without probing", async () => {
   const child = spawn(process.execPath, ["-e", `console.log(JSON.stringify({kind:'Probe',operation:'wrong',candidate:'${"a".repeat(64)}'})); setTimeout(()=>{},10000);`], { stdio: ["pipe", "pipe", "pipe"] });
   await assert.rejects(exchange(child, { command: "apply", operation: randomUUID() }, null, () => assert.fail("must not probe")));
+});
+
+test("deploy-unraid public probes send no Authorization while basic probes retain it", async t => {
+  const requests = [];
+  const server = createServer((request, response) => {
+    requests.push({ path: request.url, authorization: request.headers.authorization });
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify(request.url === "/health" ? { ok: true } : { kind: "ready" }));
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); });
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  await probe(origin, { kind: "public" });
+  assert.deepEqual(requests, ["/health", "/api/dashboard"].map(path => ({ path, authorization: undefined })));
+  requests.length = 0;
+  await probe(origin, { kind: "basic", username: "test", password: "synthetic-password" });
+  assert.ok(requests.every(request => request.authorization === `Basic ${Buffer.from("test:synthetic-password").toString("base64")}`));
+});
+
+test("container-healthcheck follows the public/basic policy and fails closed on invalid credentials", async t => {
+  const requests = [];
+  const server = createServer((request, response) => {
+    requests.push({ host: request.headers.host, authorization: request.headers.authorization });
+    response.writeHead(200).end('{"ok":true}');
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); });
+  const credentialsFile = join(directory, "health-credentials.json");
+  const configurationFile = join(directory, "health-aggregate.json");
+  writeFileSync(configurationFile, JSON.stringify({ databasePath: join(directory, "unused.sqlite"), host: "127.0.0.1",
+    port: server.address().port, publicOrigin: "http://192.168.88.12", credentialsFile, trustedHttp: true }));
+  const ingest = [{ token: "a".repeat(48), sourceId: randomUUID(), machineId: "test" }];
+  for (const dashboard of [{ kind: "public" }, { username: "test", password: "synthetic-password" }, undefined, { kind: "public", password: "invalid" }]) {
+    requests.length = 0;
+    writeFileSync(credentialsFile, JSON.stringify({ ingest, dashboard }));
+    const child = spawn(process.execPath, [new URL("../scripts/container-healthcheck.mjs", import.meta.url).pathname, configurationFile], { stdio: "ignore" });
+    const code = await new Promise(resolve => child.once("close", resolve));
+    if (!dashboard || "password" in dashboard && dashboard.kind === "public") {
+      assert.equal(code, 1);
+      assert.deepEqual(requests, []);
+    } else {
+      assert.equal(code, 0);
+      assert.deepEqual(requests, [{ host: "192.168.88.12", authorization: dashboard.kind === "public" ? undefined : `Basic ${Buffer.from("test:synthetic-password").toString("base64")}` }]);
+    }
+  }
 });

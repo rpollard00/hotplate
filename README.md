@@ -155,8 +155,11 @@ Shutdown cancels retries after a 500 ms drain budget. A synchronous SQLite call 
 ### Prepare the server
 
 The container runs only the aggregate server. It cannot discover Pi processes or read remote session files.
-All ingest routes require bearer credentials. Dashboard pages, assets, queries, and health require a separate read-only Basic credential.
-The dashboard credential grants access to all aggregate metadata. Machine filters are not access controls.
+All ingest routes require bearer credentials. By default, the credentials file must supply a separate read-only Basic dashboard credential.
+For a trusted LAN, explicitly set `"dashboard": {"kind":"public"}` to allow anonymous dashboard pages, assets, queries, and health.
+Omitted or invalid dashboard policies fail closed. Both policies retain exact Host/Origin checks and read-only dashboard methods.
+Dashboard access exposes all aggregate metadata. Machine filters are not access controls.
+The [Unraid deployment](docs/unraid.md) uses public access at `http://192.168.88.12` on port 80.
 
 1. Copy `examples/aggregate.json` and `examples/credentials.json` into a private directory outside this checkout.
 2. Set the directory mode to `0700`.
@@ -173,7 +176,7 @@ The dashboard credential grants access to all aggregate metadata. Machine filter
    node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("hex")+"\n")'
    ```
 
-6. Generate a separate random dashboard password with the same command.
+6. Generate a separate random dashboard password with the same command, or explicitly choose the public dashboard policy above.
 7. Register each source UUID and token against a server-assigned `machineId` in the credentials file.
 8. Set `publicOrigin` to the exact browser and relay origin, such as `https://hotplate.lan`.
 
@@ -198,7 +201,7 @@ docker compose up --build -d
 ```
 
 The aggregate configuration must use `/run/secrets/hotplate-credentials.json` for `credentialsFile`.
-The image healthcheck reads the mounted read credential. It does not print credentials or bypass authentication.
+The image healthcheck reads the mounted dashboard policy. It sends Basic credentials only for the Basic policy and no Authorization for public access. It never prints credentials.
 
 ### Protect the network
 

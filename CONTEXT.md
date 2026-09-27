@@ -58,3 +58,8 @@ A retained observation that normal delivery excludes because it is oversized, in
 
 **Aggregate**:
 The combined metadata view from enrolled account sources, with machine and source identities intact.
+
+**Dashboard policy**:
+An explicit aggregate read-access choice: a separate Basic credential or `dashboard: {kind:"public"}` for anonymous reads.
+Public access does not remove ingest token identity/authentication, Host/Origin checks, or read-only dashboard methods.
+The dedicated trusted-LAN Unraid deployment serves the public dashboard at `http://192.168.88.12` on port 80.

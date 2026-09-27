@@ -2,8 +2,9 @@
 
 This pipeline builds on the workstation and controls Docker through one SSH session. It does not require a registry or Compose.
 
-The target is `root@media.media`, network `br0`, address `192.168.88.12`, and origin `http://192.168.88.12:7345`.
-HTTP is explicitly trusted on this LAN. It sends credentials and metadata without TLS. Do not expose this address to an untrusted network.
+The target is `root@media.media`, network `br0`, address `192.168.88.12`, and origin `http://192.168.88.12` (port 80).
+The dashboard is public to devices that can reach this LAN address. It requires no dashboard username or password.
+Ingestion still requires account-specific bearer tokens. HTTP sends tokens and metadata without TLS. Do not expose this address to an untrusted network.
 
 Only the operator creates real credentials, accepts host keys, and runs remote commands. Deployment does not enroll Pi capture or start account relays.
 
@@ -42,10 +43,10 @@ deploy.credentialsFile = join(directory, "credentials.json");
 deploy.releaseDirectory = join(directory, "releases");
 const credentials = {
   ingest: [{ sourceId: randomUUID(), machineId: "workstation", token: randomBytes(32).toString("hex") }],
-  dashboard: { username: "hotplate-reader", password: randomBytes(32).toString("hex") },
+  dashboard: { kind: "public" },
 };
 const aggregate = {
-  databasePath: "/data/aggregate.sqlite", host: "0.0.0.0", port: 7345,
+  databasePath: "/data/aggregate.sqlite", host: "0.0.0.0", port: Number(new URL(deploy.origin).port || 80),
   publicOrigin: deploy.origin, credentialsFile: "/run/secrets/hotplate-credentials.json", trustedHttp: true,
 };
 for (const [name, value] of [["deploy.json", deploy], ["aggregate.json", aggregate], ["credentials.json", credentials]]) {
@@ -56,11 +57,21 @@ NODE
 
 The command prints no credentials and refuses to overwrite files. Keep the directory outside the checkout.
 The controller requires mode `0600` or stricter and current-user ownership for local private files. Symlinked private files are refused.
-Use a password manager to retain the dashboard credential. Do not put credentials in command arguments or logs.
+Retain ingest tokens privately. Do not put credentials in command arguments or logs.
+Other deployments can retain the legacy `dashboard: {username, password}` policy. Omitted or invalid dashboard policies refuse startup.
 
-The installation UUID, canonical path, host, network identity, address, and origin become fixed at bootstrap.
-Updates reuse the same aggregate configuration and credentials. This deployment interface refuses credential rotation and target changes.
-Those changes require a separate, reviewed maintenance operation.
+The installation UUID, canonical path, host, network identity, and address become fixed at bootstrap.
+Ordinary updates can change the dashboard policy and switch between canonical `http://ADDRESS` (80) and `http://ADDRESS:7345`.
+The aggregate `port` must match the origin. All other aggregate configuration and the entire ingest credential list must remain unchanged.
+Ingest token rotation and immutable target changes require a separate, reviewed maintenance operation.
+
+For an existing Basic/7345 installation, preserve private copies of the old configuration, then change only:
+- Deployment `origin` to `http://192.168.88.12`.
+- Aggregate `publicOrigin` to the same origin and `port` to `80`.
+- Credentials `dashboard` to `{"kind":"public"}`.
+
+Keep the installation UUID, every ingest token/source/machine identity, and remaining configuration intact. Do not rerun bootstrap credential generation.
+Build, plan, and apply normally. Do not edit the server marker or old operation files. Existing account enrollment is not changed by deployment.
 
 ## Build, plan, apply, status
 
@@ -95,15 +106,18 @@ The release manifest also records the source revision and controller checksum. C
 
 Apply disables the old restart policy, stops the old container, and refuses other writers.
 It archives the entire cold data directory, including SQLite sidecars, before disconnecting the old network attachment.
-The candidate starts with `restart=no`. Docker health and authenticated workstation requests to `/health` and `/api/dashboard` must both succeed.
+The candidate starts with `restart=no`. Docker health and workstation requests to `/health` and `/api/dashboard` must both succeed.
+The workstation requests use the configured dashboard policy.
 Only an acknowledgment with the exact operation UUID and candidate ID enables `unless-stopped`.
 The controller holds the lock during this exchange. A missing acknowledgment times out after 30 seconds.
 
 The container has no published host ports, Docker socket, or writable root filesystem.
+It runs as UID1000 with all capabilities dropped and `no-new-privileges`. The namespaced sysctl
+`net.ipv4.ip_unprivileged_port_start=0` permits port 80 without root or added capabilities.
 It mounts the UID1000-owned data directory at `/data` and mounts two individual read-only secret files.
 Unraid itself need not reach its macvlan peer. The workstation must reach the dedicated address.
 
-For updates, run the same build, plan, and apply commands with the unchanged private configuration.
+For updates, run the same build, plan, and apply commands with the private configuration described above.
 Even reapplying the same image creates a new operation, cold backup, and container. There is no implicit no-op shortcut.
 Capture enrollment remains explicit. Follow the README account-enrollment procedure with the existing source UUID and token.
 Do not generate a second source identity merely to verify delivery.
@@ -111,6 +125,9 @@ Do not generate a second source identity merely to verify delivery.
 ## Retained evidence
 
 The root-owned `installation.json` binds the installation to its canonical path and network ID.
+New version-2 markers hash the immutable target without the origin.
+The controller accepts existing version-1 markers only when all fields match.
+Their hash must match the full legacy target reconstructed with `http://ADDRESS:7345`. The controller does not rewrite existing markers.
 The appdata layout is:
 
 ```text
@@ -166,7 +183,7 @@ There is deliberately no public recovery command. An operator must review the ev
 9. Preserve the old data directory. Restore UID1000 permissions only within the new, verified directory.
 10. Use the retained `previous.json`, image ID, and private files to review the exact old container specification.
 11. Restore the selected network attachment and start only the approved image with `restart=no`.
-12. Repeat Docker health and the authenticated workstation probes before enabling `unless-stopped`.
+12. Repeat Docker health and the workstation probes for the configured dashboard policy before enabling `unless-stopped`.
 13. Reconcile the journal only after independent review of the restored container and all required evidence.
 
 Journal reconciliation is a manual engineering task in this version. Do not invent a `Healthy` record or reuse evidence from a different operation.
@@ -189,7 +206,10 @@ The unchanged controller runs against real Docker images, private bind mounts, a
 The fixture hides only its own controller containers from writer enumeration because they represent the host-side controller.
 The application container never receives the Docker socket.
 
-The smoke covers bootstrap, persistent updates, checked cold backups, ownership refusals, competing controllers, and corrupt uploads.
+The smoke covers bootstrap and a legacy version-1 marker with Basic/7345 and no explicit sysctl upgrading to public/80.
+It verifies UID1000, Docker health, production probes without Authorization, anonymous dashboard reads, and denied anonymous ingestion.
+It also verifies Host/Origin and read-only guards, retained SQLite observations, cold backups, and unchanged old configuration.
+Other checks cover ownership refusals, competing controllers, and corrupt uploads.
 It covers backup/disconnect failures, exact restart-policy restoration, actual unhealthy Docker health, failed acknowledgments, and acknowledgment timeout.
 It kills the controller at stop/start intent and verifies that later apply is refused.
 Regression checks cover ownership rejection, failed writer enumeration, and candidate shutdown when evidence writes fail.
@@ -197,5 +217,5 @@ Fault wrappers inject backup/disconnect errors. The successful lifecycle and unh
 Cleanup selects only the run's exact installation labels, helper label, network, image tags, and temporary directory. Build cache can remain.
 
 Rootless bridge probes do not prove workstation access to Unraid macvlan.
-Parent-owned verification must still prove remote preflight, HTTP authentication, persistent mounts, restart policy, and live enrolled-account relay delivery.
-An empty authenticated dashboard proves server availability, not live account capture.
+Parent-owned verification must still prove remote preflight, public dashboard access and authenticated ingestion, persistent mounts, restart policy, and live enrolled-account relay delivery.
+An empty dashboard proves server availability, not live account capture.

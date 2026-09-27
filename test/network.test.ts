@@ -9,7 +9,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { test, type TestContext } from "node:test";
 import { startAggregationServer } from "../src/aggregation.js";
 import type { Observation } from "../src/domain.js";
-import { readAccountConfiguration, readAggregationConfiguration, type AccountConfiguration, type AggregationConfiguration } from "../src/network-config.js";
+import { readAccountConfiguration, readAggregationConfiguration, readAggregationCredentials, type AccountConfiguration, type AggregationConfiguration } from "../src/network-config.js";
 import { parseCollectorOrigin, parseSourceId } from "../src/observation.js";
 import { readRelayStatus, runRelay } from "../src/relay.js";
 import { openCaptureStore, openHotplateReadStore, openHotplateStore } from "../src/store.js";
@@ -44,7 +44,7 @@ async function close(server: Server): Promise<void> {
   server.closeAllConnections();
   await closed;
 }
-async function fixture(t: TestContext, proxy = false) {
+async function fixture(t: TestContext, proxy = false, dashboard: { kind: "public" } | { username: string; password: string } = { username: "reader", password }) {
   const dir = await mkdtemp(join(tmpdir(), "hotplate-network-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const port = await freePort();
@@ -52,7 +52,7 @@ async function fixture(t: TestContext, proxy = false) {
   const origin = parseCollectorOrigin(`http://127.0.0.1:${publicPort}`);
   const tokenFile = join(dir, "token");
   const credentialsFile = join(dir, "credentials.json");
-  const credentials = { ingest: [{ token, sourceId, machineId: "machine-a" }, { token: otherToken, sourceId: otherSource, machineId: "machine-b" }], dashboard: { username: "reader", password } };
+  const credentials = { ingest: [{ token, sourceId, machineId: "machine-a" }, { token: otherToken, sourceId: otherSource, machineId: "machine-b" }], dashboard };
   await writeFile(tokenFile, token, { mode: 0o600 });
   await writeFile(credentialsFile, JSON.stringify(credentials), { mode: 0o600 });
   const account: AccountConfiguration = { databasePath: join(dir, "capture.sqlite"), enrollment: { sourceId, collectorOrigin: origin }, tokenFile, transport: "trusted-http" };
@@ -143,7 +143,10 @@ test("aggregate refuses missing, ambiguous, reserved, or shared credentials befo
     { ...f.credentials, ingest: [...f.credentials.ingest, { token: "c".repeat(40), sourceId, machineId: "different" }] },
     { ...f.credentials, ingest: [...f.credentials.ingest, { token, sourceId, machineId: "machine-a" }] },
     { ...f.credentials, dashboard: { username: "reader", password: token } },
-    { ...f.credentials, dashboard: { username: "reader", password: "weak" } }]) {
+    { ...f.credentials, dashboard: { username: "reader", password: "weak" } },
+    ...[undefined, null, {}, [], { kind: "public", username: "reader" }, { kind: "public", password },
+      { kind: "basic", username: "reader", password }, { kind: "unknown" }, { public: true }]
+      .map(dashboard => ({ ...f.credentials, dashboard }))]) {
     await writeFile(badPath, JSON.stringify(value));
     await assert.rejects(startAggregationServer({ configuration: config }), /Invalid aggregate credentials/);
   }
@@ -174,6 +177,39 @@ test("aggregate authenticates before body parsing, separates roles, and binds so
   assert.equal(await count(f.aggregate.databasePath), 2);
   const data = JSON.parse((await http({ url: `${f.origin}/api/dashboard`, headers: { authorization: basic } })).body);
   assert.deepEqual(data.filterOptions.machines, ["machine-a", "machine-b"]);
+});
+
+test("aggregate public dashboard remains read-only and preserves ingest identity and origin guards", async t => {
+  const f = await fixture(t, false, { kind: "public" });
+  assert.deepEqual(readAggregationCredentials(f.aggregate.credentialsFile).dashboard, { kind: "public" });
+  for (const path of ["/", "/health", "/assets/app.js", "/api/dashboard"]) {
+    const response = await http({ url: `${f.origin}${path}` });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers["www-authenticate"], undefined);
+    assert.equal(response.headers["access-control-allow-origin"], undefined);
+    assert.equal((await http({ url: `${f.origin}${path}`, method: "POST" })).status, 405);
+    for (const headers of [{ host: "attacker.invalid" }, { origin: "http://attacker.invalid" }]) {
+      assert.equal((await http({ url: `${f.origin}${path}`, headers })).status, 403);
+    }
+  }
+  for (const authorization of ["", basic, `Bearer ${password}`]) {
+    assert.equal((await post(f.origin, "not json", { authorization })).status, 401);
+  }
+  assert.equal((await post(f.origin, envelope(), { host: "attacker.invalid" })).status, 403);
+  assert.equal((await post(f.origin, envelope(), { origin: "http://attacker.invalid" })).status, 403);
+  assert.equal((await post(f.origin, envelope([], otherSource))).status, 400);
+  assert.equal((await post(f.origin, envelope([observation()], otherSource))).status, 403);
+  assert.equal((await post(f.origin)).status, 200);
+  assert.equal(await count(f.aggregate.databasePath), 1);
+});
+
+test("legacy dashboard credentials parse to the basic policy", async t => {
+  const f = await fixture(t);
+  const dashboard = readAggregationCredentials(f.aggregate.credentialsFile).dashboard;
+  assert.equal(dashboard.kind, "basic");
+  assert.ok(dashboard.kind === "basic");
+  assert.equal(dashboard.username, "reader");
+  assert.equal(dashboard.password, password);
 });
 
 test("aggregate enforces exact authority and canonical Origin without trusting proxy headers", async t => {

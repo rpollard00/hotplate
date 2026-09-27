@@ -16,7 +16,7 @@ export async function startAggregationServer(args: { configuration: AggregationC
     || origin.origin !== configuration.publicOrigin) throw new Error("Invalid aggregate transport configuration");
   const credentials = readAggregationCredentials(configuration.credentialsFile);
   const ingestCredentials = new Map(credentials.ingest.map(entry => [digest(`Bearer ${entry.token}`).toString("hex"), entry.source]));
-  const dashboardCredential = digest(`Basic ${Buffer.from(`${credentials.dashboard.username}:${credentials.dashboard.password}`).toString("base64")}`);
+  const dashboardCredential = credentials.dashboard.kind === "public" ? null : digest(`Basic ${Buffer.from(`${credentials.dashboard.username}:${credentials.dashboard.password}`).toString("base64")}`);
   const store = openAggregateStore({ databasePath: configuration.databasePath });
   const shutdown = new AbortController();
   const work = new Set<Promise<void>>();
@@ -50,7 +50,7 @@ export async function startAggregationServer(args: { configuration: AggregationC
     const path = new URL(request.url ?? "/", origin).pathname;
     const authorization = request.headers.authorization ?? "";
     if (path !== "/api/ingest") {
-      if (!timingSafeEqual(digest(authorization), dashboardCredential)) {
+      if (dashboardCredential !== null && !timingSafeEqual(digest(authorization), dashboardCredential)) {
         response.setHeader("www-authenticate", 'Basic realm="Hotplate", charset="UTF-8"');
         reply(response, 401, "unauthorized");
         return;

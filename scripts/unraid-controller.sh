@@ -23,7 +23,7 @@ printf '%s' "$request" | json '
   (.target.network | test("^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$")) and
   (.target.networkDriver == "macvlan" or .target.networkDriver == "bridge") and
   (.target.address | split(".") | length == 4 and all(.[]; test("^(0|[1-9][0-9]{0,2})$") and tonumber <= 255)) and
-  (.target.origin == ("http://" + .target.address + ":7345"))' >/dev/null || refuse
+  (.target.origin == ("http://" + .target.address) or .target.origin == ("http://" + .target.address + ":7345"))' >/dev/null || refuse
 command=$(jq -r .command <<< "$request")
 target=$(jq -cS .target <<< "$request")
 installation=$(jq -r .installation <<< "$target")
@@ -32,7 +32,12 @@ network=$(jq -r .network <<< "$target")
 address=$(jq -r .address <<< "$target")
 operation=$(jq -r .operation <<< "$request")
 release=$(jq -c .release <<< "$request")
-target_hash=$(printf '%s' "$target" | sha256sum | cut -d ' ' -f1)
+ownership_target=$(jq -cS 'del(.origin)' <<< "$target")
+target_hash=$(printf '%s' "$ownership_target" | sha256sum | cut -d ' ' -f1)
+legacy_target=$(jq -cS '.origin=("http://" + .address + ":7345")' <<< "$target")
+legacy_target_hash=$(printf '%s' "$legacy_target" | sha256sum | cut -d ' ' -f1)
+port=80
+[[ $(jq -r .origin <<< "$target") != "http://$address:7345" ]] || port=7345
 [[ $(hostname) == "$(jq -r .hostName <<< "$target")" ]] || refuse
 [[ $(realpath -e "$(dirname "$appdata")") == "$(dirname "$appdata")" ]] || refuse
 [[ ! -L $appdata ]] || refuse
@@ -121,8 +126,9 @@ validate_journal() {
 if [[ -e $appdata ]]; then
   private_directory "$appdata" || refuse
   private_file "$appdata/installation.json" || refuse
-  jq -e --arg installation "$installation" --arg path "$appdata" --arg target "$target_hash" --arg network "$network_id" '
-    . == {version:1,installation:$installation,appdata:$path,targetSha256:$target,networkId:$network}' "$appdata/installation.json" >/dev/null || refuse
+  jq -e --arg installation "$installation" --arg path "$appdata" --arg target "$target_hash" --arg legacy "$legacy_target_hash" --arg network "$network_id" '
+    . == {version:2,installation:$installation,appdata:$path,targetSha256:$target,networkId:$network} or
+    . == {version:1,installation:$installation,appdata:$path,targetSha256:$legacy,networkId:$network}' "$appdata/installation.json" >/dev/null || refuse
   private_directory "$appdata/operations" || refuse
   [[ -d $appdata/data && ! -L $appdata/data && $(stat -c '%u:%g:%a' "$appdata/data") == 1000:1000:700 ]] || refuse
   validate_journal
@@ -156,7 +162,7 @@ fi
 [[ $controller_hash == "$(jq -r .controllerSha256 <<< "$release")" ]] || refuse
 aggregate=$(jq -er .secrets.aggregate <<< "$request" | base64 -d)
 credentials=$(jq -er .secrets.credentials <<< "$request" | base64 -d)
-jq -e --arg origin "$(jq -r .origin <<< "$target")" '. == {databasePath:"/data/aggregate.sqlite",host:"0.0.0.0",port:7345,publicOrigin:$origin,credentialsFile:"/run/secrets/hotplate-credentials.json",trustedHttp:true}' <<< "$aggregate" >/dev/null || refuse
+jq -e --arg origin "$(jq -r .origin <<< "$target")" --argjson port "$port" '. == {databasePath:"/data/aggregate.sqlite",host:"0.0.0.0",port:$port,publicOrigin:$origin,credentialsFile:"/run/secrets/hotplate-credentials.json",trustedHttp:true}' <<< "$aggregate" >/dev/null || refuse
 jq -e '.ingest | type == "array" and length > 0' <<< "$credentials" >/dev/null || refuse
 
 inspect_container() { docker inspect "$1" | jq -ce '.[0]'; }
@@ -175,6 +181,7 @@ owned_spec() {
     .Config.User == "node" and .Config.Entrypoint == ["node","dist/src/cli.js"] and
     .Config.Cmd == ["aggregate","--config","/run/secrets/hotplate.json"] and
     .HostConfig.Privileged == false and .HostConfig.ReadonlyRootfs == true and
+    (.HostConfig.Sysctls | . == null or . == {} or . == {"net.ipv4.ip_unprivileged_port_start":"0"}) and
     .HostConfig.CapDrop == ["ALL"] and .HostConfig.SecurityOpt == ["no-new-privileges:true"] and
     (.HostConfig.PortBindings | . == null or . == {}) and .HostConfig.PidMode == "" and
     .HostConfig.IpcMode == "private" and .HostConfig.Devices == [] and
@@ -215,8 +222,8 @@ preflight() {
     [[ $(jq -r '.Config.Labels["io.hotplate.operation"]' <<< "$spec") == "$(jq -r .operation "$journal")" ]] || refuse
     [[ $(jq -r .Name <<< "$spec") == "/$(jq -r .candidateName "$journal")" ]] || refuse
     local old_secrets=$appdata/operations/$(jq -r .operation "$journal")
-    [[ $(printf '%s\n' "$aggregate" | sha256sum | cut -d ' ' -f1) == "$(hash "$old_secrets/aggregate.json")" ]] || refuse
-    [[ $(printf '%s\n' "$credentials" | sha256sum | cut -d ' ' -f1) == "$(hash "$old_secrets/credentials.json")" ]] || refuse
+    jq -e --argjson desired "$aggregate" 'del(.port,.publicOrigin) == ($desired | del(.port,.publicOrigin))' "$old_secrets/aggregate.json" >/dev/null || refuse
+    jq -e --argjson desired "$credentials" 'del(.dashboard) == ($desired | del(.dashboard))' "$old_secrets/credentials.json" >/dev/null || refuse
   fi
   no_writers "$current" || refuse
   network_info=$(docker network inspect "$network")
@@ -236,7 +243,7 @@ if [[ $command == plan ]]; then result "$state"; exit 0; fi
 
 if [[ ! -e $appdata ]]; then
   mkdir -m 700 "$appdata"
-  jq -cn --arg installation "$installation" --arg path "$appdata" --arg target "$target_hash" --arg network "$network_id" '{version:1,installation:$installation,appdata:$path,targetSha256:$target,networkId:$network}' | atomic "$appdata/installation.json"
+  jq -cn --arg installation "$installation" --arg path "$appdata" --arg target "$target_hash" --arg network "$network_id" '{version:2,installation:$installation,appdata:$path,targetSha256:$target,networkId:$network}' | atomic "$appdata/installation.json"
   mkdir -m 700 "$appdata/data" "$appdata/operations"
   chown 1000:1000 "$appdata/data"
   jq -cn --arg installation "$installation" '{state:"Ready",installation:$installation}' | atomic "$journal"
@@ -357,7 +364,7 @@ if [[ -n $current ]]; then docker network disconnect "$network_id" "$current"; f
 candidate_name=hotplate-$installation-$operation
 jq --arg name "$candidate_name" '.state="StartIntent" | .candidateName=$name' "$journal" | atomic "$journal"
 candidate=$(docker create --name "$candidate_name" --label "io.hotplate.installation=$installation" --label "io.hotplate.operation=$operation" --label "io.hotplate.image=$image_id" \
-  --restart no --read-only --cap-drop ALL --security-opt no-new-privileges:true --stop-timeout 15 \
+  --restart no --read-only --sysctl net.ipv4.ip_unprivileged_port_start=0 --cap-drop ALL --security-opt no-new-privileges:true --stop-timeout 15 \
   --network "$network_id" --ip "$address" \
   --mount "type=bind,source=$appdata/data,target=/data" \
   --mount "type=bind,source=$opdir/aggregate.json,target=/run/secrets/hotplate.json,readonly" \

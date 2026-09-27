@@ -60,7 +60,7 @@ export function readIngestToken(path: string): string {
 
 export function readAggregationCredentials(path: string): {
   ingest: readonly { token: string; source: SourceIdentity }[];
-  dashboard: { username: string; password: string };
+  dashboard: { kind: "public" } | { kind: "basic"; username: string; password: string };
 } {
   try {
     const value = object(readJson(path));
@@ -79,12 +79,16 @@ export function readAggregationCredentials(path: string): {
       return { token: secret, source };
     });
     const dashboard = object(value.dashboard);
+    if (dashboard.kind === "public") {
+      keys(dashboard, ["kind"]);
+      return { ingest, dashboard: { kind: "public" } };
+    }
     keys(dashboard, ["username", "password"]);
     const username = text(dashboard.username);
     const password = text(dashboard.password);
     if (!/^[\x21-\x39\x3b-\x7e]{1,128}$/.test(username) || !/^[\x20-\x7e]{16,256}$/.test(password)
       || tokens.has(password) || tokens.has(`${username}:${password}`)) throw new Error();
-    return { ingest, dashboard: { username, password } };
+    return { ingest, dashboard: { kind: "basic", username, password } };
   } catch { throw new Error("Invalid aggregate credentials. Configure separate ingest tokens and dashboard credentials."); }
 }
 

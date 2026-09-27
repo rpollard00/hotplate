@@ -9,7 +9,7 @@ try {
     hostname: configuration.host === "0.0.0.0" ? "127.0.0.1" : configuration.host === "::" ? "::1" : configuration.host,
     port: configuration.port,
     path: "/health",
-    headers: { Host: origin.host, Authorization: `Basic ${Buffer.from(`${dashboard.username}:${dashboard.password}`).toString("base64")}` },
+    headers: { Host: origin.host, ...(dashboard.kind === "public" ? {} : { Authorization: `Basic ${Buffer.from(`${dashboard.username}:${dashboard.password}`).toString("base64")}` }) },
     timeout: 3000,
   }, response => {
     response.resume();

@@ -17,7 +17,7 @@ const controllerImage = `${prefix}:controller`;
 const imageTag = `hotplate-release:${id}`;
 const checks = [];
 const hash = buffer => createHash("sha256").update(buffer).digest("hex");
-const docker = (args, options = {}) => execFileSync("docker", args, { cwd: root, encoding: "utf8", maxBuffer: 4 * 1024 * 1024, ...options });
+const docker = (args, options = {}) => execFileSync("docker", args, { cwd: root, encoding: "utf8", maxBuffer: 4 * 1024 * 1024, timeout: 600_000, ...options });
 const socket = JSON.parse(docker(["context", "inspect"]))[0].Endpoints.docker.Host;
 assert.ok(socket.startsWith("unix://"), "Smoke requires a local Unix Docker socket");
 const dockerRoot = docker(["info", "--format", "{{.DockerRootDir}}"]).trim();
@@ -42,6 +42,13 @@ if [[ \${HOTPLATE_TEST_FAILURE:-} == disconnect && $1 == network && $2 == discon
 if [[ \${HOTPLATE_TEST_FAILURE:-} == listing-recovery && $1 == network && $2 == disconnect ]]; then /usr/bin/docker "$@"; touch ${directory}/listing-failed; exit 1; fi
 if [[ \${HOTPLATE_TEST_FAILURE:-} == stop-intent && $1 == update && $2 == --restart && $3 == no ]]; then /usr/bin/docker "$@"; /usr/bin/docker kill "$HOTPLATE_TEST_CONTROLLER"; exit 1; fi
 if [[ \${HOTPLATE_TEST_FAILURE:-} == start-intent && $1 == create ]]; then /usr/bin/docker kill "$HOTPLATE_TEST_CONTROLLER"; exit 1; fi
+if [[ \${HOTPLATE_TEST_FAILURE:-} == sysctl && $1 == create ]]; then exec /usr/bin/docker create --sysctl "net.ipv4.ip_local_port_range=1024 65000" "\${@:2}"; fi
+if [[ \${HOTPLATE_TEST_FAILURE:-} == legacy && $1 == create ]]; then
+  args=(); while (( $# )); do
+    if [[ $1 == --sysctl ]]; then shift 2; else args+=("$1"); shift; fi
+  done
+  exec /usr/bin/docker "\${args[@]}"
+fi
 exec /usr/bin/docker "$@"
 `);
 writeFileSync(join(directory, "tar-wrapper"), `#!/bin/bash
@@ -52,6 +59,11 @@ writeFileSync(join(directory, "cp-wrapper"), `#!/bin/bash
 if [[ \${HOTPLATE_TEST_FAILURE:-} == evidence && $2 == */failure.json ]]; then exit 42; fi
 exec /usr/bin/cp "$@"
 `);
+const probeDirectory = join(directory, "probe");
+mkdirSync(join(probeDirectory, "scripts"), { recursive: true });
+for (const name of ["deploy-unraid", "unraid-controller.sh"]) {
+  writeFileSync(join(probeDirectory, "scripts", name), readFileSync(join(root, "scripts", name)));
+}
 let controllerBuilt = false;
 let imageBuilt = false;
 let networkCreated = false;
@@ -77,21 +89,45 @@ function target(suffix, address) {
   const installation = randomUUID(); installations.add(installation);
   return { version: 1, installation, hostName: "deploy-smoke", network, networkDriver: "bridge", address, origin: `http://${address}:7345`, appdata: join(directory, suffix) };
 }
+function dashboardPolicy(target) { return new URL(target.origin).port ? { kind: "basic", ...credentials.dashboard } : { kind: "public" }; }
 function request(target, command = "apply") {
-  const aggregate = { databasePath: "/data/aggregate.sqlite", host: "0.0.0.0", port: 7345, publicOrigin: target.origin, credentialsFile: "/run/secrets/hotplate-credentials.json", trustedHttp: true };
-  return { command, target, operation: randomUUID(), release: command === "status" ? null : release, secrets: command === "status" ? null : { aggregate: Buffer.from(JSON.stringify(aggregate)).toString("base64"), credentials: Buffer.from(JSON.stringify(credentials)).toString("base64") } };
+  const aggregate = { databasePath: "/data/aggregate.sqlite", host: "0.0.0.0", port: Number(new URL(target.origin).port || 80), publicOrigin: target.origin, credentialsFile: "/run/secrets/hotplate-credentials.json", trustedHttp: true };
+  return { command, target, operation: randomUUID(), release: command === "status" ? null : release, secrets: command === "status" ? null : { aggregate: Buffer.from(JSON.stringify(aggregate)).toString("base64"), credentials: Buffer.from(JSON.stringify({ ...credentials, dashboard: new URL(target.origin).port ? credentials.dashboard : { kind: "public" } })).toString("base64") } };
+}
+async function bridge(target, code) {
+  const child = spawn("docker", ["run", "--rm", "-i", "--network", network, "--label", `io.hotplate.smoke=${id}`,
+    "--mount", `type=bind,source=${probeDirectory},target=/probe,readonly`, controllerImage, "node", "--input-type=module", "-e", `
+    import assert from 'node:assert/strict';
+    import {createServer,request} from 'node:http';
+    import {probe} from '/probe/scripts/deploy-unraid';
+    let input=''; for await (const chunk of process.stdin) input+=chunk;
+    const {origin,dashboard,ingest}=JSON.parse(input);
+    ${code}
+  `], { stdio: ["pipe", "pipe", "pipe"] });
+  child.stdin.end(JSON.stringify({ origin: target.origin, dashboard: dashboardPolicy(target), ingest: credentials.ingest[0] }));
+  let stderr = "";
+  child.stderr.on("data", chunk => { stderr += chunk; });
+  const timer = setTimeout(() => child.kill(), 30_000);
+  try { await new Promise((resolve, reject) => child.once("close", code => code === 0 ? resolve() : reject(new Error(`Local bridge check failed: ${stderr}`)))); }
+  finally { clearTimeout(timer); }
 }
 async function probe(target) {
-  const child = spawn("docker", ["run", "--rm", "-i", "--network", network, "--label", `io.hotplate.smoke=${id}`, controllerImage, "node", "--input-type=module", "-e", `
-    let input=''; for await (const chunk of process.stdin) input+=chunk;
-    const {origin,dashboard}=JSON.parse(input);
-    for(const path of ['/health','/api/dashboard']) {
-      const response=await fetch(origin+path,{headers:{Authorization:'Basic '+Buffer.from(dashboard.username+':'+dashboard.password).toString('base64')},signal:AbortSignal.timeout(5000)});
-      if(response.status!==200) process.exit(2); await response.body.cancel();
+  await bridge(target, `
+    await probe(origin,dashboard);
+    if (dashboard.kind === 'public') {
+      let requests=0;
+      const proxy=createServer(async (request,response) => {
+        assert.equal(request.headers.authorization,undefined);
+        requests++;
+        const upstream=await fetch(origin+request.url,{signal:AbortSignal.timeout(5000)});
+        response.writeHead(upstream.status,{'content-type':'application/json'});
+        response.end(await upstream.text());
+      });
+      await new Promise(resolve=>proxy.listen(0,'127.0.0.1',resolve));
+      try { await probe('http://127.0.0.1:'+proxy.address().port,dashboard); assert.equal(requests,2); }
+      finally { proxy.closeAllConnections(); await new Promise(resolve=>proxy.close(resolve)); }
     }
-  `], { stdio: ["pipe", "pipe", "pipe"] });
-  child.stdin.end(JSON.stringify({ origin: target.origin, dashboard: credentials.dashboard }));
-  await new Promise((resolve, reject) => child.once("close", code => code === 0 ? resolve() : reject(new Error("Local bridge probe failed"))));
+  `);
 }
 async function apply(target, failure = "", acknowledge = () => probe(target), override = null) {
   const value = override ?? request(target);
@@ -117,6 +153,18 @@ try {
     async function expectRejection(label, operation) {
       try { await operation(); failures.push(`${label}: command incorrectly succeeded`); } catch {}
     }
+    const sysctl = target("sysctl-regression", ip(24));
+    await expectRejection("sysctl", () => apply(sysctl, "sysctl"));
+    const sysctlJournal = journal(sysctl);
+    assert.equal(sysctlJournal.state, "RecoveryRequired");
+    assert.equal(inspect(sysctlJournal.evidence.candidate).State.Running, false);
+    const mutable = target("v2-origin-regression", ip(25));
+    await apply(mutable);
+    const marker = helper("cat", [join(mutable.appdata, "installation.json")]);
+    assert.equal(JSON.parse(marker).version, 2);
+    mutable.origin = `http://${mutable.address}`;
+    await apply(mutable);
+    assert.equal(helper("cat", [join(mutable.appdata, "installation.json")]), marker);
     const ownership = target("ownership-regression", ip(20));
     await expectRejection("ownership", () => apply(ownership, "", async candidate => {
       const operation = inspect(candidate).Config.Labels["io.hotplate.operation"];
@@ -149,11 +197,57 @@ try {
   await exchange(controller(plan), plan, null, () => assert.fail());
   assert.throws(() => statSync(primary.appdata));
   checks.push("Plan does not create appdata");
-  await apply(primary);
+  await apply(primary, "legacy");
   let current = journal(primary);
   assert.equal(current.state, "Healthy");
   const first = current.candidate;
   assert.equal(inspect(first).HostConfig.RestartPolicy.Name, "unless-stopped");
+  assert.ok(inspect(first).HostConfig.Sysctls == null || Object.keys(inspect(first).HostConfig.Sysctls).length === 0);
+  const markerPath = join(primary.appdata, "installation.json");
+  const v2Marker = JSON.parse(helper("cat", [markerPath]));
+  assert.equal(v2Marker.version, 2);
+  const { origin: legacyOrigin, ...ownershipTarget } = primary;
+  const canonical = value => JSON.stringify(value, Object.keys(value).sort());
+  assert.equal(v2Marker.targetSha256, hash(canonical(ownershipTarget)));
+  const legacyMarker = { ...v2Marker, version: 1, targetSha256: hash(canonical(primary)) };
+  const setMarker = marker => helper("node", ["-e", "require('node:fs').writeFileSync(process.argv[1],process.argv[2]+'\\n')", markerPath, JSON.stringify(marker)]);
+  setMarker(legacyMarker);
+  const oldOperation = current.operation;
+  const oldAggregate = helper("cat", [join(primary.appdata, "operations", oldOperation, "aggregate.json")]);
+  const oldCredentials = helper("cat", [join(primary.appdata, "operations", oldOperation, "credentials.json")]);
+  await bridge(primary, `
+    const authorization='Basic '+Buffer.from(dashboard.username+':'+dashboard.password).toString('base64');
+    assert.equal((await fetch(origin+'/api/dashboard')).status,401);
+    const observation={id:'persistence-observation',producerId:'smoke',sequence:1,observedAt:'2026-02-03T04:05:06.000Z',
+      scope:{projectCwd:'/smoke',sessionId:'session',sessionFile:'/session.jsonl',segmentId:'segment',segmentReason:'startup',runId:'run',turnId:'turn',leafId:null},
+      evidence:{kind:'command-intent',skillName:'alpha',source:'interactive'}};
+    const response=await fetch(origin+'/api/ingest',{method:'POST',headers:{authorization:'Bearer '+ingest.token,'content-type':'application/json'},
+      body:JSON.stringify({version:1,sourceId:ingest.sourceId,observations:[observation]})});
+    assert.equal(response.status,200);
+    const data=await fetch(origin+'/api/dashboard',{headers:{authorization}}).then(response=>response.json());
+    assert.equal(data.overview.observationCount,1);
+  `);
+  primary.origin = `http://${primary.address}`;
+  for (const mutation of [{ installation: randomUUID() }, { appdata: `${primary.appdata}-other` }, { networkId: "f".repeat(64) },
+    { targetSha256: hash(canonical(primary)) }, { version: 3 }, { unexpected: true }]) {
+    setMarker({ ...legacyMarker, ...mutation });
+    await refusal(primary);
+  }
+  setMarker(legacyMarker);
+  for (const mutation of [{ hostName: "other" }, { address: ip(19), origin: `http://${ip(19)}` }]) await refusal({ ...primary, ...mutation });
+  for (const field of ["ingest", "aggregate"]) {
+    const changed = request(primary, "plan");
+    const key = field === "ingest" ? "credentials" : "aggregate";
+    const value = JSON.parse(Buffer.from(changed.secrets[key], "base64").toString());
+    if (field === "ingest") value.ingest[0].token = randomBytes(32).toString("hex");
+    else value.databasePath = "/data/other.sqlite";
+    changed.secrets[key] = Buffer.from(JSON.stringify(value)).toString("base64");
+    await assert.rejects(exchange(controller(changed), changed, null, () => assert.fail()));
+  }
+  await assert.rejects(apply(primary, "backup"));
+  assert.equal(journal(primary).candidate, first);
+  await probe({ ...primary, origin: legacyOrigin });
+  checks.push("Legacy marker tampering and immutable configuration changes refused; pre-start recovery retains Basic port7345");
   docker(["exec", first, "node", "-e", "require('node:fs').writeFileSync('/data/persistence-proof','retained')"]);
   await apply(primary);
   current = journal(primary);
@@ -165,7 +259,35 @@ try {
   assert.match(helper("tar", ["-tf", current.backup.path]), /aggregate.sqlite/);
   assert.match(helper("tar", ["-tf", current.backup.path]), /persistence-proof/);
   assert.equal(helper("sha256sum", [current.backup.path]).split(" ")[0], current.backup.sha256);
-  checks.push("Bootstrap and update retain UID1000 data, checked cold backup, stopped old container and private configuration");
+  assert.equal(helper("cat", [join(primary.appdata, "operations", oldOperation, "aggregate.json")]), oldAggregate);
+  assert.equal(helper("cat", [join(primary.appdata, "operations", oldOperation, "credentials.json")]), oldCredentials);
+  assert.deepEqual(JSON.parse(helper("cat", [markerPath])), legacyMarker);
+  assert.equal(docker(["exec", current.candidate, "id", "-u"]).trim(), "1000");
+  assert.equal(inspect(current.candidate).State.Health.Status, "healthy");
+  assert.deepEqual(inspect(current.candidate).HostConfig.Sysctls, { "net.ipv4.ip_unprivileged_port_start": "0" });
+  await bridge(primary, `
+    for (const path of ['/','/health','/assets/app.js','/api/dashboard']) {
+      assert.equal((await fetch(origin+path)).status,200);
+      const wrongHost=await new Promise((resolve,reject)=>{
+        const req=request(origin+path,{headers:{host:'wrong.invalid'},timeout:5000},response=>{
+          response.resume(); response.on('end',()=>resolve(response.statusCode));
+        });
+        req.on('error',reject); req.on('timeout',()=>req.destroy(new Error('Host probe timeout'))); req.end();
+      });
+      assert.equal(wrongHost,403);
+      assert.equal((await fetch(origin+path,{headers:{origin:'http://wrong.invalid'}})).status,403);
+      assert.equal((await fetch(origin+path,{method:'POST'})).status,405);
+    }
+    assert.equal((await fetch(origin+'/api/ingest',{method:'POST',body:'not json'})).status,401);
+    const data=await fetch(origin+'/api/dashboard').then(response=>response.json());
+    assert.equal(data.overview.observationCount,1);
+    assert.deepEqual(data.filterOptions.machines,['deployment-smoke']);
+  `);
+  const backupDirectory = join(primary.appdata, "backup-verification");
+  helper("mkdir", ["-m", "700", backupDirectory]);
+  helper("tar", ["-xf", current.backup.path, "-C", backupDirectory]);
+  helper("node", ["-e", "const {DatabaseSync}=require('node:sqlite'); const db=new DatabaseSync(process.argv[1],{readOnly:true}); if(db.prepare('SELECT count(*) AS count FROM observations').get().count!==1)process.exit(1); db.close();", join(backupDirectory, "aggregate.sqlite")]);
+  checks.push("Legacy Basic7345/absent-sysctl upgrades to public80 as UID1000; production probe sends no Authorization; health, read-only/Host/Origin/ingest guards and database backup verified");
   const wrong = { ...primary, installation: randomUUID() };
   await refusal(wrong);
   const unmarked = target("unmarked", ip(13));
