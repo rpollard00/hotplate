@@ -86,8 +86,12 @@ export async function probe(origin, dashboard) {
       headers: { Authorization: `Basic ${Buffer.from(`${dashboard.username}:${dashboard.password}`).toString("base64")}` },
       redirect: "error", signal: AbortSignal.timeout(5000),
     });
-    await response.body?.cancel();
-    requireValue(response.status === 200);
+    if (response.status !== 200) {
+      await response.body?.cancel();
+      throw new Error("Application probe failed.");
+    }
+    const payload = await response.json();
+    requireValue(path === "/health" ? payload?.ok === true : payload?.kind === "ready");
   }
 }
 export async function exchange(child, request, archive, acknowledge) {

@@ -3,9 +3,10 @@ import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { createServer } from "node:http";
 import { join } from "node:path";
 import test from "node:test";
-import { exchange, readConfiguration, validateRelease } from "../scripts/deploy-unraid";
+import { exchange, probe, readConfiguration, validateRelease } from "../scripts/deploy-unraid";
 
 const directory = mkdtempSync(join(tmpdir(), "hotplate-deploy-unit-"));
 const configuration = {
@@ -53,6 +54,24 @@ test("deploy-unraid acknowledgment binds the exact operation and candidate", asy
   const probes = [];
   await exchange(child, { command: "apply", operation }, null, id => { probes.push(id); });
   assert.deepEqual(probes, [candidate]);
+});
+test("deploy-unraid probes require healthy application payloads, not only HTTP 200", async t => {
+  let health = { ok: true };
+  let dashboard = { kind: "ready" };
+  const server = createServer((request, response) => {
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify(request.url === "/health" ? health : dashboard));
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); });
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const credentials = { username: "test", password: "synthetic-password" };
+  await probe(origin, credentials);
+  dashboard = { kind: "error" };
+  await assert.rejects(probe(origin, credentials));
+  dashboard = { kind: "ready" };
+  health = { ok: false };
+  await assert.rejects(probe(origin, credentials));
 });
 test("deploy-unraid refuses a mismatched operation without probing", async () => {
   const child = spawn(process.execPath, ["-e", `console.log(JSON.stringify({kind:'Probe',operation:'wrong',candidate:'${"a".repeat(64)}'})); setTimeout(()=>{},10000);`], { stdio: ["pipe", "pipe", "pipe"] });

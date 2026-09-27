@@ -146,7 +146,8 @@ A caught failure before `StartIntent` can restart the unchanged old container on
 The controller restores its dedicated network address and restart policy, then waits for Docker health.
 The command still exits nonzero. Its result can report `Healthy` when the old release recovered.
 
-At or after `StartIntent`, a caught failure stops the owned candidate and retains recovery evidence.
+At or after `StartIntent`, a caught failure attempts to stop the independently verified candidate, even if evidence writes fail.
+If ownership cannot be verified or Docker operations fail, the candidate can remain running and requires manual inspection.
 It never starts the old image or restores the database automatically.
 SIGKILL, machine loss, or an interrupted Docker operation can leave a candidate running. A journal does not prove that it stopped.
 
@@ -189,6 +190,7 @@ The application container never receives the Docker socket.
 The smoke covers bootstrap, persistent updates, checked cold backups, ownership refusals, competing controllers, and corrupt uploads.
 It covers backup/disconnect failures, exact restart-policy restoration, actual unhealthy Docker health, failed acknowledgments, and acknowledgment timeout.
 It kills the controller at stop/start intent and verifies that later apply is refused.
+Regression checks cover ownership rejection, failed writer enumeration, and candidate shutdown when evidence writes fail.
 Fault wrappers inject backup/disconnect errors. The successful lifecycle and unhealthy-image checks use real Docker operations.
 Cleanup selects only the run's exact installation labels, helper label, network, image tags, and temporary directory. Build cache can remain.
 

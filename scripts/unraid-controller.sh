@@ -192,7 +192,7 @@ attached() {
 no_writers() {
   local allowed=$1 id spec source rw
   local ids
-  ids=$(docker ps -aq)
+  ids=$(docker ps -aq) || return 1
   for id in $ids; do
     spec=$(inspect_container "$id") || return 1
     while IFS=$'\t' read -r source rw; do
@@ -284,16 +284,23 @@ failed() {
   [[ $BASHPID == $$ ]] || exit 1
   trap - ERR HUP INT TERM
   set +e
-  cp "$journal" "$opdir/failure.json" || exit 1
-  local failed_state candidate spec
-  failed_state=$(jq -r .state "$opdir/failure.json")
-  jq -n --arg installation "$installation" --slurpfile evidence "$opdir/failure.json" '{state:"RecoveryRequired",installation:$installation,evidence:$evidence[0]}' | atomic "$journal"
+  local known_candidate=${candidate:-} failed_evidence failed_state candidate spec
+  failed_evidence=$(jq -c . "$journal") || failed_evidence=
+  failed_state=Unknown
+  if [[ -n $failed_evidence ]]; then failed_state=$(jq -r .state <<< "$failed_evidence") || failed_state=Unknown; fi
+  cp "$journal" "$opdir/failure.json" || true
+  if [[ -n $failed_evidence ]]; then
+    jq -n --arg installation "$installation" --argjson evidence "$failed_evidence" '{state:"RecoveryRequired",installation:$installation,evidence:$evidence}' | atomic "$journal" || true
+  fi
   case "$failed_state" in
     Prepared|StopIntent|BackupReady)
       if [[ -n $current ]] && unchanged_old; then cp "$opdir/before.json" "$journal.next" && mv -T "$journal.next" "$journal"; fi
       ;;
-    StartIntent|Healthy)
-      candidate=$(docker ps -aq --filter "name=^/${candidate_name}$")
+    StartIntent|Healthy|Unknown)
+      candidate=$known_candidate
+      if [[ -z $candidate && -n ${candidate_name:-} ]]; then
+        candidate=$(docker ps -aq --filter "name=^/${candidate_name}$") || candidate=
+      fi
       if [[ -n $candidate ]]; then
         spec=$(inspect_container "$candidate")
         if owned_spec "$spec" && [[ $(jq -r '.Config.Labels["io.hotplate.operation"]' <<< "$spec") == "$operation" ]]; then
@@ -322,7 +329,8 @@ jq -e --arg id "$image_id" '.[0] | .Id == $id and .Architecture == "amd64" and .
 no_writers "$current"
 if [[ -n $current ]]; then
   spec=$(inspect_container "$current")
-  owned_spec "$spec" && attached "$spec"
+  owned_spec "$spec"
+  attached "$spec"
   [[ $(jq -cS '[.Id,.Image,.Config,.HostConfig,.Mounts]' <<< "$spec") == "$(jq -cS '[.Id,.Image,.Config,.HostConfig,.Mounts]' "$opdir/previous.json")" ]]
   transition StopIntent
   docker update --restart no "$current" >/dev/null
@@ -358,13 +366,15 @@ for ((attempt=0; attempt<90; attempt++)); do
   sleep 2
 done
 [[ $health == healthy ]]
-owned_spec "$spec" && attached "$spec"
+owned_spec "$spec"
+attached "$spec"
 jq -cn --arg operation "$operation" --arg candidate "$candidate" '{kind:"Probe",operation:$operation,candidate:$candidate}'
 IFS= read -r -t 30 acknowledgment
 [[ ${#acknowledgment} -le 1024 ]]
 jq -e --arg operation "$operation" --arg candidate "$candidate" '. == {operation:$operation,candidate:$candidate}' <<< "$acknowledgment" >/dev/null
 spec=$(inspect_container "$candidate")
-owned_spec "$spec" && attached "$spec"
+owned_spec "$spec"
+attached "$spec"
 jq -e '.State.Running and .State.Health.Status == "healthy"' <<< "$spec" >/dev/null
 docker update --restart unless-stopped "$candidate" >/dev/null
 jq --arg candidate "$candidate" '.state="Healthy" | .acknowledged=$candidate' "$journal" | atomic "$journal"

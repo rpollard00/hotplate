@@ -27,9 +27,9 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test dist/test/**/*.test.js",
-    "check": "npm run typecheck && npm test",
+    "check": "npm run typecheck && npm test && npm run test:deploy",
     "test:deploy": "node --test test/unraid-deploy.test.mjs",
-    "smoke:unraid": "node scripts/unraid-deploy-smoke.mjs",
+    "smoke:unraid": "node scripts/unraid-deploy-smoke.mjs && node scripts/unraid-deploy-smoke.mjs --regressions",
     "pack:dry": "npm pack --dry-run",
     "dashboard": "npm run build && node dist/src/cli.js serve",
     "dashboard:demo": "npm run build && node dist/src/cli.js demo --db ./dist/demo/hotplate-demo.sqlite --force"
