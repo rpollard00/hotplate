@@ -118,7 +118,7 @@ test("legacy managed selection survives actual Pi restarts without regenerating 
 
 test("connection origins canonicalize authority only and reject hostile inputs", () => {
   for (const input of ["hotplate.lan", "HTTP://HOTPLATE.LAN:80", "http://hotplate.lan"]) assert.equal(parseConnectionOrigin(input), "http://hotplate.lan");
-  assert.equal(parseConnectionOrigin("192.168.88.12:7345"), "http://192.168.88.12:7345");
+  assert.equal(parseConnectionOrigin("192.0.2.12:7345"), "http://192.0.2.12:7345");
   assert.equal(parseConnectionOrigin("https://hotplate.lan:443"), "https://hotplate.lan");
   for (const input of ["http://user:secret@host", "host/", "host?x", "host#x", "host:0", "host:65536", "host:", "ftp://host", " host", "host\\evil", "127.1", "2130706433", "0x7f000001", "host..lan"]) assert.throws(() => parseConnectionOrigin(input), input);
 });

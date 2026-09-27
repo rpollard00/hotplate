@@ -10,8 +10,8 @@ import { exchange, probe, readConfiguration, validateRelease } from "../scripts/
 
 const directory = mkdtempSync(join(tmpdir(), "hotplate-deploy-unit-"));
 const configuration = {
-  version: 1, installation: randomUUID(), sshTarget: "root@media.media", hostName: "media",
-  network: "br0", networkDriver: "macvlan", address: "192.168.88.12", origin: "http://192.168.88.12:7345",
+  version: 1, installation: randomUUID(), sshTarget: "root@unraid.example.invalid", hostName: "media",
+  network: "br0", networkDriver: "macvlan", address: "192.0.2.12", origin: "http://192.0.2.12:7345",
   appdata: "/mnt/user/appdata/hotplate", aggregateFile: join(directory, "aggregate.json"),
   credentialsFile: join(directory, "credentials.json"), releaseDirectory: join(directory, "releases"),
 };
@@ -233,7 +233,7 @@ test("container-healthcheck follows the public/basic policy and fails closed on 
   const credentialsFile = join(directory, "health-credentials.json");
   const configurationFile = join(directory, "health-aggregate.json");
   writeFileSync(configurationFile, JSON.stringify({ databasePath: join(directory, "unused.sqlite"), host: "127.0.0.1",
-    port: server.address().port, publicOrigin: "http://192.168.88.12", credentialsFile, trustedHttp: true }));
+    port: server.address().port, publicOrigin: "http://192.0.2.12", credentialsFile, trustedHttp: true }));
   const ingest = [{ token: "a".repeat(48), sourceId: randomUUID(), machineId: "test" }];
   for (const dashboard of [{ kind: "public" }, { username: "test", password: "synthetic-password" }, undefined, { kind: "public", password: "invalid" }]) {
     requests.length = 0;
@@ -245,7 +245,7 @@ test("container-healthcheck follows the public/basic policy and fails closed on 
       assert.deepEqual(requests, []);
     } else {
       assert.equal(code, 0);
-      assert.deepEqual(requests, [{ host: "192.168.88.12", authorization: dashboard.kind === "public" ? undefined : `Basic ${Buffer.from("test:synthetic-password").toString("base64")}` }]);
+      assert.deepEqual(requests, [{ host: "192.0.2.12", authorization: dashboard.kind === "public" ? undefined : `Basic ${Buffer.from("test:synthetic-password").toString("base64")}` }]);
     }
   }
 });

@@ -20,7 +20,7 @@ npm run build
 Install this checkout with an absolute path:
 
 ```bash
-pi install /home/reese/projects/hotplate
+pi install /path/to/hotplate
 ```
 
 Then reload pi:
@@ -103,7 +103,7 @@ HOTPLATE_DISABLED=1 pi
 To remove the local path package:
 
 ```bash
-pi remove /home/reese/projects/hotplate
+pi remove /path/to/hotplate
 ```
 
 Run `/reload` after a package change.
@@ -161,7 +161,7 @@ Shutdown cancels retries after a 500 ms drain budget. A synchronous SQLite call 
 Ask the collector operator to explicitly enable `"openEnrollment": true` (the default is false). Then run:
 
 ```text
-/hotplate connect 192.168.88.12
+/hotplate connect 192.0.2.12
 /hotplate status
 /hotplate disconnect
 ```
@@ -190,7 +190,7 @@ All ingest routes require bearer credentials. By default, the credentials file m
 For a trusted LAN, explicitly set `"dashboard": {"kind":"public"}` to allow anonymous dashboard pages, assets, queries, and health.
 Omitted or invalid dashboard policies fail closed. Both policies retain exact Host/Origin checks and read-only dashboard methods.
 Dashboard access exposes all aggregate metadata. Machine filters are not access controls.
-The [Unraid deployment](docs/unraid.md) uses public access at `http://192.168.88.12` on port 80.
+The [Unraid deployment](docs/unraid.md) uses public access at `http://192.0.2.12` on port 80.
 
 1. Copy `examples/aggregate.json` and `examples/credentials.json` into a private directory outside this checkout.
 2. Set the directory mode to `0700`.

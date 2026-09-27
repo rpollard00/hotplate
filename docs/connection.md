@@ -5,7 +5,7 @@ On a collector, set `openEnrollment: true` in the aggregate configuration to all
 In Pi:
 
 ```
-/hotplate connect 192.168.88.12
+/hotplate connect 192.0.2.12
 /hotplate status
 /hotplate disconnect
 ```

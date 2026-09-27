@@ -2,17 +2,17 @@
 
 This pipeline builds on the workstation and controls Docker through one SSH session. It does not require a registry or Compose.
 
-The target is `root@media.media`, network `br0`, address `192.168.88.12`, and origin `http://192.168.88.12` (port 80).
+The sample target is `root@unraid.example.invalid`, network `br0`, address `192.0.2.12`, and origin `http://192.0.2.12` (port 80). These are documentation placeholders. Replace the SSH target, `hostName`, address, and origin with your own values in your private `deploy.json` before deployment.
 The dashboard is public to devices that can reach this LAN address. It requires no dashboard username or password.
 Ingestion still requires account-specific bearer tokens. HTTP sends tokens and metadata without TLS. Do not expose this address to an untrusted network.
 
-Only the operator creates static credentials, accepts host keys, and runs remote commands. Deployment does not enroll a user account or start account relays. With explicitly enabled open enrollment, each account can use `/hotplate connect 192.168.88.12` from Pi.
+Only the operator creates static credentials, accepts host keys, and runs remote commands. Deployment does not enroll a user account or start account relays. With explicitly enabled open enrollment, each account can use `/hotplate connect 192.0.2.12` from Pi.
 
 ## Prerequisites
 
 - Workstation: Node 24.19.0 or later, installed checkout dependencies, `jj`, Docker, and OpenSSH.
 - Server: Root SSH, Bash, Docker, `jq`, GNU `tar`, `sha256sum`, `flock`, `realpath`, `stat`, `df`, `du`, `head`, `base64`, and `timeout`.
-- Server: Linux x86_64, an existing macvlan `br0`, and a reserved, unused `192.168.88.12` address.
+- Server: Linux x86_64, an existing macvlan `br0`, and a reserved, unused LAN address. The sample `192.0.2.12` is not a usable LAN address.
 - Storage: Space for each image archive, a cold backup, and loaded image layers. Old releases remain until manual cleanup.
 
 Verify the server host key through a trusted channel before deployment. The script uses `StrictHostKeyChecking=yes` and `BatchMode=yes`.
@@ -58,7 +58,7 @@ for (const [name, value] of [["deploy.json", deploy], ["aggregate.json", aggrega
 NODE
 ```
 
-The command prints no credentials and refuses to overwrite files. Keep the directory outside the checkout.
+The command prints no credentials and refuses to overwrite files. Keep the directory outside the checkout. Edit the generated private `deploy.json` to set your real SSH target, host name, LAN address, and matching HTTP origin before running a deployment.
 The controller requires mode `0600` or stricter and current-user ownership for local private files. Symlinked private files are refused.
 Retain ingest tokens privately. Do not put credentials in command arguments or logs.
 Other deployments can retain the legacy `dashboard: {username, password}` policy. Omitted or invalid dashboard policies refuse startup.
@@ -69,7 +69,7 @@ The aggregate `port` must match the origin. The optional boolean `openEnrollment
 Ingest token rotation and immutable target changes require a separate, reviewed maintenance operation.
 
 For an existing Basic/7345 installation, preserve private copies of the old configuration, then change only:
-- Deployment `origin` to `http://192.168.88.12`.
+- Deployment `origin` to `http://YOUR_LAN_ADDRESS` (replace `YOUR_LAN_ADDRESS` with the deployed address).
 - Aggregate `publicOrigin` to the same origin and `port` to `80`.
 - Credentials `dashboard` to `{"kind":"public"}`.
 
@@ -160,7 +160,7 @@ Capture enrollment remains explicit. For managed use, enable `openEnrollment` as
 
 The default is closed. To enable the approved trusted-LAN workflow, preserve all existing private configuration and static credentials, change only aggregate `openEnrollment` to `true`, then build/plan/apply normally. Do not regenerate bootstrap secrets. This policy permits **any client that can reach the instance** to register metadata; it is not trusted membership. Plain HTTP exposes tokens and metadata on the network. Do not expose open enrollment to an untrusted network.
 
-Users run `/hotplate connect 192.168.88.12`, `/hotplate status` and `/hotplate disconnect`. The client privately persists a stable per-origin identity and separate capture database. Automatic relay delivery exists only while Pi sessions operate; no daemon or OS process manager is installed. Last-session exit pauses delivery; reconnection resumes retained backlog. No historical observations are imported or old database bindings retargeted.
+Users run `/hotplate connect 192.0.2.12`, `/hotplate status` and `/hotplate disconnect`. The client privately persists a stable per-origin identity and separate capture database. Automatic relay delivery exists only while Pi sessions operate; no daemon or OS process manager is installed. Last-session exit pauses delivery; reconnection resumes retained backlog. No historical observations are imported or old database bindings retargeted.
 
 Each session owns its collector/relay. Disconnect changes account-wide selection immediately, waits for its own cutover and best-effort aborts owned sends. Other runnable sessions reconcile approximately every second; in-flight requests can commit and suspended peers can retain their former capture destination until reconciliation. Status reports desired and this session's applied revisions, not completion across all peers.
 
