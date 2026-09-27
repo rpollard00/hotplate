@@ -13,6 +13,12 @@ import { parseCollectorOrigin, parseSourceId } from "./observation.js";
 import { readRelayStatus, runRelay, type RelayState } from "./relay.js";
 import { openCaptureStore, openHotplateStore, resolveHotplateDatabasePath, type DeliveryStatus } from "./store.js";
 
+const LEGACY_CONTROL_SCHEMA = "CREATE TABLE selection (singleton INTEGER PRIMARY KEY CHECK(singleton = 1), revision INTEGER NOT NULL, intent INTEGER NOT NULL, origin TEXT)";
+const CONTROL_SCHEMA = `CREATE TABLE selection (singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+  revision INTEGER NOT NULL CHECK(revision >= 0 AND revision <= 9007199254740991),
+  intent INTEGER NOT NULL CHECK(intent >= revision AND intent <= 9007199254740991), origin TEXT) STRICT`;
+class ControlStateError extends Error {}
+
 type Selection = { kind: "local"; revision: number } | { kind: "managed"; revision: number; origin: CollectorOrigin };
 export type ConnectionCommand = { kind: "connect"; instance: string } | { kind: "status" } | { kind: "disconnect" };
 export type ConnectionStatus = {
@@ -66,13 +72,19 @@ export class SessionConnection {
       if (!this.#closed && !this.#timer) this.#timer = setInterval(() => {
         if (this.#cutoverWaiters === 0) void this.#reconcile({ type: "session_start", reason: "reload" });
       }, 1000);
-    } catch { this.#fail("Connection state unavailable. Capture and managed delivery remain stopped."); }
+    } catch (error) {
+      this.#fail(error instanceof ControlStateError ? error.message : "Connection state unavailable. Check private storage and configuration, then reload. Capture and managed delivery remain stopped.");
+    }
   }
 
   async execute(command: ConnectionCommand, ctx: ExtensionCommandContext): Promise<ConnectionStatus> {
     if (command.kind === "status") return this.status();
-    if (this.#closed || this.#env.HOTPLATE_DISABLED === "1" || this.#env.HOTPLATE_CONFIG !== undefined || !this.#control) {
-      this.#failure = "Managed changes are unavailable while disabled, under HOTPLATE_CONFIG, or before session startup.";
+    if (this.#closed || this.#env.HOTPLATE_DISABLED === "1" || this.#env.HOTPLATE_CONFIG !== undefined) {
+      this.#failure = "Managed changes are unavailable while disabled, under HOTPLATE_CONFIG, or after shutdown.";
+      return this.status();
+    }
+    if (!this.#control) {
+      this.#failure ??= "Hotplate has not initialized. Reload Pi and check /hotplate status.";
       return this.status();
     }
     const control = this.#control;
@@ -229,12 +241,38 @@ class AccountConnections {
     this.#checkControl();
     this.db = new DatabaseSync(this.controlPath, { timeout: 100, allowExtension: false });
     try {
+      this.#migrateLegacyControl();
       if (this.db.prepare("PRAGMA user_version").get()?.user_version !== 1
-        || this.db.prepare("SELECT COUNT(*) AS count FROM selection").get()?.count !== 1) throw new Error("Invalid control schema");
+        || this.db.prepare("SELECT COUNT(*) AS count FROM selection").get()?.count !== 1) throw new ControlStateError("Unsupported Hotplate control database schema. Existing state was not reset.");
       this.selection();
       this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL");
       this.#checkControl();
     } catch (error) { this.db.close(); throw error; }
+  }
+  #migrateLegacyControl(): void {
+    if (this.db.prepare("PRAGMA user_version").get()?.user_version !== 0) return;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      if (this.db.prepare("PRAGMA user_version").get()?.user_version === 0) {
+        const schema = this.db.prepare("SELECT type, name, sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*'").all();
+        const table = schema[0];
+        if (schema.length !== 1 || table?.type !== "table" || table.name !== "selection" || table.sql !== LEGACY_CONTROL_SCHEMA
+          || this.db.prepare("SELECT COUNT(*) AS count FROM selection").get()?.count !== 1) {
+          throw new ControlStateError("Unrecognized legacy Hotplate control database. Existing state was not reset.");
+        }
+        const selection = this.selection();
+        const storedOrigin = this.db.prepare("SELECT origin FROM selection WHERE singleton = 1").get()?.origin;
+        if (storedOrigin !== (selection.kind === "local" ? null : selection.origin)) {
+          throw new ControlStateError("Invalid legacy Hotplate destination. Existing state was not reset.");
+        }
+        this.db.exec(`ALTER TABLE selection RENAME TO selection_legacy;
+          ${CONTROL_SCHEMA};
+          INSERT INTO selection SELECT singleton, revision, intent, origin FROM selection_legacy;
+          DROP TABLE selection_legacy;
+          PRAGMA user_version = 1;`);
+      }
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
   #publishControl(): void {
     const staging = mkdtempSync(join(this.root, ".control-"));
@@ -244,9 +282,7 @@ class AccountConnections {
       const db = new DatabaseSync(path, { timeout: 100, allowExtension: false });
       try {
         db.exec(`PRAGMA synchronous = FULL; BEGIN IMMEDIATE;
-          CREATE TABLE selection (singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
-            revision INTEGER NOT NULL CHECK(revision >= 0 AND revision <= 9007199254740991),
-            intent INTEGER NOT NULL CHECK(intent >= revision AND intent <= 9007199254740991), origin TEXT) STRICT;
+          ${CONTROL_SCHEMA};
           INSERT INTO selection VALUES (1, 0, 0, NULL); PRAGMA user_version = 1; COMMIT;`);
       } finally { db.close(); }
       const fd = openSync(path, "r");

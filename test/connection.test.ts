@@ -87,6 +87,35 @@ test("legacy unversioned account control migrates without losing selection or pe
   }
 });
 
+test("legacy managed selection survives actual Pi restarts without regenerating identity", async t => {
+  const f = await fixture(t);
+  const running = await startAggregationServer({ configuration: f.configuration }); t.after(() => running.close());
+  const sdk = await createFixture(); t.after(() => rm(sdk.rootDir, { recursive: true, force: true }));
+  const first = await createSessionFromLocalPackage(sdk);
+  const close = async (session: typeof first) => { await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }); session.dispose(); };
+  try { await first.prompt(`/hotplate connect 127.0.0.1:${f.configuration.port}`); }
+  finally { await close(first); }
+  const root = join(sdk.rootDir, "account-data", "hotplate"), control = join(root, "control.sqlite");
+  const bundle = bundlePath(root, f.configuration.publicOrigin);
+  const account = await readFile(join(bundle, "account.json"), "utf8"), token = await readFile(join(bundle, "token"), "utf8");
+  const db = new DatabaseSync(control);
+  try {
+    db.exec("BEGIN IMMEDIATE; ALTER TABLE selection RENAME TO original_selection; CREATE TABLE selection (singleton INTEGER PRIMARY KEY CHECK(singleton = 1), revision INTEGER NOT NULL, intent INTEGER NOT NULL, origin TEXT); INSERT INTO selection SELECT * FROM original_selection; DROP TABLE original_selection; PRAGMA user_version=0; COMMIT;");
+  } finally { db.close(); }
+  const revision = scalar(control, "SELECT revision AS value FROM selection"), intent = scalar(control, "SELECT intent AS value FROM selection");
+  const sessions = [await createSessionFromLocalPackage(sdk), await createSessionFromLocalPackage(sdk)];
+  try {
+    for (const session of sessions) await session.prompt("/hotplate status");
+    assert.equal(scalar(control, "SELECT user_version AS value FROM pragma_user_version"), 1);
+    assert.equal(scalar(control, "SELECT revision AS value FROM selection"), revision);
+    assert.equal(scalar(control, "SELECT intent AS value FROM selection"), intent);
+    assert.equal(scalar(control, "SELECT origin AS value FROM selection"), f.configuration.publicOrigin);
+    assert.equal(await readFile(join(bundle, "account.json"), "utf8"), account);
+    assert.equal(await readFile(join(bundle, "token"), "utf8"), token);
+    assert.equal(scalar(f.configuration.databasePath, "SELECT COUNT(*) AS value FROM registered_sources"), 1);
+  } finally { await Promise.all(sessions.map(close)); }
+});
+
 test("connection origins canonicalize authority only and reject hostile inputs", () => {
   for (const input of ["hotplate.lan", "HTTP://HOTPLATE.LAN:80", "http://hotplate.lan"]) assert.equal(parseConnectionOrigin(input), "http://hotplate.lan");
   assert.equal(parseConnectionOrigin("192.168.88.12:7345"), "http://192.168.88.12:7345");
