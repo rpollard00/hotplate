@@ -2,14 +2,15 @@
 
 The dashboard shows recorded skill activity, model read counts, and paths within sessions. It does not score skill quality.
 
-- Overview shows activity over time, ranked skills, and relationships between successive read groups.
+- Overview shows activity over time, ranked skills, and read patterns within or between consecutive read groups.
 - Models shows read counts by skill and model. Zero means no matching recorded reads, not a missed opportunity.
-- Session paths shows a complete scoped run, including requests, wrappers, read groups, and gaps.
+- Session paths shows recorded activity within each run, including requests, wrappers, read groups, and gaps.
 
-The mako shortcut finds paths that contain mako. It preserves the intervening skills and does not prove a causal relationship.
-Skill names combine across source variants in the main views. Expand identity details to inspect the original paths and machines.
+Select a skill name, then View session paths, to find runs that contain that skill. Other recorded steps remain visible.
+Skill names combine across source variants in the main views. Expand Files and requests to inspect the original paths and machines.
 The Filters panel changes the report scope. Skill and relationship selections change path details only, not the overview totals.
-All time is the default. Activity buckets use UTC and adapt to cover long intervals without truncation.
+All time is the default. The filter summary appears only for applied restrictions. Activity buckets use UTC and adapt to cover long intervals without truncation.
+Skill catalog is separate from About this data, a disclosure available on every tab. The disclosure defines counts, grouping, model attribution, paths, gaps, and capture coverage.
 
 ## Local preview
 
@@ -50,7 +51,7 @@ The script starts disposable previews and a private headless browser. It removes
 It prints the retained screenshot directory and response-size measurements.
 Set `CHROMIUM` to select a browser executable. Set `HOTPLATE_SCREENSHOT_DIR` to choose an artifact directory.
 
-The checks cover desktop and mobile layouts, keyboard navigation, exact counts, filters, path selection, hostile text, empty states, failed refreshes, and retry.
+The checks cover desktop and mobile layouts, keyboard navigation and help, exact counts, applied-filter summaries, path selection, hostile text, empty states, failed refreshes, and retry.
 A larger controlled response checks bounded rendering. It is not a production storage-load benchmark.
 
 ## What the evidence means

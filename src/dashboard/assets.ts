@@ -19,50 +19,57 @@ export const dashboardHtml = `<!doctype html>
       <button type="button" data-workspace="paths">Session paths</button>
     </nav>
     <div class="scope-bar">
-      <p id="scope-summary">All time · All projects · All machines</p>
+      <p id="scope-summary" hidden></p>
       <div class="scope-actions"><label class="inline-label">Period<select id="time-preset"><option value="all">All time</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="custom">Custom dates</option></select></label><button type="button" id="toggle-filters" class="quiet" aria-expanded="false" aria-controls="scope-panel">Filters</button><button type="button" id="reset-filters" class="quiet">Reset</button></div>
     </div>
-    <section id="scope-panel" class="panel" hidden aria-label="Evidence scope">
+    <section id="scope-panel" class="panel" hidden aria-label="Filters">
       <form id="filter-form" class="filter-grid">
         <label>Machine<select id="machine-filter" name="machineId"><option value="">All machines</option></select></label>
         <label>Project<select id="project-filter" name="projectCwd"><option value="">All projects</option></select></label>
-        <label>Command source<select id="source-filter" name="source"><option value="">All command sources</option><option value="interactive">Interactive</option><option value="rpc">RPC</option><option value="extension">Extension</option></select></label>
-        <label>Model provider<select id="model-provider-filter" name="modelProvider"><option value="">All providers</option></select></label>
-        <label>Model<select id="model-id-filter" name="modelId"><option value="">All models</option></select></label>
+        <label>Command source <span>Requests only</span><select id="source-filter" name="source"><option value="">All command sources</option><option value="interactive">Interactive</option><option value="rpc">RPC</option><option value="extension">Extension</option></select></label>
+        <label>Model provider <span>Reads only</span><select id="model-provider-filter" name="modelProvider"><option value="">All providers</option></select></label>
+        <label>Model <span>Reads only</span><select id="model-id-filter" name="modelId"><option value="">All models</option></select></label>
         <label>From (UTC)<input id="from-filter" name="fromObservedAt" type="datetime-local"></label>
         <label>To (UTC)<input id="to-filter" name="toObservedAt" type="datetime-local"></label>
-        <div class="filter-actions"><button type="submit">Apply scope</button></div>
+        <div class="filter-actions"><button type="submit">Apply filters</button></div>
       </form>
-      <p class="footnote">Scope applies to every workspace. Command-source filters select requests only. Model filters select read results. Gaps remain visible.</p>
+      <p class="footnote">Filters apply to all tabs.</p>
     </section>
     <section id="message-panel" class="message panel" role="status" hidden></section>
     <main id="workspace" tabindex="-1" aria-busy="true">
       <div id="dashboard-content" hidden>
         <section id="overview-workspace" aria-labelledby="overview-heading">
-          <div class="page-heading"><div><p class="eyebrow">Recorded evidence</p><h1 id="overview-heading">How skills get used.</h1><p>Reads, requests, and the paths between them.</p></div><button type="button" id="overview-mako" class="quiet">Explore mako paths <span aria-hidden="true">↗</span></button></div>
-          <div id="overview-cards" class="metrics-grid" aria-label="Scope totals"></div>
+          <div class="page-heading"><div><h1 id="overview-heading">Skill activity</h1></div></div>
+          <div id="overview-cards" class="metrics-grid" aria-label="Filtered totals"></div>
           <div id="evidence-context" class="evidence-context"></div>
           <div class="overview-grid">
-            <section class="panel activity-panel" aria-labelledby="activity-heading"><div class="section-heading"><div><p class="eyebrow">When</p><h2 id="activity-heading">Activity over time</h2></div><span class="small muted">UTC</span></div><div id="activity-chart"></div></section>
-            <section class="panel" aria-labelledby="skills-heading"><div class="section-heading"><div><p class="eyebrow">What</p><h2 id="skills-heading">Most-read skills</h2></div><span class="small muted">Successful reads</span></div><label class="search-label"><span class="sr-only">Find a skill</span><input id="skill-search" type="search" placeholder="Find a skill…"></label><div id="skill-table"></div></section>
+            <section class="panel activity-panel" aria-labelledby="activity-heading"><div class="section-heading"><div><h2 id="activity-heading">Activity over time</h2></div><span class="small muted">UTC</span></div><div id="activity-chart"></div></section>
+            <section class="panel" aria-labelledby="skills-heading"><div class="section-heading"><div><h2 id="skills-heading">Most-read skills</h2></div><span class="small muted">Successful reads</span></div><label class="search-label"><span class="sr-only">Find a skill</span><input id="skill-search" type="search" placeholder="Find a skill…"></label><div id="skill-table"></div></section>
           </div>
-          <section class="panel" aria-labelledby="relationships-heading"><div class="section-heading"><div><p class="eyebrow">Together & next</p><h2 id="relationships-heading">Observed relationships</h2><p>Successful reads in the same group or adjacent groups. Not dependencies.</p></div><button type="button" id="browse-paths" class="quiet">Browse session paths ↗</button></div><div id="relationship-view"></div></section>
-          <details class="panel" id="catalog-context"><summary>Catalog & evidence limits</summary><div id="coverage"></div><label class="search-label">Find a catalog skill<input id="catalog-search" type="search" placeholder="Search names…"></label><div id="catalog-list"></div><div class="limits"><p><strong>Not measured:</strong> usefulness, outcomes, missed opportunities, or agent identity.</p><p>Requests do not prove a read. Wrappers do not prove command expansion. Read failures are not successful reads.</p><p>Capture covers live pi sessions with the extension. Bash reads, other tools, external agents, and queued records lost during a crash can be unobserved.</p></div></details>
+          <section class="panel" aria-labelledby="relationships-heading"><div class="section-heading"><div><h2 id="relationships-heading">Read patterns</h2></div><button type="button" id="browse-paths" class="quiet">View session paths</button></div><div id="relationship-view"></div></section>
+          <details class="panel" id="catalog-context"><summary>Skill catalog</summary><p class="footnote">The catalog follows machine, project, and date filters only.</p><label class="search-label">Find a catalog skill<input id="catalog-search" type="search" placeholder="Search names…"></label><div id="catalog-list"></div></details>
         </section>
         <section id="models-workspace" aria-labelledby="models-heading" hidden>
-          <div class="page-heading"><div><p class="eyebrow">Compare</p><h1 id="models-heading">Skills by model.</h1><p>Recorded reads, not model quality. Requests and wrappers have no model attribution.</p></div></div>
-          <section class="panel"><div class="section-heading"><label class="search-label">Find a skill<input id="model-search" type="search" placeholder="Search skill names…"></label><label class="inline-label">Measure<select id="model-measure"><option value="successfulReads">Successful reads</option><option value="failedReads">Read failures</option></select></label></div><div id="model-matrix" class="table-wrap" tabindex="0" role="region" aria-label="Skill by model counts"></div><p class="matrix-scroll-hint footnote">Scroll horizontally to compare models.</p><div id="model-pagination"></div><p class="footnote">Same-name variants combined. Each column is a provider and model pair. Zero means no matching recorded reads.</p></section>
+          <div class="page-heading"><div><h1 id="models-heading">Skills by model</h1></div></div>
+          <section class="panel"><div class="section-heading"><label class="search-label">Find a skill<input id="model-search" type="search" placeholder="Search skill names…"></label><label class="inline-label">Measure<select id="model-measure"><option value="successfulReads">Successful reads</option><option value="failedReads">Read failures</option></select></label></div><div id="model-matrix" class="table-wrap" tabindex="0" role="region" aria-label="Skill by model counts"></div><p class="matrix-scroll-hint footnote">Scroll horizontally to compare models.</p><div id="model-pagination"></div><p class="footnote">Skills are grouped by name.</p></section>
           <section id="skill-detail" class="panel" aria-live="polite"></section>
         </section>
         <section id="paths-workspace" aria-labelledby="paths-heading" hidden>
-          <div class="page-heading"><div><p class="eyebrow">Follow the evidence</p><h1 id="paths-heading">Session paths.</h1><p>Scoped runs in observed order. No links across gaps or run boundaries.</p></div><button id="mako-focus" type="button" class="quiet" aria-pressed="false">Focus on mako</button></div>
-          <div class="path-toolbar panel"><div><strong id="path-focus-label">All session paths</strong><p class="small">Detail selection only. Overview totals keep the applied scope.</p></div><label class="search-label"><span class="sr-only">Search session paths</span><input id="route-search" type="search" placeholder="Find project or skill…"></label><label class="inline-label">Model<select id="route-model"><option value="">All models</option></select></label><button type="button" id="clear-path-focus" class="quiet">Clear selection</button></div>
+          <div class="page-heading"><div><h1 id="paths-heading">Session paths</h1><p>Recorded activity within each run.</p></div></div>
+          <div class="path-toolbar panel"><div><strong id="path-focus-label">All session paths</strong><p class="small">These controls filter paths only.</p></div><label class="search-label"><span class="sr-only">Search session paths</span><input id="route-search" type="search" placeholder="Find project or skill…"></label><label class="inline-label">Model<select id="route-model"><option value="">All models</option></select></label><button type="button" id="clear-path-focus" class="quiet">Reset path filters</button></div>
           <div id="relationship-detail" class="panel" hidden></div>
           <div class="path-layout"><section class="panel route-master" aria-label="Recent session paths"><div class="section-heading"><h2>Recent paths</h2><span class="small muted" id="route-count"></span></div><div id="route-list"></div><div id="route-pagination"></div></section><section id="chain-view" class="panel route-detail" aria-label="Selected session path" tabindex="-1"></section></div>
         </section>
       </div>
     </main>
-    <footer><span>Hotplate / read-only</span><span>Recorded evidence, not inferred outcomes.</span></footer>
+    <details class="panel" id="data-help"><summary>About this data</summary><div class="data-definitions">
+      <p>A read is a successful tool read of <code>SKILL.md</code>. A request records a skill command. A wrapper records skill text found in input.</p>
+      <p>Skills are grouped by name, even when their file paths or contents differ.</p>
+      <p>Only read results have model attribution.</p>
+      <p>Each path represents one recorded run. A session can contain multiple runs. Order within a read group is unknown.</p>
+      <p>Capture gaps represent lost records. Filtered gaps represent records hidden by filters.</p>
+      <p>Capture requires the Hotplate extension in a live Pi session. Reads through the shell or external agents can be absent.</p>
+    </div></details>
   </div>
   <script src="/assets/app.js"></script>
 </body>
@@ -97,7 +104,6 @@ p { color: var(--muted); }
 .small, .footnote { font-size: 12px; }
 .footnote { margin-top: 14px; }
 .muted { color: var(--muted); }
-.eyebrow { text-transform: uppercase; letter-spacing: .13em; font-size: 10px; font-weight: 700; color: var(--teal); }
 .app-header { min-height: 64px; padding: 12px 3.2%; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--line); background: #fcfcf9; }
 .identity, .header-actions { display: flex; gap: 14px; align-items: center; }
 .identity strong { font-size: 22px; letter-spacing: -.06em; }
@@ -113,17 +119,17 @@ p { color: var(--muted); }
 .workspace-nav button { padding: 14px 1px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--muted); font-size: 13px; }
 .workspace-nav button[aria-current] { border-bottom-color: var(--teal); color: var(--ink); }
 .scope-bar { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 15px 0; font-size: 12px; }
-.scope-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.scope-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; margin-left: auto; }
 .inline-label { display: flex; align-items: center; gap: 8px; }
 .scope-actions button, .scope-actions select { padding: 5px 9px; font-size: 12px; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 22px; min-width: 0; margin-bottom: 18px; }
 .filter-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 14px; align-items: end; }
 .page-heading, .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .page-heading > div, .section-heading > div { min-width: 0; }
-.page-heading > button, .section-heading > button { flex-shrink: 0; }
+.section-heading > button { flex-shrink: 0; }
 .page-heading { padding: 15px 0 25px; }
 .section-heading { margin-bottom: 18px; }
-.section-heading p:not(.eyebrow) { margin-top: 4px; font-size: 12px; }
+.section-heading p { margin-top: 4px; font-size: 12px; }
 .metrics-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: 9px; background: white; }
 .metric-card { padding: 22px 26px; border-right: 1px solid var(--line); }
 .metric-card:last-child { border: 0; }
@@ -132,10 +138,7 @@ p { color: var(--muted); }
 .metric-note { font-size: 11px; color: var(--muted); }
 .metric-card:last-child .metric-value { color: var(--accent); }
 .evidence-context { display: flex; flex-wrap: wrap; gap: 8px 24px; font-size: 12px; padding: 12px 2px 22px; color: var(--muted); }
-.evidence-context strong { color: var(--ink); }
 .overview-grid { display: grid; grid-template-columns: minmax(0,1.55fr) minmax(330px,1fr); gap: 18px; }
-.activity-summary { display: flex; align-items: baseline; gap: 10px; margin: 4px 0 15px; }
-.activity-summary strong { font-size: 27px; font-weight: 600; letter-spacing: -.04em; }
 .activity-svg { display: block; width: 100%; height: 240px; }
 .activity-svg text { font: 11px ui-sans-serif, system-ui, sans-serif; fill: var(--muted); }
 .activity-svg .gridline { stroke: #e9ece6; stroke-width: 1; }
@@ -214,17 +217,16 @@ dt { color: var(--muted); }dd { margin: 0; overflow-wrap: anywhere; }
 .gap-card { padding: 12px; background: #f7f5ee; border: 1px dashed #c9c0aa; border-radius: 6px; font-size: 12px; }
 .timeline-step.supporting .step-group { outline: 2px solid #b66b39; outline-offset: 5px; border-radius: 3px; }
 .support-note { color: #985020; font-size: 11px; }
-.limits { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 15px; display: grid; gap: 7px; font-size: 12px; }
+.data-definitions { display: grid; gap: 10px; font-size: 12px; }
 .empty { padding: 30px 4px; color: var(--muted); }
 .message { margin-top: 18px; border-left: 3px solid var(--accent); }
 .message p { margin: 8px 0 16px; }
-footer { display: flex; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); margin: 20px 0; padding: 18px 0; color: var(--muted); font-size: 11px; }
 .sr-only, .skip-link:not(:focus) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .skip-link:focus { display: block; padding: 12px; color: var(--teal); }
 @media (min-width: 1600px) { .shell { width: min(1440px,90%); } }
 @media (max-width: 1050px) { .overview-grid { grid-template-columns: 1fr 1fr; }.path-toolbar { flex-wrap: wrap; }.path-toolbar > div:first-child { width: 100%; }.path-layout { grid-template-columns: 260px minmax(0,1fr); }.filter-grid { grid-template-columns: repeat(3,minmax(0,1fr)); }.metric-card { padding: 20px; } }
 @media (max-width: 760px) {
-  .shell { width: calc(100% - 28px); }.app-header { padding: 12px 14px; }.identity { gap: 9px; }.identity-note { display: none; }.header-actions { gap: 8px; }.preview { font-size: 9px; }.workspace-nav { gap: 24px; }.scope-bar { align-items: start; flex-direction: column; gap: 10px; }.scope-actions { width: 100%; }.scope-actions .inline-label { margin-right: auto; }.page-heading { align-items: start; gap: 12px; }.page-heading > button { font-size: 11px; max-width: 125px; }.page-heading p:not(.eyebrow) { font-size: 12px; }.panel { padding: 17px; }.metrics-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }.metric-card { padding: 17px; }.metric-card:nth-child(2) { border-right: 0; }.metric-card:nth-child(-n+2) { border-bottom: 1px solid var(--line); }.metric-value { font-size: 31px; }.overview-grid, .relationship-grid, .path-layout { grid-template-columns: 1fr; }.filter-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }.activity-svg { height: 210px; }.section-heading { align-items: start; flex-wrap: wrap; }.section-heading > button { font-size: 11px; }.path-toolbar { gap: 12px; }.path-toolbar .search-label { max-width: none; flex: 1; min-width: 140px; }.path-toolbar .inline-label { max-width: 100%; }.path-toolbar select { max-width: 160px; }.route-master { margin-bottom: 0; }.route-detail { min-height: 0; }.step-heading { flex-wrap: wrap; gap: 4px; }.relationship-flow { gap: 6px; }.skill-node { font-size: 11px; }footer { flex-wrap: wrap; }
+  .shell { width: calc(100% - 28px); }.app-header { padding: 12px 14px; }.identity { gap: 9px; }.identity-note { display: none; }.header-actions { gap: 8px; }.preview { font-size: 9px; }.workspace-nav { gap: 24px; }.scope-bar { align-items: start; flex-direction: column; gap: 10px; }.scope-actions { width: 100%; }.scope-actions .inline-label { margin-right: auto; }.page-heading { align-items: start; gap: 12px; }.page-heading p { font-size: 12px; }.panel { padding: 17px; }.metrics-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }.metric-card { padding: 17px; }.metric-card:nth-child(2) { border-right: 0; }.metric-card:nth-child(-n+2) { border-bottom: 1px solid var(--line); }.metric-value { font-size: 31px; }.overview-grid, .relationship-grid, .path-layout { grid-template-columns: 1fr; }.filter-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }.activity-svg { height: 210px; }.section-heading { align-items: start; flex-wrap: wrap; }.section-heading > button { font-size: 11px; }.path-toolbar { gap: 12px; }.path-toolbar .search-label { max-width: none; flex: 1; min-width: 140px; }.path-toolbar .inline-label { max-width: 100%; }.path-toolbar select { max-width: 160px; }.route-master { margin-bottom: 0; }.route-detail { min-height: 0; }.step-heading { flex-wrap: wrap; gap: 4px; }.relationship-flow { gap: 6px; }.skill-node { font-size: 11px; }
 }
 @media (max-width: 760px) {
   .matrix th:first-child { width: 150px; }
@@ -242,6 +244,13 @@ const state = {
   pages: { skills: 0, models: 0, columns: 0, relationships: 0, routes: 0, steps: 0, catalog: 0, identities: 0, evidence: 0 },
 };
 const number = (value) => value.toLocaleString('en-US');
+const count = (value, singular, plural = singular + 's') => number(value) + ' ' + (value === 1 ? singular : plural);
+const sessionLabels = { machineId: 'Machine', sourceId: 'Account source', projectCwd: 'Project', sessionId: 'Session ID', segmentId: 'Segment ID', runId: 'Run ID' };
+const gapLabels = { 'queue-overflow': 'Capture queue full', 'db-busy': 'Database busy', 'db-error': 'Database error', 'shutdown-deadline': 'Capture stopped before saving', 'invalid-observation': 'Invalid record' };
+const wrapperLabels = { 'expanded-prompt': 'input after expansion', 'unknown-pasted-or-transformed': 'source unknown' };
+const stepLabels = { 'read-result': 'Read group', 'command-intent': 'Request', 'wrapper-observed': 'Wrapper' };
+const commandLabels = { interactive: 'Interactive', rpc: 'RPC', extension: 'Extension' };
+class DashboardFetchError extends Error {}
 const pageLabels = { models: 'skill rows', columns: 'model columns' };
 function node(tag, text, className) {
   const element = document.createElement(tag);
@@ -263,7 +272,9 @@ function date(value, withTime = false) {
 function project(path) { return path.split('/').filter(Boolean).at(-1) || path; }
 function modelLabel(model) { return model ? model.provider + ' / ' + model.id : 'Unknown model'; }
 function sameModel(left, right) { return left === null ? right === null : right !== null && left.provider === right.provider && left.id === right.id; }
-function countsText(counts) { return number(counts.successfulReads) + ' reads · ' + number(counts.failedReads) + ' failures · ' + number(counts.requests) + ' requests · ' + number(counts.wrappers) + ' wrappers'; }
+function countsText(counts) { return [count(counts.successfulReads, 'read'), count(counts.failedReads, 'failure'), count(counts.requests, 'request'), count(counts.wrappers, 'wrapper')].join(' · '); }
+function hasFilters() { return Object.values(state.report.scope).some((value) => value !== undefined && value !== null && value !== ''); }
+function noResults(subject, search = '') { return search ? 'No ' + subject + ' match this search.' : hasFilters() ? 'No ' + subject + ' match these filters.' : 'No ' + subject + ' recorded yet.'; }
 function totalEvidence(counts) { return counts.successfulReads + counts.failedReads + counts.requests + counts.wrappers; }
 function disclosure(title, content) { const details = node('details'); details.append(node('summary', title), content); return details; }
 function table(headers, caption) {
@@ -277,7 +288,8 @@ function pagination(key, total, size, render) {
   const pages = Math.max(1, Math.ceil(total / size));
   state.pages[key] = Math.min(state.pages[key], pages - 1);
   const wrap = node('div', null, 'pagination');
-  const first = total ? state.pages[key] * size + 1 : 0;
+  if (!total) { wrap.hidden = true; return wrap; }
+  const first = state.pages[key] * size + 1;
   wrap.append(node('span', first + '–' + Math.min(total, (state.pages[key] + 1) * size) + ' of ' + number(total)));
   if (pages > 1) {
     const controls = node('div', null, 'pagination-actions');
@@ -313,7 +325,8 @@ function showWorkspace(name, focusHeading = false) {
 function setStatus(kind, text) { $('status-text').dataset.kind = kind; $('status-text').textContent = text; }
 function showMessage(title, text, retry = false) {
   $('message-panel').hidden = false;
-  $('message-panel').replaceChildren(node('h2', title), node('p', text));
+  $('message-panel').replaceChildren(node('h2', title));
+  if (text) $('message-panel').append(node('p', text));
   if (retry) $('message-panel').append(button('Retry', loadDashboard));
 }
 function filterParams() {
@@ -333,18 +346,22 @@ async function loadDashboard() {
   const requestId = ++state.requestId;
   state.controller?.abort(); state.controller = new AbortController();
   state.report = null;
+  $('scope-summary').hidden = true; $('scope-summary').textContent = '';
   $('dashboard-content').hidden = true; $('workspace').setAttribute('aria-busy', 'true');
   setStatus('loading', 'Loading');
-  showMessage('Loading evidence', 'Reading the applied scope…');
+  showMessage('Loading activity…');
   try {
-    const response = await fetch('/api/dashboard?' + filterParams(), { signal: state.controller.signal, headers: { Accept: 'application/json' } });
+    const response = await fetch('/api/dashboard?' + filterParams(), { signal: state.controller.signal, headers: { Accept: 'application/json' } }).catch((error) => {
+      if (error instanceof TypeError && ['Failed to fetch', 'NetworkError when attempting to fetch resource.', 'Load failed'].includes(error.message)) throw new DashboardFetchError(error.message);
+      throw error;
+    });
     if (!response.ok) throw new Error('Dashboard request failed (HTTP ' + response.status + ').');
     const payload = await response.json();
     if (requestId !== state.requestId) return;
     if (!['ready', 'missing', 'error'].includes(payload.kind)) throw new Error('Unexpected dashboard response.');
     renderFilterOptions(payload.filterOptions);
     if (payload.kind === 'missing') {
-      setStatus('missing', 'No database'); showMessage('No Hotplate database found', 'Start a pi session with capture enabled. No evidence is available yet.');
+      setStatus('missing', 'No database'); showMessage('No Hotplate database found', 'Check the database location and capture or collector configuration. Then refresh the dashboard.', true);
       $('message-panel').append(disclosure('Database location', node('p', payload.databasePath))); return;
     }
     if (payload.kind === 'error') throw new Error(payload.message);
@@ -357,7 +374,9 @@ async function loadDashboard() {
   } catch (error) {
     if (requestId !== state.requestId) return;
     state.report = null; $('dashboard-content').hidden = true;
-    setStatus('error', 'Error'); showMessage('Cannot load dashboard', error instanceof Error ? error.message : 'Unknown dashboard error.', true);
+    $('scope-summary').hidden = true;
+    setStatus('error', 'Error'); showMessage('Cannot load dashboard', error instanceof DashboardFetchError ? 'Could not reach the dashboard server.' : undefined, true);
+    $('message-panel').append(disclosure('Error details', node('p', error instanceof Error ? error.message : String(error))));
   } finally {
     if (requestId === state.requestId) $('workspace').setAttribute('aria-busy', 'false');
   }
@@ -371,43 +390,44 @@ function renderFilterOptions(options) {
 }
 function renderScope() {
   const scope = state.report.scope;
-  const time = !scope.fromObservedAt && !scope.toObservedAt ? 'All time' : (scope.fromObservedAt ? date(scope.fromObservedAt, true) : 'First evidence') + ' to ' + (scope.toObservedAt ? date(scope.toObservedAt, true) : 'Latest evidence') + ' UTC';
-  const parts = [time, scope.projectCwd ? project(scope.projectCwd) : 'All projects', scope.machineId ? '1 machine' : 'All machines'];
-  if (scope.source) parts.push(scope.source + ' requests');
-  if (scope.modelProvider || scope.modelId) parts.push([scope.modelProvider, scope.modelId].filter(Boolean).join(' / '));
+  const parts = [];
+  if (scope.fromObservedAt || scope.toObservedAt) parts.push((scope.fromObservedAt || 'First record') + ' to ' + (scope.toObservedAt || 'Latest record') + ' · UTC');
+  if (scope.projectCwd) parts.push('Project: ' + scope.projectCwd);
+  if (scope.machineId) parts.push('Machine: ' + scope.machineId);
+  if (scope.source) parts.push((commandLabels[scope.source] || scope.source) + ' requests');
+  if (scope.modelProvider) parts.push('Model provider: ' + scope.modelProvider);
+  if (scope.modelId) parts.push('Model: ' + scope.modelId);
   $('scope-summary').textContent = parts.join(' · ');
+  $('scope-summary').hidden = parts.length === 0;
 }
 function renderOverview() {
   const report = state.report;
   const metrics = [
-    ['Skill reads', report.counts.successfulReads, 'Successful file reads'],
-    ['Skills read', report.skillsRead, 'Distinct skill names'],
-    ['Session paths', report.routes.length, 'Scoped runs, not unique sessions'],
-    ['Read failures', report.counts.failedReads, 'Failed file reads'],
+    ['Successful reads', report.counts.successfulReads],
+    ['Skill names read', report.skillsRead],
+    ['Session paths', report.routes.length, 'One path per run'],
+    ['Read failures', report.counts.failedReads],
   ];
   $('overview-cards').replaceChildren(...metrics.map(([label, value, note]) => {
-    const card = node('article', null, 'metric-card'); card.append(node('span', label, 'metric-label'), node('strong', number(value), 'metric-value'), node('span', note, 'metric-note')); return card;
+    const card = node('article', null, 'metric-card'); card.append(node('span', label, 'metric-label'), node('strong', number(value), 'metric-value'));
+    if (note) card.append(node('span', note, 'metric-note')); return card;
   }));
   $('evidence-context').replaceChildren();
-  for (const [label, count] of [['requests', report.counts.requests], ['wrappers', report.counts.wrappers], ['capture gaps', report.coverage.captureGaps]]) {
-    const item = node('span'); item.append(node('strong', number(count)), document.createTextNode(' ' + label)); $('evidence-context').append(item);
-  }
-  $('evidence-context').append(node('span', 'Requests and wrappers are separate from reads.'));
+  for (const [label, value] of [['request', report.counts.requests], ['wrapper', report.counts.wrappers]]) $('evidence-context').append(node('span', count(value, label)));
   renderActivity(); renderRanks(); renderRelationships(); renderCatalog();
   const coverage = report.coverage;
-  $('coverage').replaceChildren(node('p', number(coverage.captureGaps) + ' capture gaps · ' + number(coverage.droppedObservations) + ' dropped observations · ' + number(coverage.filteredOmissions) + ' filtered omissions. Zero gaps does not prove complete capture.', 'footnote'), node('p', 'Catalog context uses machine, project, and time only. “No matching evidence” is not a missed opportunity.', 'footnote'));
+  $('evidence-context').append(node('span', count(coverage.captureGaps, 'capture gap') + ' · ' + count(coverage.droppedObservations, 'record') + ' lost · ' + count(coverage.filteredOmissions, 'record') + ' hidden by filters'));
 }
 function svgNode(tag, attrs) { const item = document.createElementNS('http://www.w3.org/2000/svg', tag); for (const [key, value] of Object.entries(attrs)) item.setAttribute(key, String(value)); return item; }
 function renderActivity() {
   const target = $('activity-chart'); target.replaceChildren();
   const report = state.report; const activity = report.activity;
-  if (activity.kind === 'empty') target.append(empty('No dated evidence in this scope. Try All time or reset the filters.'));
+  if (activity.kind === 'empty') target.append(empty(hasFilters() ? 'No dated activity matches these filters.' : totalEvidence(report.counts) === 0 && report.routes.length === 0 ? 'No activity recorded yet.' : 'No dated activity recorded.'));
   else {
-    const summary = node('div', null, 'activity-summary'); summary.append(node('strong', number(report.counts.successfulReads)), node('span', 'successful reads in scope', 'muted small')); target.append(summary);
     const max = Math.max(1, ...activity.bins.map((bin) => bin.counts.successfulReads + bin.counts.failedReads));
     const svg = svgNode('svg', { viewBox: '0 0 680 240', role: 'img', 'aria-labelledby': 'activity-title activity-description', class: 'activity-svg', preserveAspectRatio: 'none' });
     const title = svgNode('title', { id: 'activity-title' }); title.textContent = 'Read activity in UTC';
-    const description = svgNode('desc', { id: 'activity-description' }); description.textContent = activity.bins.length + ' time buckets from ' + date(activity.startAt) + '. Green bars show successful reads, orange bars show failures. Exact counts, including requests, wrappers, and zeros, follow in the data table.';
+    const description = svgNode('desc', { id: 'activity-description' }); description.textContent = count(activity.bins.length, 'time bucket') + ' from ' + date(activity.startAt) + '. Green bars show successful reads, orange bars show failures. Exact counts, including requests, wrappers, and zeros, follow in the data table.';
     svg.append(title, description);
     for (const fraction of [0, .5, 1]) {
       const y = 215 - fraction * 190; svg.append(svgNode('line', { x1: 37, x2: 678, y1: y, y2: y, class: 'gridline' }));
@@ -422,12 +442,12 @@ function renderActivity() {
     target.append(svg);
     const axis = node('div', null, 'chart-axis'); axis.append(node('span', date(activity.startAt)), node('span', date(new Date(Date.parse(activity.endAt) - 1).toISOString()))); target.append(axis);
     const legend = node('div', null, 'legend'); legend.append(node('span', 'Successful reads'), node('span', 'Read failures', 'failure')); target.append(legend);
-    target.append(node('p', 'Each bar covers ' + Math.round(activity.binWidthMs / 86400000) + ' UTC day(s). Zero means no matching recorded evidence.', 'footnote'));
+    target.append(node('p', count(Math.round(activity.binWidthMs / 86400000), 'day') + ' per bar · UTC', 'footnote'));
     const data = table(['UTC interval', 'Reads', 'Failures', 'Requests', 'Wrappers']);
     for (const bin of activity.bins) { const row = node('tr'); [date(bin.startAt) + ' – ' + date(new Date(Date.parse(bin.endAt) - 1).toISOString()), bin.counts.successfulReads, bin.counts.failedReads, bin.counts.requests, bin.counts.wrappers].forEach((value) => row.append(node('td', value))); data.lastChild.append(row); }
-    const scroll = node('div', null, 'table-wrap'); scroll.append(data); target.append(disclosure('Activity data · ' + activity.bins.length + ' buckets', scroll));
+    const scroll = node('div', null, 'table-wrap'); scroll.append(data); target.append(disclosure('View activity data', scroll));
   }
-  if (report.coverage.undatedEvidence > 0) target.append(node('p', number(report.coverage.undatedEvidence) + ' records have no usable timestamp and are not shown in the activity chart.', 'footnote'));
+  if (report.coverage.undatedEvidence > 0) target.append(node('p', count(report.coverage.undatedEvidence, 'record') + ' without a usable timestamp. Not shown in the activity chart.', 'footnote'));
 }
 function renderRanks() {
   const query = $('skill-search').value.toLowerCase();
@@ -440,16 +460,19 @@ function renderRanks() {
     const track = node('div', null, 'rank-track'); const fill = node('div', null, 'rank-fill'); fill.style.width = group.counts.successfulReads / max * 100 + '%'; track.append(fill); name.append(track);
     row.append(name, node('strong', number(group.counts.successfulReads))); target.append(row);
   });
-  if (!groups.length) target.append(empty('No successful reads match. Catalog-only skills are in Catalog & evidence limits.'));
+  if (!groups.length) {
+    target.append(empty(noResults('successful reads', query)));
+    if (state.report.skillGroups.some((group) => group.cataloged)) target.append(button('View skill catalog', () => { $('catalog-context').open = true; $('catalog-context').querySelector('summary').focus(); }, 'link'));
+  }
   target.append(pagination('skills', groups.length, 8, renderRanks));
 }
 function renderCatalog() {
   const groups = state.report.skillGroups.filter((group) => group.cataloged && group.name.toLowerCase().includes($('catalog-search').value.toLowerCase()));
   const target = $('catalog-list'); target.replaceChildren();
   for (const group of pageItems(groups, 'catalog', 8)) {
-    const row = node('div', null, 'identity-item'); row.append(button(group.name, () => selectSkill(group.name), 'link'), node('p', totalEvidence(group.counts) === 0 ? 'No matching evidence' : countsText(group.counts))); target.append(row);
+    const row = node('div', null, 'identity-item'); row.append(button(group.name, () => selectSkill(group.name), 'link'), node('p', totalEvidence(group.counts) === 0 ? 'No recorded activity' : countsText(group.counts))); target.append(row);
   }
-  if (!groups.length) target.append(empty('No catalog skills match this scope.'));
+  if (!groups.length) target.append(empty(noResults('catalog entries', $('catalog-search').value)));
   target.append(pagination('catalog', groups.length, 8, renderCatalog));
 }
 function skillName(key) { return state.report.skills.find((skill) => skill.key === key)?.identity.name || 'Unknown skill'; }
@@ -467,35 +490,39 @@ function renderRelationships() {
   const target = $('relationship-view'); target.replaceChildren();
   const grid = node('div', null, 'relationship-grid');
   for (const relationship of pageItems(relationships, 'relationships', 4)) {
-    const card = node('article', null, 'relationship'); card.append(node('p', relationship.kind === 'same-group' ? 'SAME GROUP · no internal order' : 'NEXT GROUP · observed order', 'eyebrow'), relationshipFlow(relationship), button(number(relationship.evidence.length) + ' supporting occurrences ↗', () => selectRelationship(relationship), 'link')); grid.append(card);
+    const card = node('article', null, 'relationship'); card.append(node('p', relationship.kind === 'same-group' ? 'Same read group' : 'Consecutive read groups', 'small'), relationshipFlow(relationship), button('View ' + count(relationship.evidence.length, 'occurrence'), () => selectRelationship(relationship), 'link')); grid.append(card);
   }
   target.append(grid);
-  if (!relationships.length) target.append(empty('No successful-read relationships in this scope. Requests, wrappers, failures, and gaps do not create links.'));
+  if (!relationships.length) target.append(empty(noResults('read patterns')));
   target.append(pagination('relationships', relationships.length, 4, renderRelationships));
 }
 function selectSkill(name) {
   state.skillSelection = { kind: 'skill', name }; state.pages.identities = 0; renderSkillDetail(); showWorkspace('models');
   $('skill-detail').tabIndex = -1; $('skill-detail').focus();
 }
+function matchingModelGroups() {
+  const query = $('model-search').value.toLowerCase();
+  return state.report.skillGroups.filter((group) => group.counts.successfulReads + group.counts.failedReads > 0 && group.name.toLowerCase().includes(query));
+}
 function renderModels() {
   const report = state.report; const measure = $('model-measure').value;
-  const groups = report.skillGroups.filter((group) => (group.counts.successfulReads + group.counts.failedReads > 0) && group.name.toLowerCase().includes($('model-search').value.toLowerCase()));
+  const groups = matchingModelGroups();
   const columns = pageItems(report.models, 'columns', 6);
   const matrix = table(['Skill', ...columns.map((column) => modelLabel(column.model))], measure === 'successfulReads' ? 'Successful reads by skill and model' : 'Read failures by skill and model'); matrix.className = 'matrix';
   const max = groups.reduce((value, group) => Math.max(value, ...group.models.map((model) => model[measure])), 1);
   for (const group of pageItems(groups, 'models', 12)) {
     const row = node('tr'); const label = node('th'); label.scope = 'row'; label.append(button(group.name, () => selectSkill(group.name), 'link')); row.append(label);
     for (const column of columns) {
-      const count = group.models.find((entry) => sameModel(entry.model, column.model))?.[measure] || 0;
+      const value = group.models.find((entry) => sameModel(entry.model, column.model))?.[measure] || 0;
       const cell = node('td');
-      const action = button(number(count), () => { state.skillSelection = { kind: 'model-skill', name: group.name, model: column.model }; state.pages.identities = 0; renderSkillDetail(); $('skill-detail').tabIndex = -1; $('skill-detail').focus(); }, 'heat-' + (count === 0 ? 0 : Math.max(1, Math.ceil(count / max * 4))));
-      action.setAttribute('aria-label', group.name + ', ' + modelLabel(column.model) + ': ' + count + ' ' + (measure === 'successfulReads' ? 'successful reads' : 'read failures')); cell.append(action); row.append(cell);
+      const action = button(number(value), () => { state.skillSelection = { kind: 'model-skill', name: group.name, model: column.model }; state.pages.identities = 0; renderSkillDetail(); $('skill-detail').tabIndex = -1; $('skill-detail').focus(); }, 'heat-' + (value === 0 ? 0 : Math.max(1, Math.ceil(value / max * 4))));
+      action.setAttribute('aria-label', group.name + ', ' + modelLabel(column.model) + ': ' + count(value, measure === 'successfulReads' ? 'successful read' : 'read failure')); cell.append(action); row.append(cell);
     }
     matrix.lastChild.append(row);
   }
-  $('model-matrix').replaceChildren(groups.length && columns.length ? matrix : empty('No model read results match this scope.'));
+  $('model-matrix').replaceChildren(groups.length && columns.length ? matrix : empty(noResults('reads', $('model-search').value)));
   $('model-pagination').replaceChildren(pagination('models', groups.length, 12, renderModels));
-  if (report.models.length > 6) $('model-pagination').append(pagination('columns', report.models.length, 6, renderModels));
+  if (groups.length && report.models.length > 6) $('model-pagination').append(pagination('columns', report.models.length, 6, renderModels));
   renderSkillDetail();
   setOptions($('route-model'), 'All models', report.models.map((column, index) => ({ value: String(index), label: modelLabel(column.model) })));
 }
@@ -504,21 +531,22 @@ function renderSkillDetail() {
   const selection = state.skillSelection;
   const selectedModel = selection?.kind === 'model-skill' ? selection.model : undefined;
   const group = state.report.skillGroups.find((entry) => entry.name === selection?.name);
-  if (!group) { target.append(node('h2', 'Inspect a skill'), node('p', 'Select a name or count to see evidence and supporting session paths.', 'footnote')); return; }
-  const heading = node('div', null, 'section-heading'); heading.append(node('h2', group.name), button('Open session paths ↗', () => { state.focus = { kind: 'skill', name: group.name }; state.pages.routes = 0; state.routeKey = null; $('route-search').value = ''; $('route-model').value = selectedModel === undefined ? '' : String(state.report.models.findIndex((column) => sameModel(column.model, selectedModel))); renderPaths(); showWorkspace('paths', true); })); target.append(heading);
-  target.append(node('p', 'Same-name variants combined. Names do not prove identical content or resolve requests to a file.', 'small'), node('p', countsText(group.counts), 'detail-counts'));
-  if (selectedModel !== undefined) { const counts = group.models.find((column) => sameModel(column.model, selectedModel)); target.append(node('p', modelLabel(selectedModel) + ': ' + (counts?.successfulReads || 0) + ' reads · ' + (counts?.failedReads || 0) + ' failures', 'footnote')); }
+  target.hidden = !group && (!matchingModelGroups().length || !state.report.models.length);
+  if (!group) { if (!target.hidden) target.append(node('h2', 'Select a skill'), node('p', 'Select a skill name or count to view its records and paths.', 'footnote')); return; }
+  const heading = node('div', null, 'section-heading'); heading.append(node('h2', group.name), button('View session paths', () => { state.focus = { kind: 'skill', name: group.name }; state.pages.routes = 0; state.routeKey = null; $('route-search').value = ''; $('route-model').value = selectedModel === undefined ? '' : String(state.report.models.findIndex((column) => sameModel(column.model, selectedModel))); renderPaths(); showWorkspace('paths', true); })); target.append(heading);
+  target.append(node('p', countsText(group.counts), 'detail-counts'));
+  if (selectedModel !== undefined) { const counts = group.models.find((column) => sameModel(column.model, selectedModel)); target.append(node('p', modelLabel(selectedModel) + ': ' + count(counts?.successfulReads || 0, 'read') + ' · ' + count(counts?.failedReads || 0, 'failure'), 'footnote')); }
   const identities = node('div', null, 'identity-list');
+  identities.append(node('p', 'Files with the same skill name can have different content.', 'small'));
   const variants = group.skillKeys.map((key) => state.report.skills.find((entry) => entry.key === key)).filter(Boolean);
   for (const variant of pageItems(variants, 'identities', 8)) {
     const item = node('div', null, 'identity-item'); item.dataset.machine = variant.identity.machineId;
-    item.append(node('p', 'Machine: ' + variant.identity.machineId), node('p', variant.identity.kind === 'resolved' ? variant.identity.canonicalPath : 'Request only · no resolved file'), node('p', countsText(variant.counts)), node('p', variant.cataloged ? 'In catalog context' : 'Not in catalog context'));
+    item.append(node('p', 'Machine: ' + variant.identity.machineId), node('p', variant.identity.kind === 'resolved' ? variant.identity.canonicalPath : 'Request not linked to a file'), node('p', countsText(variant.counts)), node('p', variant.cataloged ? 'In recorded catalog' : 'Not in recorded catalog'));
     identities.append(item);
   }
   identities.append(pagination('identities', variants.length, 8, renderSkillDetail));
-  target.append(disclosure('Identity details · ' + variants.length + ' variants', identities));
+  target.append(disclosure('Files and requests · ' + count(variants.length, 'entry', 'entries'), identities));
 }
-function focusMako() { state.focus = { kind: 'mako' }; state.routeKey = null; state.pages.routes = 0; $('route-search').value = ''; $('route-model').value = ''; renderPaths(); showWorkspace('paths', true); }
 function selectRelationship(relationship) {
   state.focus = { kind: 'relationship', relationship, evidenceIndex: 0 }; state.pages.routes = 0; state.pages.evidence = 0;
   state.routeKey = relationship.evidence[0]?.routeKey || null;
@@ -527,7 +555,6 @@ function selectRelationship(relationship) {
 }
 function matchingRoutes() {
   const report = state.report; let keys = null;
-  if (state.focus.kind === 'mako') keys = new Set(report.skillGroups.filter((group) => group.name.toLowerCase() === 'mako' || group.name.toLowerCase().startsWith('mako-') || group.name.toLowerCase().startsWith('mako/')).flatMap((group) => group.routeKeys));
   if (state.focus.kind === 'skill') keys = new Set(report.skillGroups.find((group) => group.name === state.focus.name)?.routeKeys || []);
   if (state.focus.kind === 'relationship') keys = new Set(state.focus.relationship.evidence.map((entry) => entry.routeKey));
   const query = $('route-search').value.toLowerCase(); const modelIndex = $('route-model').value; const model = modelIndex === '' ? undefined : report.models[Number(modelIndex)]?.model;
@@ -539,19 +566,19 @@ function matchingRoutes() {
 }
 function renderPaths() {
   const routes = matchingRoutes();
-  const label = state.focus.kind === 'mako' ? 'Paths containing mako' : state.focus.kind === 'skill' ? 'Paths containing ' + state.focus.name : state.focus.kind === 'relationship' ? 'Paths supporting this relationship' : 'All session paths';
-  $('path-focus-label').textContent = label; $('mako-focus').setAttribute('aria-pressed', String(state.focus.kind === 'mako'));
-  $('route-count').textContent = number(routes.length) + ' scoped runs';
+  const label = state.focus.kind === 'skill' ? 'Paths containing ' + state.focus.name : state.focus.kind === 'relationship' ? 'Paths with this pattern' : 'All session paths';
+  $('path-focus-label').textContent = label;
+  $('route-count').textContent = count(routes.length, 'path');
   if (!routes.some((route) => route.key === state.routeKey)) { state.routeKey = routes[0]?.key || null; state.pages.steps = 0; }
   const target = $('route-list'); target.replaceChildren();
   for (const route of pageItems(routes, 'routes', 8)) {
     const choice = button('', () => { state.routeKey = route.key; state.pages.steps = 0; renderPaths(); $('chain-view').focus(); }, 'route-choice');
     choice.dataset.routeKey = route.key; choice.setAttribute('aria-pressed', String(route.key === state.routeKey));
-    choice.append(node('strong', project(route.scope.projectCwd)), node('p', date(route.lastEvidenceAt, true) + ' UTC'), node('p', number(route.counts.successfulReads) + ' reads · ' + route.steps.length + ' steps'));
+    choice.append(node('strong', project(route.scope.projectCwd)), node('p', date(route.lastEvidenceAt, true) + ' UTC'), node('p', count(route.counts.successfulReads, 'read') + ' · ' + count(route.steps.length, 'step')));
     const names = [...new Set(route.steps.flatMap((step) => step.kind === 'observations' ? step.items.map((item) => skillName(item.skillKey)) : []))];
     choice.append(node('p', names.slice(0, 4).join(' · ') + (names.length > 4 ? ' …' : ''), 'route-preview')); target.append(choice);
   }
-  if (!routes.length) target.append(empty('No paths match this selection. Clear the selection or reset the scope.'));
+  if (!routes.length) target.append(empty($('route-search').value ? 'No paths match this search.' : state.focus.kind !== 'all' || $('route-model').value ? 'No paths match these filters.' : noResults('paths')));
   $('route-pagination').replaceChildren(pagination('routes', routes.length, 8, renderPaths));
   renderRelationshipDetail(routes); renderRouteDetail(routes.find((route) => route.key === state.routeKey));
 }
@@ -559,8 +586,9 @@ function renderRelationshipDetail(routes) {
   const target = $('relationship-detail'); target.hidden = state.focus.kind !== 'relationship'; target.replaceChildren();
   if (state.focus.kind !== 'relationship') return;
   const relationship = state.focus.relationship;
-  target.append(node('h2', relationship.kind === 'same-group' ? 'Read together in one group' : 'Read in adjacent groups'), relationshipFlow(relationship), node('p', 'Observed order is not a dependency. Select an occurrence to highlight its original steps.', 'small'));
+  target.append(node('h2', relationship.kind === 'same-group' ? 'Same read group' : 'Consecutive read groups'), relationshipFlow(relationship));
   const occurrences = relationship.evidence.map((evidence, index) => ({ evidence, index })).filter(({ evidence }) => routes.some((route) => route.key === evidence.routeKey));
+  if (occurrences.length) target.append(node('p', 'Select an occurrence to highlight its steps.', 'small'));
   const links = node('div', null, 'detail-counts');
   for (const { evidence, index } of pageItems(occurrences, 'evidence', 8)) {
     const route = routes.find((route) => route.key === evidence.routeKey);
@@ -573,14 +601,14 @@ function renderRelationshipDetail(routes) {
 function renderRouteDetail(route) {
   const target = $('chain-view'); target.replaceChildren();
   delete target.dataset.routeKey; delete target.dataset.machine;
-  if (!route) { target.append(empty('Select a session path to inspect its evidence.')); return; }
+  target.hidden = !route;
+  if (!route) return;
   target.dataset.routeKey = route.key; target.dataset.machine = route.scope.machineId;
-  const heading = node('div', null, 'section-heading'); const title = node('div'); title.append(node('p', 'Selected path · complete within applied scope', 'eyebrow'), node('h2', project(route.scope.projectCwd))); heading.append(title, node('span', date(route.firstEvidenceAt) + ' UTC', 'small muted')); target.append(heading);
-  target.append(node('p', countsText(route.counts), 'small'), node('p', 'Groups preserve recorded order. Items inside a read group have no implied direction.', 'footnote'));
-  if (state.focus.kind === 'mako') target.append(node('p', 'Mako focus includes matching names and wrapper evidence. Complete containing paths remain visible. This does not prove mako routing.', 'footnote'));
+  const heading = node('div', null, 'section-heading'); const title = node('div'); title.append(node('h2', project(route.scope.projectCwd))); heading.append(title, node('span', date(route.firstEvidenceAt) + ' UTC', 'small muted')); target.append(heading);
+  target.append(node('p', countsText(route.counts), 'small'));
   const scope = node('dl');
-  for (const [label, value] of Object.entries(route.scope)) scope.append(node('dt', label), node('dd', value ?? 'Unknown'));
-  target.append(disclosure('Full path scope', scope));
+  for (const [label, value] of Object.entries(route.scope)) scope.append(node('dt', sessionLabels[label] || label), node('dd', value ?? 'Unknown'));
+  target.append(disclosure('Session details', scope));
   let highlighted = [];
   if (state.focus.kind === 'relationship') {
     const evidence = state.focus.relationship.evidence[state.focus.evidenceIndex];
@@ -591,21 +619,23 @@ function renderRouteDetail(route) {
     const index = state.pages.steps * 30 + offset;
     const item = node('li', null, 'timeline-step' + (step.kind === 'gap' ? ' gap' : '') + (highlighted.includes(index) ? ' supporting' : ''));
     item.dataset.stepIndex = String(index);
-    const label = node('div', null, 'step-heading'); label.append(node('span', String(index + 1).padStart(2, '0') + ' / ' + (step.kind === 'gap' ? 'Gap' : step.items.every((entry) => entry.evidence.kind === 'read-result') ? 'Read group' : 'Evidence')), node('span', date(step.observedAt, true) + (step.observedAt ? ' UTC' : ''))); item.append(label);
-    if (highlighted.includes(index)) item.append(node('p', 'Supporting relationship evidence', 'support-note'));
-    if (step.kind === 'gap') item.append(node('p', (step.reason === 'filtered-intermediates' ? 'Filtered gap: ' : 'Capture gap: ') + step.omitted + ' omitted · ' + step.reason + '. No relationship crosses this gap.', 'gap-card'));
-    else {
+    const label = node('div', null, 'step-heading'); label.append(node('span', String(index + 1).padStart(2, '0') + ' / ' + (step.kind === 'gap' ? 'Gap' : step.items.every((entry) => entry.evidence.kind === step.items[0]?.evidence.kind) ? stepLabels[step.items[0]?.evidence.kind] || 'Activity' : 'Activity')), node('span', date(step.observedAt, true) + (step.observedAt ? ' UTC' : ''))); item.append(label);
+    if (highlighted.includes(index)) item.append(node('p', 'Selected occurrence', 'support-note'));
+    if (step.kind === 'gap') {
+      item.append(node('p', step.reason === 'filtered-intermediates' ? count(step.omitted, 'record') + ' hidden by filters.' : 'Capture gap: ' + count(step.omitted, 'record') + ' lost. ' + (gapLabels[step.reason] || 'Unknown capture reason') + '.', 'gap-card'));
+      item.append(disclosure('Gap details', node('p', step.reason + ' · ' + (step.observedAt ?? 'No usable timestamp'))));
+    } else {
       const group = node('div', null, 'step-group');
       for (const observation of step.items) {
         const evidence = observation.evidence;
         const kind = evidence.kind === 'command-intent' ? 'request' : evidence.kind === 'wrapper-observed' ? 'wrapper' : evidence.outcome === 'success' ? 'read' : 'failure';
         const card = node('div', null, 'observation ' + kind);
-        card.append(node('strong', skillName(observation.skillKey)), node('p', kind === 'request' ? 'Request · ' + evidence.source : kind === 'wrapper' ? 'Wrapper · ' + evidence.wrapperSource : (kind === 'read' ? 'Successful read' : 'Read failure') + ' · ' + modelLabel(evidence.model)));
+        card.append(node('strong', skillName(observation.skillKey)), node('p', kind === 'request' ? 'Request · ' + (commandLabels[evidence.source] || evidence.source) : kind === 'wrapper' ? 'Wrapper · ' + (wrapperLabels[evidence.wrapperSource] || 'source unknown') : (kind === 'read' ? 'Successful read' : 'Read failure') + ' · ' + modelLabel(evidence.model)));
         group.append(card);
       }
       item.append(group);
       const audit = node('div', null, 'route-scope'); audit.append(node('p', 'Turn: ' + (step.turnId ?? 'Unknown') + ' · Leaf: ' + (step.leafId ?? 'Unknown'), 'small'));
-      for (const observation of step.items) audit.append(node('p', 'Record ' + observation.observationId + ' · sequence ' + observation.sequence + ' · ' + observation.observedAt + (observation.evidence.kind === 'command-intent' ? '' : ' · ' + observation.evidence.skill.canonicalPath) + (observation.evidence.kind === 'read-result' ? ' · tool call ' + observation.evidence.toolCallId : ''), 'footnote'));
+      for (const observation of step.items) audit.append(node('p', 'Record ' + observation.observationId + ' · sequence ' + observation.sequence + ' · ' + observation.observedAt + (observation.evidence.kind === 'command-intent' ? '' : ' · ' + observation.evidence.skill.canonicalPath) + (observation.evidence.kind === 'read-result' ? ' · tool call ' + observation.evidence.toolCallId : observation.evidence.kind === 'wrapper-observed' ? ' · ' + observation.evidence.wrapperSource : ''), 'footnote'));
       item.append(disclosure('Record details', audit));
     }
     timeline.append(item);
@@ -631,7 +661,6 @@ for (const id of ['from-filter', 'to-filter']) $(id).addEventListener('change', 
 for (const [id, key, render] of [['skill-search', 'skills', renderRanks], ['model-search', 'models', renderModels], ['catalog-search', 'catalog', renderCatalog], ['route-search', 'routes', renderPaths]]) $(id).addEventListener('input', () => { state.pages[key] = 0; if (state.report) render(); });
 $('model-measure').addEventListener('change', () => { if (state.report) renderModels(); });
 $('route-model').addEventListener('change', () => { state.pages.routes = 0; state.routeKey = null; renderPaths(); });
-$('overview-mako').addEventListener('click', focusMako); $('mako-focus').addEventListener('click', focusMako);
 $('browse-paths').addEventListener('click', () => showWorkspace('paths', true));
 $('clear-path-focus').addEventListener('click', () => { state.focus = { kind: 'all' }; state.pages.routes = 0; state.routeKey = null; $('route-search').value = ''; $('route-model').value = ''; renderPaths(); });
 loadDashboard();
