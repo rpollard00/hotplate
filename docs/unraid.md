@@ -21,6 +21,9 @@ It does not modify SSH configuration, accept new keys, or request a password. Th
 The appdata parent must exist. The appdata path itself must be absent for bootstrap.
 Existing unmarked directories are refused, even when empty. Canonical paths must not contain symlinks.
 Do not pre-create `/mnt/user/appdata/hotplate` or change ownership recursively.
+The appdata basename is the stable Docker container name (`hotplate` for this target).
+It must start with a letter or digit and contain only letters, digits, underscores, periods, or hyphens.
+A name occupied by anything except the exact journal-bound current container blocks deployment before mutation.
 
 ## Create private configuration once
 
@@ -106,6 +109,8 @@ The release manifest also records the source revision and controller checksum. C
 
 Apply disables the old restart policy, stops the old container, and refuses other writers.
 It archives the entire cold data directory, including SQLite sidecars, before disconnecting the old network attachment.
+After the durable `StartIntent` journal replacement, it removes the exact predecessor and verified stopped historical containers by immutable ID.
+Each removal uses nonforced `docker rm`, without volume removal. The replacement uses the stable appdata basename.
 The candidate starts with `restart=no`. Docker health and workstation requests to `/health` and `/api/dashboard` must both succeed.
 The workstation requests use the configured dashboard policy.
 Only an acknowledgment with the exact operation UUID and candidate ID enables `unless-stopped`.
@@ -155,6 +160,7 @@ The appdata layout is:
     image.tar
     data.tar
     data.tar.sha256
+    retirement.json           # Full stopped specifications and ownership evidence, hashed in the journal
     failure.json              # Caught failures only
 ```
 
@@ -163,8 +169,17 @@ Each state requires evidence for its stage. Intent records precede consequential
 Incomplete journals block apply after the lock disappears. Malformed journals, changed ownership, missing evidence, and checksum mismatches also block apply.
 A partial upload remains private and cannot load.
 
-Successful updates retain the previous container, image, private configuration, and cold backup.
-Old containers remain stopped, disconnected, and set to `restart=no`. The pipeline never prunes Docker or deletes a release.
+Successful updates leave one running container with the stable name. They retain images, operation journals, specification snapshots, private configuration, and cold backups.
+Existing UUID-named deployments and version-1 markers remain valid. Their next successful replacement removes verified stopped predecessors.
+
+Historical removal requires a private prior `Healthy` record in a successor operation's `before.json` and a matching `previous.json` specification.
+The controller verifies the installation, immutable ID, name, operation, runtime image, release, acknowledgment, secrets, and backup evidence.
+It checks historical eligibility before stopping the current service. Missing evidence, changed specifications, running containers, or uncertain restart policies block deployment.
+Labels or names alone never authorize removal.
+
+The controller snapshots retirement evidence and rechecks the full specification immediately before each removal.
+Retirement requires stopped, exited, disconnected containers with `restart=no`. Enumeration and removal failures stop deployment.
+The pipeline never force-removes containers, removes volumes, prunes Docker, or deletes a release.
 Monitor appdata and Docker storage. Review exact ownership before manual retention cleanup.
 
 ## Failure and manual recovery
@@ -178,6 +193,7 @@ The command still exits nonzero. Its result can report `Healthy` when the old re
 
 At or after `StartIntent`, a caught failure attempts to stop the independently verified candidate, even if evidence writes fail.
 If ownership cannot be verified or Docker operations fail, the candidate can remain running and requires manual inspection.
+The predecessor can already be removed at this stage. A removal failure leaves `RecoveryRequired`, even when the predecessor still exists.
 It never starts the old image or restores the database automatically.
 SIGKILL, machine loss, or an interrupted Docker operation can leave a candidate running. A journal does not prove that it stopped.
 
@@ -218,6 +234,9 @@ The fixture hides only its own controller containers from writer enumeration bec
 The application container never receives the Docker socket.
 
 The smoke covers bootstrap and a legacy version-1 marker with Basic/7345 and no explicit sysctl upgrading to public/80.
+Run-namespaced appdata basenames prevent collisions with other installations.
+Repeated updates must leave one stable-name container. Legacy stopped cleanup must retain snapshots, images, configuration, and backups.
+Name collisions, label-only containers, unowned mounts, running historical containers, changed specifications, and refused removals must fail closed.
 It verifies UID1000, Docker health, production probes without Authorization, anonymous dashboard reads, and denied anonymous ingestion.
 It also verifies Host/Origin and read-only guards, retained SQLite observations, cold backups, and unchanged old configuration.
 Open-enrollment coverage registers a temporary managed source, ingests metadata, restarts the UID1000/read-only container, verifies durable authorization/deduplication/data, then replaces it with closed enrollment and verifies exact retry while refusing new sources. Invalid enrollment policies cannot mutate a healthy service.

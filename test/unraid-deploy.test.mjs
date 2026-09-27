@@ -58,6 +58,17 @@ test("deploy-unraid acknowledgment binds the exact operation and candidate", asy
   await exchange(child, { command: "apply", operation }, null, id => { probes.push(id); });
   assert.deepEqual(probes, [candidate]);
 });
+test("deploy-unraid rejects retirement failure without acknowledging or probing a replacement", async () => {
+  const operation = randomUUID();
+  const child = spawn(process.execPath, ["-e", `
+    process.stdin.once('data', () => {
+      console.log(JSON.stringify({kind:'Result',state:'RecoveryRequired',operation:'${operation}'}));
+      process.exitCode=1; process.stdin.destroy();
+    });
+  `], { stdio: ["pipe", "pipe", "pipe"] });
+  await assert.rejects(exchange(child, { command: "apply", operation }, null, () => assert.fail("No candidate exists after refused retirement")));
+});
+
 test("deploy-unraid probes require healthy application payloads, not only HTTP 200", async t => {
   let health = { ok: true };
   let dashboard = { kind: "ready" };

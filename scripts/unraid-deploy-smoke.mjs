@@ -25,12 +25,20 @@ const dockerRoot = docker(["info", "--format", "{{.DockerRootDir}}"]).trim();
 const locks = join(directory, "locks");
 mkdirSync(locks, { mode: 0o700 });
 const controllerPath = join(directory, "controller.sh");
-writeFileSync(controllerPath, readFileSync(join(root, "scripts/unraid-controller.sh")), { mode: 0o600 });
+const controllerSource = readFileSync(join(root, "scripts/unraid-controller.sh"), "utf8");
+writeFileSync(controllerPath, controllerSource, { mode: 0o600 });
+const legacyControllerPath = join(directory, "legacy-controller.sh");
+const legacyController = controllerSource.replace('candidate_name=${appdata##*/}', 'candidate_name=hotplate-$installation-$(jq -r .operation <<< "$request")').replace('  docker rm "$id" >/dev/null', '  :');
+assert.notEqual(legacyController, controllerSource);
+writeFileSync(legacyControllerPath, legacyController, { mode: 0o600 });
 const controllerFile = join(directory, "Dockerfile");
 writeFileSync(controllerFile, `FROM node:24.19.0-bookworm-slim\nRUN apt-get update && apt-get install -y --no-install-recommends docker.io jq util-linux && rm -rf /var/lib/apt/lists/*\nCOPY docker-wrapper /usr/local/bin/docker\nCOPY tar-wrapper /usr/local/bin/tar\nCOPY cp-wrapper /usr/local/bin/cp\nRUN chmod 755 /usr/local/bin/docker /usr/local/bin/tar /usr/local/bin/cp\n`);
 writeFileSync(join(directory, "docker-wrapper"), `#!/bin/bash
 set -e
 if [[ $1 == ps ]]; then
+  if [[ \${HOTPLATE_TEST_FAILURE:-} == retirement-spec && -f $HOTPLATE_TEST_APPDATA/journal.json && $(jq -r .state "$HOTPLATE_TEST_APPDATA/journal.json") == StartIntent ]]; then
+    /usr/bin/docker update --cpu-shares 512 "$(jq -r .previous.id "$HOTPLATE_TEST_APPDATA/journal.json")" >/dev/null
+  fi
   if [[ \${HOTPLATE_TEST_FAILURE:-} == listing || ( \${HOTPLATE_TEST_FAILURE:-} == listing-recovery && -e ${directory}/listing-failed ) ]]; then exit 42; fi
   ids=$(/usr/bin/docker "$@")
   for container in $ids; do
@@ -44,6 +52,9 @@ if [[ \${HOTPLATE_TEST_FAILURE:-} == mount-order* && $1 == image && $2 == load ]
 fi
 if [[ \${HOTPLATE_TEST_FAILURE:-} == mount-order* && $1 == inspect && -e ${directory}/$HOTPLATE_TEST_OPERATION.mount-order ]]; then
   /usr/bin/docker "$@" | jq 'map(.Mounts |= reverse)'; exit 0
+fi
+if [[ \${HOTPLATE_TEST_FAILURE:-} == retirement-remove && $1 == rm ]]; then
+  printf '%s\\n' "$*" > ${directory}/retirement-remove.txt; exit 42
 fi
 if [[ \${HOTPLATE_TEST_FAILURE:-} == disconnect && $1 == network && $2 == disconnect ]]; then /usr/bin/docker "$@"; exit 1; fi
 if [[ \${HOTPLATE_TEST_FAILURE:-} == listing-recovery && $1 == network && $2 == disconnect ]]; then /usr/bin/docker "$@"; touch ${directory}/listing-failed; exit 1; fi
@@ -81,8 +92,8 @@ function controller(request, failure = "") {
     "--mount", `type=bind,source=${directory},target=${directory}`,
     "--mount", `type=bind,source=${locks},target=/run/hotplate-deploy`,
     "--mount", `type=bind,source=${socket.slice(7)},target=/var/run/docker.sock`,
-    "--env", `HOTPLATE_TEST_FAILURE=${failure}`, "--env", `HOTPLATE_TEST_CONTROLLER=${prefix}-controller-${request.operation}`, "--env", `HOTPLATE_TEST_OPERATION=${request.operation}`,
-    controllerImage, "bash", "-c", 'mkdir -p "$1"; exec bash -c "$(cat "$2")"', "smoke", dockerRoot, controllerPath], { stdio: ["pipe", "pipe", "pipe"] });
+    "--env", `HOTPLATE_TEST_APPDATA=${request.target.appdata}`, "--env", `HOTPLATE_TEST_FAILURE=${failure}`, "--env", `HOTPLATE_TEST_CONTROLLER=${prefix}-controller-${request.operation}`, "--env", `HOTPLATE_TEST_OPERATION=${request.operation}`,
+    controllerImage, "bash", "-c", 'mkdir -p "$1"; exec bash -c "$(cat "$2")"', "smoke", dockerRoot, failure === "legacy" ? legacyControllerPath : controllerPath], { stdio: ["pipe", "pipe", "pipe"] });
 }
 function helper(command, args = []) {
   return docker(["run", "--rm", "--mount", `type=bind,source=${directory},target=${directory}`, controllerImage, command, ...args]);
@@ -140,8 +151,17 @@ async function probe(target) {
 }
 async function apply(target, failure = "", acknowledge = () => probe(target), override = null) {
   const value = override ?? request(target);
+  if (failure === "legacy") value.release = { ...value.release, controllerSha256: hash(legacyController) };
   await exchange(controller(value, failure), value, archive, acknowledge);
   return value;
+}
+function replacementEvidence(target) {
+  const current = journal(target);
+  const containers = docker(["ps", "-aq", "--filter", `label=io.hotplate.installation=${target.installation}`]).trim().split(/\s+/).filter(Boolean).map(inspect);
+  const actual = { count: containers.length, name: inspect(current.candidate).Name };
+  const expected = { count: 1, name: `/${basename(target.appdata)}` };
+  console.log(JSON.stringify({ kind: "replacement-evidence", actual, expected }));
+  assert.deepEqual(actual, expected);
 }
 async function refusal(target, command = "plan") {
   const value = request(target, command);
@@ -162,6 +182,123 @@ try {
     async function expectRejection(label, operation) {
       try { await operation(); failures.push(`${label}: command incorrectly succeeded`); } catch {}
     }
+    const legacy = target("retirement-legacy", ip(26));
+    await apply(legacy, "legacy");
+    const historical = journal(legacy);
+    await apply(legacy, "legacy");
+    const predecessor = journal(legacy);
+    assert.equal(inspect(historical.candidate).State.Running, false);
+    assert.equal(inspect(historical.candidate).HostConfig.RestartPolicy.Name, "no");
+    const assertUntouched = async () => {
+      for (const command of ["plan", "apply"]) await refusal(legacy, command);
+      assert.deepEqual(journal(legacy), predecessor);
+      assert.equal(inspect(predecessor.candidate).State.Running, true);
+    };
+    const collision = docker(["create", "--name", basename(legacy.appdata), "--label", `io.hotplate.smoke=${id}`, "--network", "none", controllerImage, "true"]).trim();
+    await assertUntouched();
+    assert.equal(inspect(collision).State.Status, "created");
+    docker(["rm", collision]);
+    const bootstrapCollision = target("name.collision", ip(27));
+    const similarName = docker(["create", "--name", basename(bootstrapCollision.appdata).replace(".", "_"), "--label", `io.hotplate.smoke=${id}`, "--network", "none", controllerImage, "true"]).trim();
+    const availableName = request(bootstrapCollision, "plan");
+    await exchange(controller(availableName), availableName, null, () => assert.fail());
+    docker(["rm", similarName]);
+    const occupied = docker(["create", "--name", basename(bootstrapCollision.appdata), "--label", `io.hotplate.smoke=${id}`, "--network", "none", controllerImage, "true"]).trim();
+    for (const command of ["plan", "apply"]) await refusal(bootstrapCollision, command);
+    assert.throws(() => statSync(bootstrapCollision.appdata));
+    docker(["rm", occupied]);
+    for (const basename of ["_invalid", "-invalid"]) {
+      const invalidName = { ...target("invalid-name", ip(28)), appdata: join(directory, basename) };
+      for (const command of ["plan", "apply"]) await refusal(invalidName, command);
+      assert.throws(() => statSync(invalidName.appdata));
+    }
+    console.log(JSON.stringify({ kind: "retirement-refusal", checks: ["occupied name on bootstrap and legacy update", "invalid Docker name"], currentUnchanged: true }));
+    const labelOnly = docker(["create", "--label", `io.hotplate.smoke=${id}`, "--label", `io.hotplate.installation=${legacy.installation}`, "--network", "none", controllerImage, "true"]).trim();
+    await assertUntouched();
+    assert.equal(inspect(labelOnly).State.Status, "created");
+    docker(["rm", labelOnly]);
+    const unowned = docker(["create", "--label", `io.hotplate.smoke=${id}`, "--network", "none", "--mount", `type=bind,source=${legacy.appdata}/data,target=/foreign`, controllerImage, "sleep", "300"]).trim();
+    await assertUntouched();
+    docker(["start", unowned]);
+    await assertUntouched();
+    assert.equal(inspect(unowned).State.Running, true);
+    docker(["stop", "--time", "1", unowned]);
+    docker(["rm", unowned]);
+    docker(["update", "--restart", "always", historical.candidate]);
+    await assertUntouched();
+    docker(["update", "--restart", "no", historical.candidate]);
+    docker(["start", historical.candidate]);
+    await assertUntouched();
+    assert.equal(inspect(historical.candidate).State.Running, true);
+    docker(["stop", "--time", "15", historical.candidate]);
+    const unrecorded = docker(["create", "--label", `io.hotplate.smoke=${id}`, "--label", `io.hotplate.installation=${legacy.installation}`,
+      "--label", `io.hotplate.operation=${historical.operation}`, "--label", `io.hotplate.image=${historical.runtimeImageId}`,
+      "--restart", "no", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true", "--network", network,
+      "--mount", `type=bind,source=${legacy.appdata}/data,target=/data`,
+      "--mount", `type=bind,source=${legacy.appdata}/operations/${historical.operation}/aggregate.json,target=/run/secrets/hotplate.json,readonly`,
+      "--mount", `type=bind,source=${legacy.appdata}/operations/${historical.operation}/credentials.json,target=/run/secrets/hotplate-credentials.json,readonly`,
+      historical.runtimeImageId]).trim();
+    docker(["start", unrecorded]);
+    docker(["stop", "--time", "15", unrecorded]);
+    docker(["network", "disconnect", network, unrecorded]);
+    await assertUntouched();
+    assert.equal(inspect(unrecorded).State.Status, "exited");
+    docker(["rm", unrecorded]);
+    const historicalRelease = join(legacy.appdata, "operations", historical.operation, "release.json");
+    helper("chmod", ["644", historicalRelease]);
+    await assertUntouched();
+    helper("chmod", ["600", historicalRelease]);
+    console.log(JSON.stringify({ kind: "retirement-refusal", checks: ["label-only container", "matching labels and mounts without historical journal binding", "unowned stopped/running data mount", "historical restart policy", "running historical container", "nonprivate historical evidence"], currentUnchanged: true }));
+    await apply(legacy);
+    replacementEvidence(legacy);
+    const cleaned = journal(legacy);
+    const retirement = JSON.parse(helper("cat", [cleaned.retirement.path]));
+    assert.deepEqual(retirement.map(entry => entry.spec.Id).sort(), [historical.candidate, predecessor.candidate].sort());
+    assert.equal(helper("sha256sum", [cleaned.retirement.path]).split(" ")[0], cleaned.retirement.sha256);
+    for (const retained of [historical, predecessor]) {
+      assert.equal(helper("sha256sum", [retained.backup.path]).split(" ")[0], retained.backup.sha256);
+      assert.equal(inspect(cleaned.candidate).Image, retained.runtimeImageId);
+    }
+    await apply(legacy);
+    replacementEvidence(legacy);
+    console.log(JSON.stringify({ kind: "retirement-cleanup", removed: retirement.map(entry => entry.spec.Id), evidence: cleaned.retirement, retainedBackups: [historical.backup.path, predecessor.backup.path] }));
+    const changedSpec = target("retirement-changed-spec", ip(30));
+    await apply(changedSpec, "legacy");
+    const changedHistorical = journal(changedSpec);
+    await apply(changedSpec, "legacy");
+    const unchangedCurrent = journal(changedSpec);
+    docker(["update", "--cpu-shares", "512", changedHistorical.candidate]);
+    for (const command of ["plan", "apply"]) await refusal(changedSpec, command);
+    assert.deepEqual(journal(changedSpec), unchangedCurrent);
+    assert.equal(inspect(unchangedCurrent.candidate).State.Running, true);
+    assert.equal(inspect(changedHistorical.candidate).HostConfig.CpuShares, 512);
+    console.log(JSON.stringify({ kind: "retirement-refusal", checks: ["changed historical full specification"], currentUnchanged: true }));
+    const refusedRemoval = target("retirement-remove", ip(29));
+    await apply(refusedRemoval);
+    const old = journal(refusedRemoval);
+    await assert.rejects(apply(refusedRemoval, "retirement-remove"));
+    const failedRemoval = journal(refusedRemoval);
+    assert.equal(failedRemoval.state, "RecoveryRequired");
+    assert.equal(failedRemoval.evidence.state, "StartIntent");
+    assert.equal(failedRemoval.evidence.candidate, undefined);
+    assert.equal(inspect(old.candidate).State.Running, false);
+    assert.equal(inspect(old.candidate).HostConfig.RestartPolicy.Name, "no");
+    assert.deepEqual(inspect(old.candidate).NetworkSettings.Networks, {});
+    assert.equal(helper("cat", [join(directory, "retirement-remove.txt")]).trim(), `rm ${old.candidate}`);
+    assert.equal(helper("sha256sum", [failedRemoval.evidence.backup.path]).split(" ")[0], failedRemoval.evidence.backup.sha256);
+    await refusal(refusedRemoval);
+    console.log(JSON.stringify({ kind: "retirement-remove-refused", state: failedRemoval.state, predecessor: old.candidate, restart: "no", running: false, automaticRollback: false }));
+    const changedAfterIntent = target("retirement-spec", ip(31));
+    await apply(changedAfterIntent);
+    const beforeIntent = journal(changedAfterIntent);
+    await assert.rejects(apply(changedAfterIntent, "retirement-spec"));
+    const afterIntent = journal(changedAfterIntent);
+    assert.equal(afterIntent.state, "RecoveryRequired");
+    assert.equal(afterIntent.evidence.state, "StartIntent");
+    assert.equal(afterIntent.evidence.candidate, undefined);
+    assert.equal(inspect(beforeIntent.candidate).State.Running, false);
+    assert.equal(inspect(beforeIntent.candidate).HostConfig.CpuShares, 512);
+    console.log(JSON.stringify({ kind: "retirement-refusal", checks: ["full specification changed after StartIntent"], removed: false, automaticRollback: false }));
     const sysctl = target("sysctl-regression", ip(24));
     await expectRejection("sysctl", () => apply(sysctl, "sysctl"));
     const sysctlJournal = journal(sysctl);
@@ -305,10 +442,8 @@ try {
   await apply(primary, "mount-order");
   current = journal(primary);
   assert.notEqual(current.candidate, first);
-  const containers = docker(["ps", "-aq", "--filter", `label=io.hotplate.installation=${primary.installation}`]).trim().split(/\s+/).filter(Boolean).map(inspect);
-  const replacement = { count: containers.length, name: inspect(current.candidate).Name };
-  console.log(JSON.stringify({ kind: "replacement-evidence", actual: replacement, expected: { count: 1, name: `/${basename(primary.appdata)}` } }));
-  assert.deepEqual(replacement, { count: 1, name: `/${basename(primary.appdata)}` });
+  replacementEvidence(primary);
+  assert.throws(() => inspect(first));
   assert.equal(docker(["exec", current.candidate, "cat", "/data/persistence-proof"]).trim(), "retained");
   assert.match(helper("tar", ["-tf", current.backup.path]), /aggregate.sqlite/);
   assert.match(helper("tar", ["-tf", current.backup.path]), /persistence-proof/);
@@ -369,6 +504,7 @@ try {
   enrollmentPolicies.set(primary.installation, false);
   await apply(primary);
   current = journal(primary);
+  replacementEvidence(primary);
   await bridge(primary, `
     ${managedCheck(false, 2)}
     const refused=await fetch(origin+'/api/enroll',{method:'POST',headers:{'content-type':'application/json'},
@@ -412,6 +548,7 @@ try {
   await assert.rejects(exchange(controller(competing), competing, null, () => assert.fail()));
   releaseProbe();
   await active;
+  replacementEvidence(primary);
   checks.push("Competing controller is refused while acknowledgment retains the lock");
   await assert.rejects(apply(primary, "", () => { throw new Error("Probe unavailable"); }));
   current = journal(primary);
@@ -458,7 +595,10 @@ try {
 } finally {
   for (const installation of installations) {
     const ids = docker(["ps", "-aq", "--filter", `label=io.hotplate.installation=${installation}`]).trim().split(/\s+/).filter(Boolean);
-    if (ids.length) docker(["rm", "-f", ...ids]);
+    if (ids.length) {
+      console.log(JSON.stringify({ kind: "smoke-cleanup-inventory", installation, containers: ids.map(id => { const spec = inspect(id); return { id: spec.Id, name: spec.Name, running: spec.State.Running, restart: spec.HostConfig.RestartPolicy.Name }; }) }));
+      docker(["rm", "-f", ...ids]);
+    }
   }
   const helpers = docker(["ps", "-aq", "--filter", `label=io.hotplate.smoke=${id}`]).trim().split(/\s+/).filter(Boolean);
   if (helpers.length) docker(["rm", "-f", ...helpers]);

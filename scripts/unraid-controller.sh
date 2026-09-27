@@ -28,6 +28,8 @@ command=$(jq -r .command <<< "$request")
 target=$(jq -cS .target <<< "$request")
 installation=$(jq -r .installation <<< "$target")
 appdata=$(jq -r .appdata <<< "$target")
+candidate_name=${appdata##*/}
+[[ $candidate_name =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || refuse
 network=$(jq -r .network <<< "$target")
 address=$(jq -r .address <<< "$target")
 operation=$(jq -r .operation <<< "$request")
@@ -113,6 +115,11 @@ validate_journal() {
       private_file "$directory/previous.json" || refuse
       [[ $(hash "$directory/previous.json") == "$(jq -r .previous.specSha256 <<< "$evidence")" ]] || refuse
     fi
+    if jq -e 'has("retirement")' <<< "$evidence" >/dev/null; then
+      [[ $(jq -r .retirement.path <<< "$evidence") == "$directory/retirement.json" ]] || refuse
+      private_file "$directory/retirement.json" || refuse
+      [[ $(hash "$directory/retirement.json") == "$(jq -r .retirement.sha256 <<< "$evidence")" ]] || refuse
+    fi
     case $(jq -r .state <<< "$evidence") in
       BackupReady|StartIntent|Healthy)
         [[ $(jq -r .backup.path <<< "$evidence") == "$directory/data.tar" ]] || refuse
@@ -186,7 +193,7 @@ owned_spec() {
   local spec=$1 op image secret_dir
   op=$(jq -er '.Config.Labels["io.hotplate.operation"]' <<< "$spec")
   image=$(jq -er '.Config.Labels["io.hotplate.image"]' <<< "$spec")
-  [[ $op =~ ^[0-9a-f-]{36}$ && $image =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
+  [[ $op =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ && $image =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
   secret_dir=$appdata/operations/$op
   private_directory "$secret_dir" || return 1
   for file in aggregate.json credentials.json; do
@@ -228,6 +235,72 @@ no_writers() {
     done < <(jq -r '.Mounts[] | [.Source,.RW] | @tsv' <<< "$spec")
   done
 }
+immutable_spec() {
+  jq -cS '[.Id,.Name,.Image,.Path,.Args,.Config,(.HostConfig | del(.RestartPolicy)),(.Mounts | sort_by(.Destination))]' <<< "$1"
+}
+stopped_retirement() {
+  jq -e '.State.Status == "exited" and .State.Running == false and .State.Restarting == false and
+    .State.Paused == false and .State.Dead == false and .State.Pid == 0 and
+    .HostConfig.RestartPolicy == {Name:"no",MaximumRetryCount:0} and
+    .NetworkSettings.Networks == {}' <<< "$1" >/dev/null
+}
+retirement_spec() { jq -cS '.Mounts |= sort_by(.Destination)' <<< "$1"; }
+historical_proof() {
+  local spec=$1 before directory original op release_file backup_file before_hash previous_hash release_hash backup_hash
+  owned_spec "$spec" && stopped_retirement "$spec" || return 1
+  for directory in "$appdata"/operations/*; do
+    [[ ${directory##*/} =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || return 1
+    private_directory "$directory" && private_file "$directory/before.json" || return 1
+    before=$(jq -ce . "$directory/before.json") || return 1
+    [[ $(jq -r .candidate <<< "$before") == "$(jq -r .Id <<< "$spec")" ]] || continue
+    jq -e --arg installation "$installation" --argjson spec "$spec" '
+      .state == "Healthy" and .installation == $installation and .acknowledged == .candidate and
+      .candidate == $spec.Id and ("/" + .candidateName) == $spec.Name and
+      .operation == $spec.Config.Labels["io.hotplate.operation"] and
+      (.runtimeImageId // .release.imageId) == $spec.Image' <<< "$before" >/dev/null || return 1
+    private_file "$directory/previous.json" || return 1
+    original=$(jq -ce . "$directory/previous.json") || return 1
+    [[ $(immutable_spec "$original") == "$(immutable_spec "$spec")" ]] || return 1
+    op=$(jq -r .operation <<< "$before") || return 1
+    release_file=$appdata/operations/$op/release.json
+    backup_file=$appdata/operations/$op/data.tar
+    private_file "$release_file" && private_file "$backup_file" || return 1
+    [[ $(jq -cS . "$release_file") == "$(jq -cS .release <<< "$before")" ]] || return 1
+    [[ $(jq -r .backup.path <<< "$before") == "$backup_file" ]] || return 1
+    backup_hash=$(hash "$backup_file") || return 1
+    [[ $backup_hash == "$(jq -r .backup.sha256 <<< "$before")" ]] || return 1
+    before_hash=$(hash "$directory/before.json") || return 1
+    previous_hash=$(hash "$directory/previous.json") || return 1
+    release_hash=$(hash "$release_file") || return 1
+    jq -cn --arg beforePath "$directory/before.json" --arg beforeSha256 "$before_hash" --argjson before "$before" \
+      --arg previousPath "$directory/previous.json" --arg previousSha256 "$previous_hash" --argjson previous "$original" \
+      --arg releasePath "$release_file" --arg releaseSha256 "$release_hash" --arg backupPath "$backup_file" --arg backupSha256 "$backup_hash" \
+      '{beforePath:$beforePath,beforeSha256:$beforeSha256,before:$before,previousPath:$previousPath,previousSha256:$previousSha256,previous:$previous,releasePath:$releasePath,releaseSha256:$releaseSha256,backupPath:$backupPath,backupSha256:$backupSha256}' || return 1
+    return 0
+  done
+  return 1
+}
+name_available() {
+  local ids id spec
+  ids=$(docker ps -aq --no-trunc --filter "name=^/${candidate_name//./\\.}$") || return 1
+  for id in $ids; do
+    spec=$(inspect_container "$id") || return 1
+    [[ $(jq -r .Id <<< "$spec") == "$current" && $(jq -r .Name <<< "$spec") == "/$candidate_name" ]] || return 1
+  done
+}
+historical_inventory() {
+  local ids id spec proof inventory='[]'
+  ids=$(docker ps -aq --no-trunc --filter "label=io.hotplate.installation=$installation") || return 1
+  for id in $ids; do
+    [[ $id != "$current" ]] || continue
+    spec=$(inspect_container "$id") || return 1
+    [[ $(jq -r .Id <<< "$spec") == "$id" ]] || return 1
+    spec=$(retirement_spec "$spec") || return 1
+    proof=$(historical_proof "$spec") || return 1
+    inventory=$(jq -c --argjson spec "$spec" --argjson proof "$proof" '. + [{spec:$spec,proof:$proof}]' <<< "$inventory") || return 1
+  done
+  jq -cS 'sort_by(.spec.Id)' <<< "$inventory"
+}
 preflight() {
   local spec
   if [[ -n $current ]]; then
@@ -242,6 +315,8 @@ preflight() {
     jq -e --argjson desired "$credentials" 'del(.dashboard) == ($desired | del(.dashboard))' "$old_secrets/credentials.json" >/dev/null || refuse
   fi
   no_writers "$current" || refuse
+  name_available || refuse
+  historical_retirements=$(historical_inventory) || refuse
   network_info=$(docker network inspect "$network")
   [[ $(jq -r '.[0].Id' <<< "$network_info") == "$network_id" ]] || refuse
   jq -e --arg address "$address" --arg current "$current" '.[0].Containers // {} | to_entries | all(.[]; (.value.IPv4Address | split("/")[0]) != $address or .key == $current)' <<< "$network_info" >/dev/null || refuse
@@ -323,7 +398,7 @@ failed() {
     StartIntent|Healthy|Unknown)
       candidate=$known_candidate
       if [[ -z $candidate && -n ${candidate_name:-} ]]; then
-        candidate=$(docker ps -aq --filter "name=^/${candidate_name}$") || candidate=
+        candidate=$(docker ps -aq --filter "name=^/${candidate_name//./\\.}$") || candidate=
       fi
       if [[ -n $candidate ]]; then
         spec=$(inspect_container "$candidate")
@@ -377,8 +452,40 @@ printf '%s  data.tar\n' "$backup_hash" > "$opdir/data.tar.sha256"
 (cd "$opdir" && sha256sum -c data.tar.sha256 >/dev/null)
 jq --arg path "$opdir/data.tar" --arg sha256 "$backup_hash" '.state="BackupReady" | .backup={path:$path,sha256:$sha256}' "$journal" | atomic "$journal"
 if [[ -n $current ]]; then docker network disconnect "$network_id" "$current"; fi
-candidate_name=hotplate-$installation-$operation
-jq --arg name "$candidate_name" '.state="StartIntent" | .candidateName=$name' "$journal" | atomic "$journal"
+[[ $(historical_inventory) == "$historical_retirements" ]]
+retirements=$historical_retirements
+if [[ -n $current ]]; then
+  spec=$(retirement_spec "$(inspect_container "$current")")
+  owned_spec "$spec"
+  stopped_retirement "$spec"
+  [[ $(immutable_spec "$spec") == "$(immutable_spec "$(cat "$opdir/previous.json")")" ]]
+  [[ $(hash "$opdir/previous.json") == "$(jq -r .previous.specSha256 "$journal")" ]]
+  retirements=$(jq -c --argjson spec "$spec" --argjson previous "$previous" '. + [{spec:$spec,proof:$previous}]' <<< "$retirements")
+fi
+printf '%s\n' "$retirements" | atomic "$opdir/retirement.json"
+jq --arg name "$candidate_name" --arg path "$opdir/retirement.json" --arg sha256 "$(hash "$opdir/retirement.json")" \
+  '.state="StartIntent" | .candidateName=$name | .retirement={path:$path,sha256:$sha256}' "$journal" | atomic "$journal"
+no_writers ''
+name_available
+retirement_entries=$(jq -c '.[]' "$opdir/retirement.json")
+while IFS= read -r retired; do
+  [[ -n $retired ]] || continue
+  private_file "$opdir/retirement.json"
+  [[ $(hash "$opdir/retirement.json") == "$(jq -r .retirement.sha256 "$journal")" ]]
+  id=$(jq -r .spec.Id <<< "$retired")
+  [[ $id =~ ^[0-9a-f]{64}$ ]]
+  spec=$(jq -cS .spec <<< "$retired")
+  if [[ $id == "$current" ]]; then
+    [[ $(hash "$opdir/previous.json") == "$(jq -r .proof.specSha256 <<< "$retired")" ]]
+  else
+    [[ $(historical_proof "$spec" | jq -cS .) == "$(jq -cS .proof <<< "$retired")" ]]
+  fi
+  spec=$(retirement_spec "$(inspect_container "$id")")
+  owned_spec "$spec"
+  stopped_retirement "$spec"
+  [[ $spec == "$(jq -cS .spec <<< "$retired")" ]]
+  docker rm "$id" >/dev/null
+done <<< "$retirement_entries"
 candidate=$(docker create --name "$candidate_name" --label "io.hotplate.installation=$installation" --label "io.hotplate.operation=$operation" --label "io.hotplate.image=$image_id" \
   --restart no --read-only --sysctl net.ipv4.ip_unprivileged_port_start=0 --cap-drop ALL --security-opt no-new-privileges:true --stop-timeout 15 \
   --network "$network_id" --ip "$address" \
