@@ -284,8 +284,8 @@ unchanged_old() {
   local spec original normalized
   spec=$(inspect_container "$current") || return 1
   owned_spec "$spec" || return 1
-  original=$(jq -cS '[.Id,.Image,.Config,(.HostConfig | del(.RestartPolicy)),.Mounts]' "$opdir/previous.json")
-  normalized=$(jq -cS '[.Id,.Image,.Config,(.HostConfig | del(.RestartPolicy)),.Mounts]' <<< "$spec")
+  original=$(jq -cS '[.Id,.Image,.Config,(.HostConfig | del(.RestartPolicy)),(.Mounts | sort_by(.Destination))]' "$opdir/previous.json")
+  normalized=$(jq -cS '[.Id,.Image,.Config,(.HostConfig | del(.RestartPolicy)),(.Mounts | sort_by(.Destination))]' <<< "$spec")
   [[ $original == "$normalized" ]] || return 1
   if ! attached "$spec"; then
     [[ $(jq -c '.NetworkSettings.Networks' <<< "$spec") == '{}' ]] || return 1
@@ -362,7 +362,7 @@ if [[ -n $current ]]; then
   spec=$(inspect_container "$current")
   owned_spec "$spec"
   attached "$spec"
-  [[ $(jq -cS '[.Id,.Image,.Config,.HostConfig,.Mounts]' <<< "$spec") == "$(jq -cS '[.Id,.Image,.Config,.HostConfig,.Mounts]' "$opdir/previous.json")" ]]
+  [[ $(jq -cS '[.Id,.Image,.Config,.HostConfig,(.Mounts | sort_by(.Destination))]' <<< "$spec") == "$(jq -cS '[.Id,.Image,.Config,.HostConfig,(.Mounts | sort_by(.Destination))]' "$opdir/previous.json")" ]]
   transition StopIntent
   docker update --restart no "$current" >/dev/null
   docker stop -t 15 "$current" >/dev/null
