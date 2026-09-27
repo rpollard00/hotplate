@@ -13,6 +13,15 @@ The reason for an observation: command intent, observed wrapper, read result, ca
 **Skill path**:
 The recorded sequence of skill requests, wrappers, and reads within one run. A skill path does not prove a dependency or a causal relationship.
 
+**Exploration selection**:
+A skill name, a UTC interval, or both within the selected dashboard scope. It identifies skill paths with a matching successful read but retains their other recorded steps.
+
+**Read-bearing path**:
+A skill path with at least one recorded successful read in the selected interval. Repeated reads of one skill in that path count as one path when comparing skill shares.
+
+**Model in selection**:
+A model attributed to a successful read that matches the selected skill and UTC interval. Its read count includes repeats; its path count counts each run once. Unknown models remain separate.
+
 **Unused catalog entry**:
 A catalog entry with no matching successful read or wrapper in the selected view. It is not proof of a missed opportunity.
 _Avoid_: Missed skill, ignored skill

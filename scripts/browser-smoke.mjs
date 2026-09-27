@@ -88,7 +88,7 @@ export async function aggregateBrowserSmoke({ url, username, password, machines,
     await until(ready);
     assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#machine-filter option"), option => option.value).filter(Boolean)'), machines);
     assert.ok((await evaluate('document.getElementById("skill-table").textContent')).includes("<script>synthetic</script>"));
-    await evaluate('document.querySelector("#skill-table button.link").click()');
+    await evaluate('document.querySelector("[data-workspace=models]").click(); document.querySelector("#model-matrix tbody tr button.link").click()');
     const identities = await evaluate('Array.from(document.querySelectorAll("#skill-detail [data-machine]"), item => item.dataset.machine)');
     assert.deepEqual([...new Set(identities)].sort(), [...machines].sort());
     await evaluate('document.querySelector("[data-workspace=paths]").click()');
@@ -102,7 +102,7 @@ export async function aggregateBrowserSmoke({ url, username, password, machines,
     for (const machine of machines) {
       await evaluate(`document.getElementById("machine-filter").value = ${JSON.stringify(machine)}; document.getElementById("machine-filter").dispatchEvent(new Event("change"));`);
       await until(ready);
-      await evaluate('document.querySelector("#skill-table button.link").click()');
+      await evaluate('document.querySelector("[data-workspace=models]").click(); document.querySelector("#model-matrix tbody tr button.link").click()');
       const rows = await evaluate('Array.from(document.querySelectorAll("#skill-detail [data-machine]"), item => item.dataset.machine)');
       assert.ok(rows.length > 0);
       assert.ok(rows.every(value => value === machine), "Skill identity details stay machine-scoped");

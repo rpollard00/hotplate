@@ -101,6 +101,8 @@ The dashboard has machine, project, source-of-command, model, and time filters.
 Project and model choices respect machine scope. Machine choices remain unfiltered so the browser can switch machines.
 Changing machines clears project and model selections before fetching new data.
 
+Overview exploration derives read-bearing path selections and comparisons from the current filtered report in browser memory. It does not persist the selection or request new data. A chosen skill and UTC interval select complete run paths; linked model counts include only matching successful reads, and model path navigation requires a matching read by that model. Comparison shares count each read-bearing path once per skill. A prior interval outside the loaded scope is unavailable, not a recorded zero.
+
 ## Authorization and deployment
 
 The local listener remains loopback-only with Host/Origin checks and no network credentials.

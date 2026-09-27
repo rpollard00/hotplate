@@ -32,6 +32,7 @@ try {
   let largePayload;
   let mixedPayload;
   let diagnosticPayload;
+  let repeatedPayload;
   const comparisonModel = payload.report.models[1].model;
   const opened = openHotplateReadStore({ databasePath: rich.databasePath });
   assert.equal(opened.kind, "ready");
@@ -75,6 +76,23 @@ try {
     ] };
     const diagnosticChains = { runs: [diagnosticRun] };
     diagnosticPayload = { ...payload, report: buildDashboardReport({ filter: {}, skills, chains: diagnosticChains }), chains: diagnosticChains };
+    const reads = observationSteps.flatMap(step => step.items).filter(item => item.evidence.kind === 'read-result' && item.evidence.outcome === 'success');
+    const makoRead = reads.find(item => item.evidence.skill.name === 'mako');
+    const howRead = reads.find(item => item.evidence.skill.name === 'how');
+    assert.ok(makoRead && howRead);
+    let serial = 0;
+    const controlledStep = (items, at) => ({ kind: 'observations', observedAt: at, turnId: 'controlled-turn', leafId: 'controlled-leaf', items: items.map(item => ({
+      ...item, observationId: 'controlled-' + ++serial, sequence: serial, observedAt: at,
+      evidence: { ...item.evidence, toolCallId: 'controlled-tool-' + serial },
+    })) });
+    const currentDay = '2025-02-21T10:00:00.000Z';
+    const previousDay = '2025-02-20T10:00:00.000Z';
+    const repeatedChains = { runs: [
+      { ...makoRun, segmentId: 'current-repeated', steps: [controlledStep([makoRead, makoRead, howRead], currentDay)] },
+      { ...makoRun, segmentId: 'current-other', steps: [controlledStep([howRead], currentDay)] },
+      { ...makoRun, segmentId: 'previous', steps: [controlledStep([makoRead], previousDay)] },
+    ] };
+    repeatedPayload = { ...payload, report: buildDashboardReport({ filter: {}, skills, chains: repeatedChains }), chains: repeatedChains };
   } finally { await opened.store.close(); }
 
   await withBrowser(async ({ command, evaluate, until, screenshot, errors }) => {
@@ -131,6 +149,88 @@ try {
     await noOverflow();
     await screenshot(join(directory, "overview-desktop.png"));
 
+    const exploreSkill = await evaluate('document.querySelector("#skill-table button.link").textContent');
+    const matching = payload.report.routes.filter(route => route.steps.some(step => step.kind === 'observations' && step.items.some(item => item.evidence.kind === 'read-result' && item.evidence.outcome === 'success' && item.evidence.skill.name === exploreSkill)));
+    await click('#skill-table button.link');
+    assert.equal(await evaluate('document.activeElement.id'), 'explorer-panel', 'Selection moves keyboard focus to its details');
+    assert.equal(await evaluate('document.getElementById("models-workspace").hidden'), true, 'Ranked skill opens the linked explorer');
+    assert.equal(await evaluate('document.getElementById("explorer-panel").hidden'), false);
+    assert.equal(await evaluate('document.querySelector("#explore-totals strong").textContent'), String(matching.length));
+    assert.match(await evaluate('document.getElementById("explore-comparison").textContent'), /Recent 7 days vs previous period/);
+    const bins = payload.report.activity.bins;
+    const recentStart = bins.at(-7).startAt;
+    const previousStart = new Date(Date.parse(recentStart) - 7 * 86400000).toISOString();
+    const readBearingPaths = (from, to) => payload.report.routes.filter(route => route.steps.some(step => step.kind === 'observations' && step.items.some(item => item.evidence.kind === 'read-result' && item.evidence.outcome === 'success' && Date.parse(item.observedAt) >= Date.parse(from) && Date.parse(item.observedAt) < Date.parse(to)))).length;
+    assert.match(await evaluate('document.getElementById("explore-comparison").textContent'), new RegExp(readBearingPaths(recentStart, bins.at(-1).endAt) + ' paths'));
+    assert.match(await evaluate('document.getElementById("explore-comparison").textContent'), new RegExp(readBearingPaths(previousStart, recentStart) + ' paths'));
+    await click('#explore-models');
+    assert.equal(await evaluate('document.querySelector("#skill-detail h2").textContent'), exploreSkill, 'Exploration links to existing model detail');
+    await click('[data-workspace=overview]');
+    await click('#explore-comparison .section-heading button');
+    assert.equal(await evaluate('document.querySelectorAll(".activity-hit[data-selected=true]").length'), 7);
+    assert.equal(await evaluate('document.getElementById("skills-heading").textContent'), 'Skills in selection');
+    const intervalCounts = new Map();
+    for (const route of matching) {
+      if (!route.steps.some(step => step.kind === 'observations' && step.items.some(item => item.evidence.kind === 'read-result' && item.evidence.outcome === 'success' && item.evidence.skill.name === exploreSkill && Date.parse(item.observedAt) >= Date.parse(recentStart)))) continue;
+      for (const step of route.steps) if (step.kind === 'observations') for (const item of step.items) {
+        if (item.evidence.kind !== 'read-result' || item.evidence.outcome !== 'success' || Date.parse(item.observedAt) < Date.parse(recentStart)) continue;
+        const name = item.evidence.skill.name; intervalCounts.set(name, (intervalCounts.get(name) || 0) + 1);
+      }
+    }
+    const expectedRanks = [...intervalCounts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 8);
+    assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".rank-row"), row => [row.querySelector("button").textContent, Number(row.querySelector("strong").textContent)])'), expectedRanks, 'Ranks reflect the matching paths and interval');
+    assert.equal(await evaluate('document.querySelector("#explore-chips").textContent.includes("UTC:")'), true);
+    const expectedModels = new Map();
+    for (const route of matching) for (const step of route.steps) if (step.kind === 'observations') for (const item of step.items) {
+      if (item.evidence.kind !== 'read-result' || item.evidence.outcome !== 'success' || item.evidence.skill.name !== exploreSkill || Date.parse(item.observedAt) < Date.parse(recentStart)) continue;
+      const model = item.evidence.model; const name = model ? model.provider + ' / ' + model.id : 'Unknown model';
+      const cell = expectedModels.get(name) || { name, reads: 0, paths: new Set() };
+      cell.reads += 1; cell.paths.add(route.key); expectedModels.set(name, cell);
+    }
+    const modelRows = [...expectedModels.values()].sort((a, b) => b.reads - a.reads || a.name.localeCompare(b.name));
+    assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#explore-model-list > button"), item => [item.firstElementChild.textContent, Number(item.querySelector("strong").textContent.split(" ")[0]), Number(item.querySelector("small").textContent.split(" ")[0])])'), modelRows.slice(0, 5).map(row => [row.name, row.reads, row.paths.size]), 'Model counts follow the selected skill and dates');
+    await click('#explore-model-list > button');
+    assert.equal(await evaluate('document.getElementById("route-count").textContent'), modelRows[0].paths.size + ' paths', 'Model row opens paths with the matching read, not any co-read');
+    assert.equal(await evaluate('document.querySelector("#route-model option:checked").textContent'), modelRows[0].name);
+    assert.ok(await evaluate(`Array.from(document.querySelectorAll(".observation.matching")).some(item => item.textContent.includes(${JSON.stringify(modelRows[0].name)}))`), 'Model-specific matching read is highlighted');
+    assert.ok(await evaluate(`Array.from(document.querySelectorAll(".observation.matching")).every(item => item.textContent.includes(${JSON.stringify(modelRows[0].name)}))`), 'Other model reads do not receive the selection highlight');
+    await click('#back-to-explorer');
+    await click('#explore-paths .explore-path');
+    assert.equal(await evaluate('document.getElementById("path-focus-label").textContent'), 'Paths in exploration');
+    assert.ok(await evaluate('document.querySelectorAll(".observation.matching").length > 0'), 'Selected reads are marked in the full path');
+    const exploredKey = await evaluate('document.getElementById("chain-view").dataset.routeKey');
+    const explored = payload.report.routes.find(route => route.key === exploredKey);
+    assert.equal(await evaluate('document.querySelectorAll("#chain-view .timeline-step").length'), explored.steps.length);
+    await click('#back-to-explorer');
+    assert.equal(await evaluate('document.getElementById("explorer-panel").hidden'), false);
+    assert.equal(await evaluate('document.querySelectorAll(".activity-hit[data-selected=true]").length'), 7);
+    await noOverflow();
+    await screenshot(join(directory, 'explorer-desktop.png'));
+    await click('#clear-explorer');
+    assert.equal(await evaluate('document.getElementById("explorer-panel").hidden'), true);
+    assert.equal(await evaluate('document.activeElement.id'), 'activity-heading');
+    await click('[data-workspace=paths]');
+    assert.equal(await evaluate('document.getElementById("path-focus-label").textContent'), 'All session paths', 'Clearing exploration clears its path focus');
+    assert.equal(await evaluate('document.getElementById("back-to-explorer").hidden'), true);
+    await click('[data-workspace=overview]');
+
+    await evaluate('document.querySelector("#activity-chart svg").scrollIntoView({block:"center"})');
+    const chartPoints = await evaluate('Array.from(document.querySelectorAll(".activity-hit"), hit => { const r=hit.getBoundingClientRect(); return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}; })');
+    for (const [type, point] of [['mousePressed', chartPoints[14]], ['mouseMoved', chartPoints[17]], ['mouseReleased', chartPoints[17]]]) {
+      await command('Input.dispatchMouseEvent', { type, ...point, button: 'left', clickCount: 1 });
+    }
+    assert.equal(await evaluate('document.querySelectorAll(".activity-hit[data-selected=true]").length'), 4, 'Pointer drag selects complete UTC bins');
+    assert.match(await evaluate('document.getElementById("explore-chips").textContent'), /UTC:/);
+    await evaluate('document.querySelectorAll(".activity-hit")[18].focus()');
+    await enter();
+    assert.equal(await evaluate('document.querySelectorAll(".activity-hit[data-selected=true]").length'), 1, 'Keyboard activates the focused bar');
+    assert.ok(await evaluate('getComputedStyle(document.activeElement).stroke !== "none"'), 'Focused chart bar has visible stroke');
+    await click('#activity-chart summary');
+    await click('#activity-chart .activity-choice');
+    assert.match(await evaluate('document.getElementById("explore-comparison").textContent'), /outside the current report/, 'The first date has no loaded baseline');
+    await click('#clear-explorer');
+    await click('#activity-chart summary');
+
     await evaluate('document.querySelector("[data-workspace=models]").focus()');
     assert.equal(await evaluate('document.activeElement.dataset.workspace'), "models");
     await command("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
@@ -163,8 +263,9 @@ try {
     await click('[data-workspace=overview]');
     const selectedSkill = await evaluate('document.querySelector("#skill-table button.link").textContent');
     await click('#skill-table button.link');
-    await click('#skill-detail > .section-heading button');
-    assert.equal(await evaluate('document.getElementById("path-focus-label").textContent'), 'Paths containing ' + selectedSkill);
+    assert.match(await evaluate('document.getElementById("explore-chips").textContent'), /Skill:/);
+    await click('#explore-all-paths');
+    assert.equal(await evaluate('document.getElementById("path-focus-label").textContent'), 'Paths in exploration');
     assert.ok(await evaluate('document.querySelectorAll(".timeline-step").length > 1'));
     const selectedRouteKey = await evaluate('document.getElementById("chain-view").dataset.routeKey');
     const selectedRoute = payload.report.routes.find(route => route.key === selectedRouteKey);
@@ -275,6 +376,25 @@ try {
     await click('[data-workspace=overview]');
     await noOverflow();
     await screenshot(join(directory, "overview-mobile.png"));
+    await command('Emulation.setTouchEmulationEnabled', { enabled: true });
+    await evaluate('document.querySelector("#activity-chart svg").scrollIntoView({block:"center"})');
+    const mobilePoints = await evaluate('Array.from(document.querySelectorAll(".activity-hit"), hit => { const r=hit.getBoundingClientRect(); return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}; })');
+    await command('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ ...mobilePoints[14], id: 0 }] });
+    await command('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ ...mobilePoints[16], id: 0 }] });
+    await command('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    assert.equal(await evaluate('document.querySelectorAll(".activity-hit[data-selected=true]").length'), 3, 'Touch drag selects a range');
+    await click('#clear-explorer');
+    await command('Emulation.setTouchEmulationEnabled', { enabled: false });
+    await click('#skill-table button.link');
+    await noOverflow();
+    await screenshot(join(directory, 'explorer-mobile.png'));
+    await command('Emulation.setDeviceMetricsOverride', { width: 320, height: 780, deviceScaleFactor: 1, mobile: true });
+    await noOverflow();
+    await command('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+    await click('#explore-comparison .section-heading button');
+    await noOverflow();
+    await screenshot(join(directory, 'comparison-mobile.png'));
+    await click('#clear-explorer');
     await click('[data-workspace=models]');
     await noOverflow();
     await screenshot(join(directory, "models-mobile.png"));
@@ -288,8 +408,33 @@ try {
     await screenshot(join(directory, "paths-mobile.png"));
 
     await evaluate('(async () => { window.smokeFetch = window.fetch; window.smokePayload = await window.fetch("/api/dashboard").then(response => response.json()); })()');
+    await evaluate(`window.fetch = async () => new Response(JSON.stringify(${JSON.stringify(repeatedPayload)})); document.getElementById('refresh-data').click();`);
+    await until(ready);
+    await click('[data-workspace=overview]');
+    await evaluate('Array.from(document.querySelectorAll("#skill-table button.link")).find(item => item.textContent === "mako").click()');
+    await click('#activity-chart summary');
+    await evaluate('document.querySelectorAll("#activity-chart .activity-choice")[1].click()');
+    assert.equal(await evaluate('document.querySelector("#explore-totals").textContent'), '1matching paths2successful reads', 'Repeat reads do not add paths');
+    const controlledComparison = await evaluate('document.getElementById("explore-comparison").textContent');
+    assert.match(controlledComparison, /2 paths · 4 reads/);
+    assert.match(controlledComparison, /1 path · 1 read/);
+    const makoShares = await evaluate('Array.from(document.querySelectorAll("#explore-comparison .compare-row")).find(row => row.querySelector("button")?.textContent === "mako").textContent');
+    assert.match(makoShares, /50%1 path/);
+    assert.match(makoShares, /100%1 path/, 'Share counts the path once, unlike raw reads');
+    assert.equal(await evaluate('document.querySelector("#explore-model-list strong").textContent'), '2 reads', 'Model counts retain repeated reads');
+    assert.equal(await evaluate('document.querySelector("#explore-model-list small").textContent'), '1 path', 'Model path counts do not duplicate a run');
+    await noOverflow();
+    await screenshot(join(directory, 'comparison-repeated-mobile.png'));
+    await evaluate('window.fetch = window.smokeFetch; document.getElementById("refresh-data").click()');
+    await until(ready);
     await evaluate(`window.fetch = async () => new Response(JSON.stringify(${JSON.stringify(mixedPayload)})); document.getElementById('refresh-data').click();`);
     await until(ready);
+    await click('[data-workspace=overview]');
+    await evaluate('Array.from(document.querySelectorAll("#skill-table button.link")).find(item => item.textContent === "mako").click()');
+    assert.match(await evaluate('document.getElementById("explore-chips").textContent'), /Skill: mako/);
+    await click('#explore-all-paths');
+    await change('route-model', String(payload.report.models.findIndex(column => JSON.stringify(column.model) === JSON.stringify(comparisonModel))));
+    assert.equal(await evaluate('document.getElementById("route-count").textContent'), '0 paths', 'Model and explored skill must be the same read');
     await click('[data-workspace=models]');
     await change('model-measure', 'successfulReads');
     const zeroLabel = `mako, ${comparisonModel.provider} / ${comparisonModel.id}: 0 successful reads`;
@@ -356,7 +501,8 @@ try {
     await click('#skill-table button.link');
     await noOverflow();
     assert.equal(await evaluate('document.querySelectorAll("#dashboard-content img").length'), 0);
-    await click('#skill-detail > .section-heading button');
+    assert.ok((await evaluate('document.getElementById("explorer-panel").textContent')).includes('<img src=x onerror=alert(1)>'));
+    await click('#explore-all-paths');
     await noOverflow();
     await screenshot(join(directory, "long-label-mobile.png"));
     await evaluate('window.fetch = () => new Promise(resolve => { window.smokeResolve = resolve; }); document.getElementById("refresh-data").click();');
