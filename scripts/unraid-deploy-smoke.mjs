@@ -38,6 +38,12 @@ if [[ $1 == ps ]]; then
   done
   exit 0
 fi
+if [[ \${HOTPLATE_TEST_FAILURE:-} == mount-order* && $1 == image && $2 == load ]]; then
+  /usr/bin/docker "$@"; touch "${directory}/$HOTPLATE_TEST_OPERATION.mount-order"; exit 0
+fi
+if [[ \${HOTPLATE_TEST_FAILURE:-} == mount-order* && $1 == inspect && -e ${directory}/$HOTPLATE_TEST_OPERATION.mount-order ]]; then
+  /usr/bin/docker "$@" | jq 'map(.Mounts |= reverse)'; exit 0
+fi
 if [[ \${HOTPLATE_TEST_FAILURE:-} == disconnect && $1 == network && $2 == disconnect ]]; then /usr/bin/docker "$@"; exit 1; fi
 if [[ \${HOTPLATE_TEST_FAILURE:-} == listing-recovery && $1 == network && $2 == disconnect ]]; then /usr/bin/docker "$@"; touch ${directory}/listing-failed; exit 1; fi
 if [[ \${HOTPLATE_TEST_FAILURE:-} == stop-intent && $1 == update && $2 == --restart && $3 == no ]]; then /usr/bin/docker "$@"; /usr/bin/docker kill "$HOTPLATE_TEST_CONTROLLER"; exit 1; fi
@@ -52,7 +58,7 @@ fi
 exec /usr/bin/docker "$@"
 `);
 writeFileSync(join(directory, "tar-wrapper"), `#!/bin/bash
-if [[ \${HOTPLATE_TEST_FAILURE:-} == backup && $1 == -C ]]; then exit 1; fi
+if [[ ( \${HOTPLATE_TEST_FAILURE:-} == backup || \${HOTPLATE_TEST_FAILURE:-} == mount-order-backup ) && $1 == -C ]]; then exit 1; fi
 exec /usr/bin/tar "$@"
 `);
 writeFileSync(join(directory, "cp-wrapper"), `#!/bin/bash
@@ -259,12 +265,12 @@ try {
     changed.secrets[key] = Buffer.from(JSON.stringify(value)).toString("base64");
     await assert.rejects(exchange(controller(changed), changed, null, () => assert.fail()));
   }
-  await assert.rejects(apply(primary, "backup"));
+  await assert.rejects(apply(primary, "mount-order-backup"));
   assert.equal(journal(primary).candidate, first);
   await probe({ ...primary, origin: legacyOrigin });
   checks.push("Legacy marker tampering and immutable configuration changes refused; pre-start recovery retains Basic port7345");
   docker(["exec", first, "node", "-e", "require('node:fs').writeFileSync('/data/persistence-proof','retained')"]);
-  await apply(primary);
+  await apply(primary, "mount-order");
   current = journal(primary);
   assert.notEqual(current.candidate, first);
   assert.equal(inspect(first).State.Running, false);
