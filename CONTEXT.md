@@ -10,6 +10,19 @@ A metadata-only fact from a live Pi session. It contains no raw prompt, full too
 **Evidence**:
 The reason for an observation: command intent, observed wrapper, read result, catalog snapshot, or capture gap.
 
+**Skill path**:
+The recorded sequence of skill requests, wrappers, and reads within one run. A skill path does not prove a dependency or a causal relationship.
+
+**Unused catalog entry**:
+A catalog entry with no matching successful read or wrapper in the selected view. It is not proof of a missed opportunity.
+_Avoid_: Missed skill, ignored skill
+
+**Missed opportunity**:
+A required skill use that did not occur. Skill-use evidence alone cannot establish the requirement.
+
+**Skill usefulness**:
+The effect of a skill on a task outcome. Read frequency alone does not establish usefulness.
+
 **Command intent**:
 A slash command request for a skill. It is not proof that Pi loaded the skill.
 _Avoid_: Proven load, human load

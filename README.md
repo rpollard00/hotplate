@@ -58,6 +58,10 @@ SQLite uses WAL mode for the writer connection.
 
 ## Start the dashboard
 
+For a disposable local preview with realistic synthetic sessions, run `npm run dashboard:preview`.
+It uses port 7346 and a temporary database, without a production deployment.
+See [the dashboard guide](docs/dashboard.md) for preview options and evidence definitions.
+
 Start the read-only dashboard:
 
 ```bash
@@ -344,7 +348,7 @@ Capture can lose observations before the SQLite transaction commits. Local WAL N
 The aggregate uses WAL FULL before acknowledgment. Storage hardware must honor synchronization for that durability guarantee.
 Gap reporting remains best effort. Hotplate does not promise complete coverage or compliance proof.
 
-Dashboard queries currently materialize unbounded results. Pagination is not part of this version.
+Dashboard queries currently materialize unbounded results. Browser pagination does not limit server-side query size.
 Request bounds do not establish a production throughput or query-scale limit. Measure contention, backlog growth, and dashboard latency for your workload.
 Skill names, project paths, and session paths remain sensitive even without prompt or tool-output storage.
 

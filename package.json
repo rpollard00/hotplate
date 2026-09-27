@@ -27,12 +27,15 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test dist/test/**/*.test.js",
-    "check": "npm run typecheck && npm test && npm run test:deploy",
+    "check": "npm run typecheck && npm test && npm run test:deploy && npm run test:dashboard-preview",
     "test:deploy": "node --test test/unraid-deploy.test.mjs",
     "smoke:unraid": "node scripts/unraid-deploy-smoke.mjs && node scripts/unraid-deploy-smoke.mjs --regressions",
     "pack:dry": "npm pack --dry-run",
     "dashboard": "npm run build && node dist/src/cli.js serve",
-    "dashboard:demo": "npm run build && node dist/src/cli.js demo --db ./dist/demo/hotplate-demo.sqlite --force"
+    "dashboard:demo": "npm run build && node dist/src/cli.js demo --db ./dist/demo/hotplate-demo.sqlite --force",
+    "dashboard:preview": "npm run build && node scripts/dashboard-preview.mjs",
+    "test:dashboard-preview": "npm run build && node --test test/dashboard-preview.test.mjs",
+    "smoke:dashboard": "npm run build && node scripts/dashboard-browser-smoke.mjs"
   },
   "engines": {
     "node": ">=24.19.0"
