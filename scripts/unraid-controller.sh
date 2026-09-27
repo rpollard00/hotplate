@@ -163,7 +163,23 @@ fi
 aggregate=$(jq -er .secrets.aggregate <<< "$request" | base64 -d)
 credentials=$(jq -er .secrets.credentials <<< "$request" | base64 -d)
 jq -e --arg origin "$(jq -r .origin <<< "$target")" --argjson port "$port" '. == {databasePath:"/data/aggregate.sqlite",host:"0.0.0.0",port:$port,publicOrigin:$origin,credentialsFile:"/run/secrets/hotplate-credentials.json",trustedHttp:true}' <<< "$aggregate" >/dev/null || refuse
-jq -e '.ingest | type == "array" and length > 0' <<< "$credentials" >/dev/null || refuse
+jq -e '
+  .ingest as $ingest | .dashboard as $dashboard |
+  keys == ["dashboard","ingest"] and
+  ($ingest | type == "array" and length > 0 and length <= 1000) and
+  all($ingest[];
+    keys == ["machineId","sourceId","token"] and
+    (.machineId | type == "string" and test("^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$") and . != "local") and
+    (.sourceId | type == "string" and test("^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$";"i")) and
+    (.token | type == "string" and test("^[A-Za-z0-9._~+/-]{32,512}={0,2}$"))) and
+  ([$ingest[].token] | unique | length) == ($ingest | length) and
+  ($ingest | group_by(.sourceId | ascii_downcase) | all(.[]; map(.machineId) | unique | length == 1)) and
+  ($dashboard == {kind:"public"} or
+    (($dashboard | type == "object" and keys == ["password","username"]) and
+     ($dashboard.username | type == "string" and test("^[!-9;-~]{1,128}$")) and
+     ($dashboard.password | type == "string" and test("^[ -~]{16,256}$")) and
+     all($ingest[]; .token != $dashboard.password and .token != ($dashboard.username + ":" + $dashboard.password))))
+  ' <<< "$credentials" >/dev/null || refuse
 
 inspect_container() { docker inspect "$1" | jq -ce '.[0]'; }
 owned_spec() {
