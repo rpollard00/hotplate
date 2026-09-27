@@ -5,7 +5,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { exchange } from "./deploy-unraid";
 
 const root = resolve(import.meta.dirname, "..");
@@ -96,7 +96,7 @@ const enrollmentPolicies = new Map();
 const credentials = { ingest: [{ sourceId: randomUUID(), machineId: "deployment-smoke", token: randomBytes(32).toString("hex") }], dashboard: { username: "smoke-reader", password: randomBytes(32).toString("hex") } };
 function target(suffix, address) {
   const installation = randomUUID(); installations.add(installation);
-  return { version: 1, installation, hostName: "deploy-smoke", network, networkDriver: "bridge", address, origin: `http://${address}:7345`, appdata: join(directory, suffix) };
+  return { version: 1, installation, hostName: "deploy-smoke", network, networkDriver: "bridge", address, origin: `http://${address}:7345`, appdata: join(directory, `${prefix}-${suffix}`) };
 }
 function dashboardPolicy(target) { return new URL(target.origin).port ? { kind: "basic", ...credentials.dashboard } : { kind: "public" }; }
 function request(target, command = "apply") {
@@ -305,9 +305,10 @@ try {
   await apply(primary, "mount-order");
   current = journal(primary);
   assert.notEqual(current.candidate, first);
-  assert.equal(inspect(first).State.Running, false);
-  assert.equal(inspect(first).HostConfig.RestartPolicy.Name, "no");
-  assert.deepEqual(inspect(first).NetworkSettings.Networks, {});
+  const containers = docker(["ps", "-aq", "--filter", `label=io.hotplate.installation=${primary.installation}`]).trim().split(/\s+/).filter(Boolean).map(inspect);
+  const replacement = { count: containers.length, name: inspect(current.candidate).Name };
+  console.log(JSON.stringify({ kind: "replacement-evidence", actual: replacement, expected: { count: 1, name: `/${basename(primary.appdata)}` } }));
+  assert.deepEqual(replacement, { count: 1, name: `/${basename(primary.appdata)}` });
   assert.equal(docker(["exec", current.candidate, "cat", "/data/persistence-proof"]).trim(), "retained");
   assert.match(helper("tar", ["-tf", current.backup.path]), /aggregate.sqlite/);
   assert.match(helper("tar", ["-tf", current.backup.path]), /persistence-proof/);
