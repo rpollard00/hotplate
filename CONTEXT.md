@@ -19,6 +19,9 @@ A skill name, a UTC interval, or both within the selected dashboard scope. It id
 **Read-bearing path**:
 A skill path with at least one recorded successful read in the selected interval. Repeated reads of one skill in that path count as one path when comparing skill shares.
 
+**Skill share**:
+The fraction of recorded read-bearing paths in an interval that contain a successful read of a given skill. It is unavailable without read-bearing paths and is not a fraction of all Pi sessions.
+
 **Model in selection**:
 A model attributed to a successful read that matches the selected skill and UTC interval. Its read count includes repeats; its path count counts each run once. Unknown models remain separate.
 

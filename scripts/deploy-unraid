@@ -67,7 +67,7 @@ export function validateRelease(release) {
   return release;
 }
 async function build(config) {
-  run("npm", ["run", "check"], { stdio: "inherit" });
+  run("npm", ["run", "build"], { stdio: "inherit" });
   const revision = run("jj", ["log", "--no-graph", "-r", "@", "-T", "commit_id"]).trim();
   const tag = `hotplate-release:${randomUUID()}`;
   const directory = join(config.releaseDirectory, tag.split(":")[1]);

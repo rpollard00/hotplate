@@ -101,6 +101,12 @@ The dashboard has machine, project, source-of-command, model, and time filters.
 Project and model choices respect machine scope. Machine choices remain unfiltered so the browser can switch machines.
 Changing machines clears project and model selections before fetching new data.
 
+Activity bins derive evidence counts and distinct read-bearing run sets from exact observation timestamps. Windows up to seven elapsed days use UTC hours. Resolution is chosen before boundary alignment, so a rolling week can span 169 bins. Longer windows retain bounded daily or adaptive bins. Report filters include their end timestamp; chart and exploration intervals have exclusive ends. They deduplicate repeated reads and exact-name variants within each UTC bin, including bins that span multiple days. The browser plots skill shares on separate 0–100% rows. A bin without read-bearing runs breaks the line rather than adding a zero.
+
+The chart brush owns an in-progress create, move, or resize gesture. Its band follows pointer coordinates continuously. Release commits UTC hour boundaries in hourly views and UTC day boundaries in longer views. Cancellation restores the previous selection. Keyboard and table controls use the same selection state.
+
+Displayed trends use a separate top-count or ordered, unique custom-name selection. Row additions and removals do not change the exploration cohort or interval. Custom names survive report reloads without substitution. Reset restores the top five rows and Last 7 days. The activity table is lazy and paginates intervals.
+
 Overview exploration derives read-bearing path selections and comparisons from the current filtered report in browser memory. It does not persist the selection or request new data. A chosen skill and UTC interval select complete run paths; linked model counts include only matching successful reads, and model path navigation requires a matching read by that model. Comparison shares count each read-bearing path once per skill. A prior interval outside the loaded scope is unavailable, not a recorded zero.
 
 ## Authorization and deployment

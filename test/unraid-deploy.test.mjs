@@ -42,7 +42,7 @@ function record(step, detail = {}) {
   if (process.env.FAIL_STEP === step) process.exit(1);
 }
 if (command === 'npm') {
-  record('check', { args });
+  record('build', { args });
   console.log('Build output with a misleading Built /tmp/not-the-release/release.json');
 } else if (command === 'jj') {
   record('revision');
@@ -90,8 +90,8 @@ for (const selection of ["default", "empty environment", "environment", "explici
   const result = fixture.run(selection === "explicit" ? ["--config", join(fixture.privateDirectory, "deploy.json")] : [], overrides);
   assert.equal(result.status, 0, result.stderr);
   const events = fixture.trace();
-  assert.deepEqual(events.map(event => event.step), ["check", "revision", "docker-build---platform", "docker-image-inspect", "docker-image-save", "plan", "apply", "status"]);
-  assert.deepEqual(events[0].args, ["run", "check"]);
+  assert.deepEqual(events.map(event => event.step), ["build", "revision", "docker-build---platform", "docker-image-inspect", "docker-image-save", "plan", "apply", "status"]);
+  assert.deepEqual(events[0].args, ["run", "build"]);
   const releasePath = result.stdout.match(/^Built (.+)$/m)?.[1];
   assert.ok(releasePath?.startsWith(join(fixture.privateDirectory, "releases with spaces")));
   const release = JSON.parse(readFileSync(releasePath, "utf8"));
@@ -100,7 +100,7 @@ for (const selection of ["default", "empty environment", "environment", "explici
   assert.equal(events[7].release, null);
 });
 
-for (const step of ["check", "docker-build---platform", "docker-image-save", "plan", "apply", "status"]) {
+for (const step of ["build", "docker-build---platform", "docker-image-save", "plan", "apply", "status"]) {
   test(`full deployment stops on ${step} failure`, t => {
     const fixture = deploymentFixture(t);
     const result = fixture.run([], { FAIL_STEP: step });

@@ -140,7 +140,7 @@ test("dashboard normalizes time bounds and reports invalid or reversed ranges as
       assert.deepEqual(getRecord(report, "scope"), { fromObservedAt: "2050-01-01T00:00:00.000Z", toObservedAt: "2050-01-03T00:00:00.000Z" });
       const activity = getRecord(report, "activity");
       assert.equal(activity.kind, "bucketed");
-      assert.equal(getArray(activity, "bins").length, 3);
+      assert.equal(getArray(activity, "bins").length, 49);
       assert.deepEqual(getRecord(report, "counts"), { requests: 0, wrappers: 0, successfulReads: 0, failedReads: 0 });
     } finally {
       await server.close();

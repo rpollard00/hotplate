@@ -33,12 +33,22 @@ try {
   let mixedPayload;
   let diagnosticPayload;
   let repeatedPayload;
+  let sparsePayload;
+  let catalogOnlyPayload;
+  let manySkillsPayload;
   const comparisonModel = payload.report.models[1].model;
   const opened = openHotplateReadStore({ databasePath: rich.databasePath });
   assert.equal(opened.kind, "ready");
   try {
     const skills = await opened.store.querySkillTable({});
     const chains = await opened.store.querySkillChain({});
+    const catalogRow = skills.rows.find(row => row.cataloged && row.canonicalPath !== null);
+    assert.ok(catalogRow);
+    const manySkills = { rows: [...skills.rows, ...Array.from({ length: 45 }, (_, index) => ({
+      ...catalogRow, skillName: 'chooser-' + String(index).padStart(2, '0'), canonicalPath: '/synthetic/chooser-' + index + '/SKILL.md',
+    }))] };
+    manySkillsPayload = { ...payload, report: buildDashboardReport({ filter: {}, skills: manySkills, chains }) };
+    catalogOnlyPayload = { ...payload, report: buildDashboardReport({ filter: {}, skills, chains: { runs: [] } }), chains: { runs: [] } };
     const derivationStart = performance.now();
     buildDashboardReport({ filter: {}, skills, chains });
     measurements.derivationMs = Number((performance.now() - derivationStart).toFixed(2));
@@ -92,7 +102,9 @@ try {
       { ...makoRun, segmentId: 'current-other', steps: [controlledStep([howRead], currentDay)] },
       { ...makoRun, segmentId: 'previous', steps: [controlledStep([makoRead], previousDay)] },
     ] };
-    repeatedPayload = { ...payload, report: buildDashboardReport({ filter: {}, skills, chains: repeatedChains }), chains: repeatedChains };
+    repeatedPayload = { ...payload, report: buildDashboardReport({ filter: { fromObservedAt: "2025-02-20T00:00:00.000Z", toObservedAt: "2025-02-21T23:59:59.999Z" }, skills, chains: repeatedChains }), chains: repeatedChains };
+    const sparseChains = { runs: [...repeatedChains.runs.slice(0, 2), { ...makoRun, segmentId: 'before-gap', steps: [controlledStep([makoRead], '2025-02-19T10:00:00.000Z')] }] };
+    sparsePayload = { ...payload, report: buildDashboardReport({ filter: {}, skills, chains: sparseChains }), chains: sparseChains };
   } finally { await opened.store.close(); }
 
   await withBrowser(async ({ command, evaluate, until, screenshot, errors }) => {
@@ -101,6 +113,11 @@ try {
     async function input(id, value) { await evaluate(`document.getElementById(${JSON.stringify(id)}).value = ${JSON.stringify(value)}; document.getElementById(${JSON.stringify(id)}).dispatchEvent(new Event('input', { bubbles: true }));`); }
     async function change(id, value) { await evaluate(`document.getElementById(${JSON.stringify(id)}).value = ${JSON.stringify(value)}; document.getElementById(${JSON.stringify(id)}).dispatchEvent(new Event('change', { bubbles: true }));`); }
     async function noOverflow() { assert.ok(await evaluate('document.documentElement.scrollWidth <= innerWidth'), "No page-level horizontal overflow"); }
+    async function chartScreenshot(name) {
+      const clip = await evaluate('(() => { const r=document.querySelector(".activity-panel").getBoundingClientRect(); return {x:r.x+scrollX,y:r.y+scrollY,width:r.width,height:r.height,scale:1}; })()');
+      const result = await command('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true, clip });
+      await writeFile(join(directory, name), Buffer.from(result.data, 'base64'));
+    }
     async function enter() {
       await command("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
       await command("Input.dispatchKeyEvent", { type: "char", key: "Enter", text: "\r", unmodifiedText: "\r" });
@@ -126,9 +143,171 @@ try {
     }
     async function noZeroPagers() { assert.equal(await evaluate('Array.from(document.querySelectorAll(".pagination")).filter(item => !item.hidden && item.textContent.includes("0–0 of 0")).length'), 0); }
     await command("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1100, deviceScaleFactor: 1, mobile: false });
+    await command('Page.addScriptToEvaluateOnNewDocument', { source: `
+      window.smokeNow = Date.parse('2025-02-21T12:00:00.000Z');
+      const NativeDate = Date;
+      window.Date = class extends NativeDate {
+        constructor(...args) { super(...(args.length ? args : [window.smokeNow])); }
+        static now() { return window.smokeNow; }
+      };
+    ` });
     await command("Page.navigate", { url: rich.url });
     await until(ready);
-    assert.equal(await evaluate('document.getElementById("time-preset").value'), "all", "Historical data is visible by default");
+    assert.equal(await evaluate('document.getElementById("time-preset").value'), '7');
+    const weekly = await fetch(new URL('/api/dashboard?fromObservedAt=2025-02-14T12:00:00.000Z&toObservedAt=2025-02-21T12:00:00.000Z', rich.url)).then(response => response.json());
+    assert.equal(weekly.report.activity.binWidthMs, 3600000);
+    assert.equal(weekly.report.activity.bins.length, 169);
+    assert.equal(await evaluate('document.querySelector(".metric-value").textContent'), weekly.report.counts.successfulReads.toLocaleString('en-US'));
+    assert.equal(await evaluate('document.getElementById("scope-summary").textContent'), '2025-02-14T12:00:00.000Z to 2025-02-21T12:00:00.000Z · UTC');
+    assert.equal(await evaluate('document.querySelectorAll("#activity-chart tbody tr").length'), 0, 'The activity table is lazy');
+    assert.match(await evaluate('document.getElementById("activity-chart").textContent'), /1 hour per point/);
+    await chartScreenshot('weekly-desktop.png');
+    const weeklyNames = await evaluate('Array.from(document.querySelectorAll(".trend-label"), item => item.dataset.skill)');
+    const weeklyPoints = await evaluate('Array.from(document.querySelectorAll("g[data-skill] .trend-dot"), point => ({ name: point.parentElement.dataset.skill, bin: Number(point.dataset.bin), runs: Number(point.dataset.runs), total: Number(point.dataset.total) }))');
+    for (const point of weeklyPoints) {
+      const bin = weekly.report.activity.bins[point.bin];
+      assert.equal(point.total, bin.readRuns);
+      assert.equal(point.runs, bin.skills.find(skill => skill.name === point.name)?.readRuns ?? 0);
+    }
+    async function key(name, modifiers = 0) {
+      await command('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: name, code: name, modifiers, windowsVirtualKeyCode: { Home: 36, End: 35, ArrowLeft: 37, ArrowRight: 39, Escape: 27, Enter: 13, Tab: 9 }[name] });
+    }
+    await evaluate('document.querySelector(".trend-plot").focus()'); await key('Home'); await enter();
+    const edgeValues = () => evaluate('Array.from(document.querySelectorAll(".brush-handle"), item => Number(item.getAttribute("aria-valuenow")))');
+    assert.deepEqual(await edgeValues(), [0, 1]);
+    assert.match(await evaluate('document.querySelector(".brush-handle[data-mode=end]").getAttribute("aria-valuetext")'), /2025-02-14 13:00:00 UTC \(exclusive\)/);
+    await evaluate('document.querySelector(".brush-band").focus()'); await key('ArrowRight');
+    assert.deepEqual(await edgeValues(), [1, 2]);
+    await evaluate('document.querySelector(".brush-handle[data-mode=end]").focus()'); await key('ArrowRight');
+    assert.deepEqual(await edgeValues(), [1, 3]);
+    await click('.trend-label');
+    const selectedChips = await evaluate('document.getElementById("explore-chips").textContent');
+    const beforeExpandScroll = await evaluate('scrollY');
+    await click('.trend-controls > button');
+    assert.equal(await evaluate('scrollY'), beforeExpandScroll, 'Adding rows does not scroll to the explorer');
+    assert.ok(await evaluate('document.querySelectorAll(".trend-label").length > 5'));
+    assert.deepEqual((await evaluate('Array.from(document.querySelectorAll(".trend-label"), item => item.dataset.skill)')).slice(0, 5), weeklyNames);
+    assert.equal(await evaluate('document.getElementById("explore-chips").textContent'), selectedChips);
+    await click('#activity-chart > details > summary'); await until('document.querySelectorAll(".activity-choice").length > 0');
+    assert.equal(await evaluate('document.querySelectorAll("#activity-chart tbody tr").length'), 24, 'Hourly data table is paginated');
+    assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#activity-chart th"), item => item.textContent).slice(2, -4)'), await evaluate('Array.from(document.querySelectorAll(".trend-label"), item => item.dataset.skill)'), 'Table columns follow displayed names');
+    await click('[aria-label="Next activity"]');
+    assert.equal(await evaluate('document.querySelector(".activity-choice").dataset.bin'), '24');
+    assert.match(await evaluate('document.querySelector(".activity-choice").getAttribute("aria-label")'), /12:00:00.*13:00:00.*exclusive/);
+    await click('#activity-chart > details > summary');
+    await chartScreenshot('weekly-expanded-desktop.png');
+    await click('.trend-remove');
+    const removedName = weeklyNames[0];
+    assert.equal(await evaluate('document.getElementById("explore-chips").textContent'), selectedChips);
+    await evaluate('document.querySelector(".trend-chooser summary").focus()'); await enter();
+    await until('document.activeElement.type === "search"');
+    await evaluate(`document.activeElement.value = ${JSON.stringify(removedName)}; document.activeElement.dispatchEvent(new Event('input', { bubbles: true }));`);
+    await key('Tab'); await enter();
+    assert.ok((await evaluate('Array.from(document.querySelectorAll(".trend-label"), item => item.dataset.skill)')).includes(removedName));
+    assert.equal(await evaluate('document.getElementById("explore-chips").textContent'), selectedChips);
+    await key('Escape');
+    assert.equal(await evaluate('document.querySelector(".trend-chooser").open'), false);
+    const customNames = await evaluate('Array.from(document.querySelectorAll(".trend-label"), item => item.dataset.skill)');
+    await evaluate('window.smokeNow += 3600123'); await click('#refresh-data'); await until(ready);
+    assert.match(await evaluate('document.getElementById("scope-summary").textContent'), /2025-02-21T13:00:00.123Z/);
+    assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".trend-label"), item => item.dataset.skill)'), customNames);
+    assert.equal(await evaluate('document.getElementById("filter-form").checkValidity()'), true, 'Exact relative timestamps remain valid form values');
+    await click('#filter-form button[type=submit]'); await until(ready);
+    await change('from-filter', '2025-02-21T09:30'); await change('to-filter', '2025-02-21T11:30');
+    await click('#filter-form button[type=submit]'); await until(ready);
+    await evaluate('window.smokeNow += 3600000'); await click('#refresh-data'); await until(ready);
+    assert.equal(await evaluate('document.getElementById("scope-summary").textContent'), '2025-02-21T09:30:00.000Z to 2025-02-21T11:30:00.000Z · UTC');
+    assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".trend-label"), item => item.dataset.skill)'), customNames, 'Custom trend names survive scope changes without substitution');
+    await evaluate('document.querySelector(".trend-label").click()');
+    assert.match(await evaluate('document.getElementById("explore-comparison").textContent'), /Recent period/);
+    assert.doesNotMatch(await evaluate('document.getElementById("explore-comparison").textContent'), /0 days|outside the current report/);
+    await click('#explore-comparison .section-heading button');
+    assert.match(await evaluate('document.querySelector(".brush-handle[data-mode=end]").getAttribute("aria-valuetext")'), /11:30:00.001 UTC/);
+    assert.match(await evaluate('document.getElementById("explore-chips").textContent'), /11:30:00.001/);
+    const partialRange = await edgeValues();
+    await evaluate('document.querySelector(".brush-band").focus()'); await key('ArrowLeft');
+    const movedPartialRange = await edgeValues();
+    assert.ok(Math.abs((movedPartialRange[1] - movedPartialRange[0]) - (partialRange[1] - partialRange[0])) < 1e-9, 'Keyboard movement preserves a partial-hour comparison duration');
+    await evaluate('document.querySelector(".trend-plot").scrollIntoView({block:"center"})');
+    const partialBand = await evaluate('(() => { const r=document.querySelector(".brush-band").getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+20}; })()');
+    await command('Input.dispatchMouseEvent', { type: 'mousePressed', ...partialBand, button: 'left', clickCount: 1 });
+    await command('Input.dispatchMouseEvent', { type: 'mouseReleased', ...partialBand, button: 'left', clickCount: 1 });
+    assert.deepEqual(await edgeValues(), movedPartialRange, 'Clicking a comparison band without dragging does not shift its partial-hour edges');
+    await change('from-filter', '2025-02-21T10:10'); await change('to-filter', '2025-02-21T10:40');
+    await click('#filter-form button[type=submit]'); await until(ready);
+    await click('.trend-label'); await click('#explore-comparison .section-heading button');
+    assert.match(await evaluate('document.getElementById("explore-chips").textContent'), /10:40:00.001/);
+    assert.ok(await evaluate('Array.from(document.querySelectorAll(".brush-handle")).every(item => Number(item.getAttribute("aria-valuenow")) >= Number(item.getAttribute("aria-valuemin")) && Number(item.getAttribute("aria-valuenow")) <= Number(item.getAttribute("aria-valuemax")))'), 'Sub-hour comparisons have valid accessible slider bounds');
+    const shortRange = await edgeValues();
+    await evaluate('document.querySelector(".brush-band").focus()'); await key('End');
+    const shortAtEnd = await edgeValues();
+    assert.ok(Math.abs((shortAtEnd[1] - shortAtEnd[0]) - (shortRange[1] - shortRange[0])) < 1e-9, 'Moving to the chart edge preserves sub-hour duration');
+    assert.equal(shortAtEnd[1], 1);
+    await evaluate('document.querySelector(".brush-handle[data-mode=start]").focus()'); await key('End');
+    assert.ok((await edgeValues())[0] >= 0, 'Sub-hour handle controls stay within the chart extent');
+    await change('from-filter', '2024-01-01T09:30'); await change('to-filter', '2024-01-01T11:30');
+    await click('#filter-form button[type=submit]'); await until(ready);
+    assert.equal(await evaluate('document.querySelector(".metric-value").textContent'), '0');
+    assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".trend-label"), item => item.dataset.skill)'), customNames, 'Absent custom names are retained without substitution');
+    assert.equal(await evaluate('document.querySelectorAll(".trend-dot").length'), 0, 'Missing reads do not become zero-valued points');
+    assert.equal(await evaluate('document.querySelector(".trend-controls").hidden'), true);
+    for (let remaining = customNames.length; remaining > 0; remaining--) {
+      await evaluate('document.querySelector(".trend-remove").focus()'); await enter();
+      assert.equal(await evaluate('document.querySelectorAll(".trend-label").length'), remaining - 1);
+      assert.ok(await evaluate('document.activeElement !== document.body && document.activeElement.getClientRects().length > 0 && !document.activeElement.closest("[hidden]")'), 'Removing an absent custom row retains visible keyboard focus');
+    }
+    assert.equal(await evaluate('document.activeElement.id'), 'activity-heading', 'Removing the last absent row focuses the chart heading');
+    await evaluate('window.smokeNow = Date.parse("2025-02-21T12:00:00.000Z")');
+    await click('#reset-filters'); await until(ready);
+    assert.equal(await evaluate('document.querySelectorAll(".trend-label").length'), 5);
+    assert.equal(await evaluate('document.getElementById("time-preset").value'), '7');
+    assert.equal(await evaluate('document.querySelector(".metric-value").textContent'), weekly.report.counts.successfulReads.toLocaleString('en-US'));
+    await evaluate('document.querySelector(".trend-plot").scrollIntoView({block:"center"})');
+    const hourlyBox = await evaluate('(() => {const r=document.querySelector(".trend-plot").getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height};})()');
+    const hourlyMouse = async (type, hour) => command('Input.dispatchMouseEvent', { type, x: hourlyBox.x + hour / 169 * hourlyBox.width, y: hourlyBox.y + hourlyBox.height / 2, button: 'left', clickCount: 1 });
+    await hourlyMouse('mousePressed', 80.2); await hourlyMouse('mouseMoved', 90.8); await hourlyMouse('mouseReleased', 90.8);
+    assert.deepEqual(await edgeValues(), [80, 91]);
+    await hourlyMouse('mousePressed', 85); await hourlyMouse('mouseMoved', 95); await hourlyMouse('mouseReleased', 95);
+    assert.deepEqual(await edgeValues(), [90, 101]);
+    await hourlyMouse('mousePressed', 101); await hourlyMouse('mouseMoved', 105); await hourlyMouse('mouseReleased', 105);
+    assert.deepEqual(await edgeValues(), [90, 105]);
+    await hourlyMouse('mousePressed', 95); await hourlyMouse('mouseMoved', 110); await key('Escape'); await hourlyMouse('mouseReleased', 110);
+    assert.deepEqual(await edgeValues(), [90, 105]);
+    await chartScreenshot('weekly-brush-desktop.png');
+    for (const width of [390, 320]) {
+      await command('Emulation.setDeviceMetricsOverride', { width, height: 844, deviceScaleFactor: 1, mobile: true });
+      await noOverflow(); await chartScreenshot('weekly-' + width + '.png');
+    }
+    await command('Emulation.setTouchEmulationEnabled', { enabled: true });
+    await click('#clear-explorer');
+    await evaluate('document.querySelector(".trend-plot").scrollIntoView({block:"center"})');
+    const hourlyTouchBox = await evaluate('(() => { const r=document.querySelector(".trend-plot").getBoundingClientRect(); return {x:r.x,y:r.y,width:r.width}; })()');
+    const hourlyTouchPoint = hour => ({ x: hourlyTouchBox.x + hour / 169 * hourlyTouchBox.width, y: hourlyTouchBox.y + 60, id: 0 });
+    await command('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [hourlyTouchPoint(40.2)] });
+    await command('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [hourlyTouchPoint(75.8)] });
+    await command('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    assert.deepEqual(await edgeValues(), [40, 76], 'Touch brushing selects UTC hours in the weekly chart');
+    await command('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [hourlyTouchPoint(55)] });
+    await command('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [hourlyTouchPoint(75)] });
+    await command('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] });
+    assert.deepEqual(await edgeValues(), [40, 76], 'Cancelling an hourly touch move restores the committed range');
+    assert.equal(await evaluate('document.querySelector(".trend-plot").dataset.dragging'), 'false');
+    await chartScreenshot('weekly-touch-320.png');
+    await click('.trend-remove');
+    await evaluate('document.querySelector(".trend-chooser summary").scrollIntoView({block:"center"})');
+    const chooserPoint = await evaluate('(() => {const r=document.querySelector(".trend-chooser summary").getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()');
+    await command('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ ...chooserPoint, id: 0 }] });
+    await command('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await until('document.querySelector(".trend-chooser").open');
+    await evaluate(`document.querySelector('.trend-chooser input').value = ${JSON.stringify(weeklyNames[0])}; document.querySelector('.trend-chooser input').dispatchEvent(new Event('input'));`);
+    await click('.trend-options button:not(:disabled)');
+    await noOverflow(); await chartScreenshot('weekly-chooser-320.png');
+    await command('Emulation.setTouchEmulationEnabled', { enabled: false });
+    await command('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1100, deviceScaleFactor: 1, mobile: false });
+    await click('#reset-filters'); await until(ready);
+    await change('time-preset', 'all'); await until(ready);
+
+    assert.equal(await evaluate('document.getElementById("time-preset").value'), "all", "All time recovers historical data");
     assert.equal(await evaluate('document.getElementById("preview-label").hidden'), false);
     assert.equal(await evaluate('document.querySelectorAll("footer").length'), 0, 'Footer and its separator are removed');
     assert.equal(await evaluate('document.body.textContent.includes("Hotplate / read-only")'), false);
@@ -143,11 +322,32 @@ try {
     assert.ok(await evaluate('document.querySelectorAll(".rank-row").length <= 8'));
     assert.ok(await evaluate('document.querySelectorAll(".route-choice").length <= 8'));
     assert.ok(await evaluate('document.querySelector("#activity-chart svg desc").textContent.includes("Exact counts")'));
+    await click('#activity-chart > details > summary');
+    await until('document.querySelectorAll("#activity-chart tbody tr").length > 0');
     assert.equal(await evaluate('document.querySelectorAll("#activity-chart tbody tr").length'), payload.report.activity.bins.length);
+    await click('#activity-chart > details > summary');
     measurements.renderedNodes = await evaluate('document.querySelectorAll("*").length');
     assert.ok(measurements.renderedNodes < 3000, "Bounded initial rendering for 111 paths");
     await noOverflow();
     await screenshot(join(directory, "overview-desktop.png"));
+    await chartScreenshot('trends-desktop-detail.png');
+    assert.equal(await evaluate('document.getElementById("activity-heading").textContent'), 'Skill trends');
+    const shownSkills = await evaluate('Array.from(document.querySelectorAll(".trend-label"), item => item.dataset.skill)');
+    assert.equal(shownSkills.length, 5, 'Five named skill lanes, not one total-volume trace');
+    const plotted = await evaluate('Array.from(document.querySelectorAll("g[data-skill] .trend-dot"), point => ({ name: point.parentElement.dataset.skill, bin: Number(point.dataset.bin), runs: Number(point.dataset.runs), total: Number(point.dataset.total) }))');
+    for (const point of plotted) {
+      const bin = payload.report.activity.bins[point.bin];
+      const readings = payload.report.routes.map(route => route.steps.flatMap(step => step.kind === 'observations' ? step.items : []).filter(item => item.evidence.kind === 'read-result' && item.evidence.outcome === 'success' && item.observedAt >= bin.startAt && item.observedAt < bin.endAt));
+      assert.equal(point.total, readings.filter(items => items.length > 0).length, 'Point denominator counts read-bearing runs');
+      assert.equal(point.runs, readings.filter(items => items.some(item => item.evidence.skill.name === point.name)).length, 'Point numerator counts distinct runs containing the named skill');
+    }
+    const offChart = payload.report.skillGroups.filter(group => group.counts.successfulReads > 0).find(group => !shownSkills.includes(group.name)).name;
+    await evaluate(`Array.from(document.querySelectorAll("#skill-table button.link")).find(item => item.textContent === ${JSON.stringify(offChart)}).click()`);
+    assert.ok((await evaluate('Array.from(document.querySelectorAll(".trend-label"), item => item.dataset.skill)')).includes(offChart), 'Selecting a less frequent skill brings its trend into view');
+    assert.equal(await evaluate('document.querySelectorAll(".trend-label").length'), 6, 'Exploring an off-chart skill never evicts a row');
+    assert.equal(await evaluate('document.querySelectorAll(".trend-label[aria-pressed=true]").length'), 1);
+    await click('#clear-explorer');
+    await click('#activity-chart > details > summary'); await until('document.querySelectorAll(".activity-choice").length > 0'); await click('#activity-chart > details > summary');
 
     const exploreSkill = await evaluate('document.querySelector("#skill-table button.link").textContent');
     const matching = payload.report.routes.filter(route => route.steps.some(step => step.kind === 'observations' && step.items.some(item => item.evidence.kind === 'read-result' && item.evidence.outcome === 'success' && item.evidence.skill.name === exploreSkill)));
@@ -156,7 +356,7 @@ try {
     assert.equal(await evaluate('document.getElementById("models-workspace").hidden'), true, 'Ranked skill opens the linked explorer');
     assert.equal(await evaluate('document.getElementById("explorer-panel").hidden'), false);
     assert.equal(await evaluate('document.querySelector("#explore-totals strong").textContent'), String(matching.length));
-    assert.match(await evaluate('document.getElementById("explore-comparison").textContent'), /Recent 7 days vs previous period/);
+    assert.match(await evaluate('document.getElementById("explore-comparison").textContent'), /Recent period vs previous period/);
     const bins = payload.report.activity.bins;
     const recentStart = bins.at(-7).startAt;
     const previousStart = new Date(Date.parse(recentStart) - 7 * 86400000).toISOString();
@@ -167,7 +367,11 @@ try {
     assert.equal(await evaluate('document.querySelector("#skill-detail h2").textContent'), exploreSkill, 'Exploration links to existing model detail');
     await click('[data-workspace=overview]');
     await click('#explore-comparison .section-heading button');
-    assert.equal(await evaluate('document.querySelectorAll(".activity-hit[data-selected=true]").length'), 7);
+    assert.equal(await evaluate('document.querySelectorAll(".activity-choice[aria-pressed=true]").length'), 7);
+    await click('.trend-label[aria-pressed=true]');
+    assert.equal(await evaluate('document.querySelectorAll(".trend-label[aria-pressed=true]").length'), 0, 'A named trend toggles the linked skill selection');
+    assert.equal(await evaluate('document.querySelectorAll(".activity-choice[aria-pressed=true]").length'), 7, 'Changing skills retains the selected interval');
+    await evaluate(`Array.from(document.querySelectorAll(".trend-label")).find(item => item.dataset.skill === ${JSON.stringify(exploreSkill)}).click()`);
     assert.equal(await evaluate('document.getElementById("skills-heading").textContent'), 'Skills in selection');
     const intervalCounts = new Map();
     for (const route of matching) {
@@ -203,7 +407,7 @@ try {
     assert.equal(await evaluate('document.querySelectorAll("#chain-view .timeline-step").length'), explored.steps.length);
     await click('#back-to-explorer');
     assert.equal(await evaluate('document.getElementById("explorer-panel").hidden'), false);
-    assert.equal(await evaluate('document.querySelectorAll(".activity-hit[data-selected=true]").length'), 7);
+    assert.equal(await evaluate('document.querySelectorAll(".activity-choice[aria-pressed=true]").length'), 7);
     await noOverflow();
     await screenshot(join(directory, 'explorer-desktop.png'));
     await click('#clear-explorer');
@@ -214,22 +418,61 @@ try {
     assert.equal(await evaluate('document.getElementById("back-to-explorer").hidden'), true);
     await click('[data-workspace=overview]');
 
-    await evaluate('document.querySelector("#activity-chart svg").scrollIntoView({block:"center"})');
-    const chartPoints = await evaluate('Array.from(document.querySelectorAll(".activity-hit"), hit => { const r=hit.getBoundingClientRect(); return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}; })');
-    for (const [type, point] of [['mousePressed', chartPoints[14]], ['mouseMoved', chartPoints[17]], ['mouseReleased', chartPoints[17]]]) {
-      await command('Input.dispatchMouseEvent', { type, ...point, button: 'left', clickCount: 1 });
-    }
-    assert.equal(await evaluate('document.querySelectorAll(".activity-hit[data-selected=true]").length'), 4, 'Pointer drag selects complete UTC bins');
+    await evaluate('document.querySelector(".trend-plot").scrollIntoView({block:"center"})');
+    const plotBox = await evaluate('(() => { const r=document.querySelector(".trend-plot").getBoundingClientRect(); return {x:r.x,y:r.y,width:r.width,height:r.height}; })()');
+    const chartPoint = day => ({ x: plotBox.x + day / 21 * plotBox.width, y: plotBox.y + plotBox.height / 2 });
+    async function mouse(type, day, button = 'left') { await command('Input.dispatchMouseEvent', { type, ...chartPoint(day), button, clickCount: 1 }); }
+    const selection = () => evaluate('Array.from(document.querySelectorAll(".activity-choice[aria-pressed=true]"), item => item.textContent)');
+    await mouse('mousePressed', 14.2);
+    await mouse('mouseMoved', 15.1);
+    const earlyWidth = await evaluate('document.querySelector(".brush-band").getBoundingClientRect().width');
+    await mouse('mouseMoved', 15.4);
+    const laterWidth = await evaluate('document.querySelector(".brush-band").getBoundingClientRect().width');
+    assert.ok(laterWidth > earlyWidth + 1, 'Brush follows movement within a time bucket, not just at bucket edges');
+    assert.equal(await evaluate('document.querySelectorAll(".brush-band").length'), 1, 'One continuous band spans the plot');
+    assert.equal(await evaluate('document.querySelectorAll(".activity-hit").length'), 0, 'No outlined per-bar selection');
+    assert.equal(await evaluate('getComputedStyle(document.querySelector(".trend-plot")).outlineStyle'), 'none', 'Pointer brushing does not outline the entire chart');
+    assert.equal((await selection()).length, 0, 'Dragging does not rebuild the explorer before release');
+    await screenshot(join(directory, 'brush-drag-desktop.png'));
+    await chartScreenshot('brush-drag-detail.png');
+    await mouse('mouseMoved', 17.8); await mouse('mouseReleased', 17.8);
+    assert.equal((await selection()).length, 4, 'Pointer drag commits complete UTC days');
     assert.match(await evaluate('document.getElementById("explore-chips").textContent'), /UTC:/);
-    await evaluate('document.querySelectorAll(".activity-hit")[18].focus()');
+    await mouse('mousePressed', 16); await mouse('mouseMoved', 13); await mouse('mouseReleased', 13);
+    assert.equal((await selection()).length, 4, 'Dragging the band preserves its duration');
+    assert.match((await selection())[0], /Feb 12/);
+    await mouse('mousePressed', 15.2); await mouse('mouseReleased', 15.2);
+    assert.equal((await selection()).length, 4, 'An off-center click on a handle does not jump its date');
+    await mouse('mousePressed', 15.2); await mouse('mouseMoved', 17.4); await mouse('mouseReleased', 17.4);
+    assert.equal((await selection()).length, 7, 'Dragging the end handle resizes the range from its original edge');
+    const beforeCancel = await selection();
+    await mouse('mousePressed', 11); await mouse('mouseMoved', 9.1);
+    await command('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await mouse('mouseReleased', 9.1);
+    assert.deepEqual(await selection(), beforeCancel, 'Escape cancels a drag without changing the selection');
+    assert.equal(await evaluate('document.querySelector(".trend-plot").dataset.dragging'), 'false');
+    await mouse('mousePressed', 20.8); await mouse('mouseMoved', 18.2); await mouse('mouseReleased', 18.2);
+    assert.equal((await selection()).length, 3, 'Reverse drag selects the same continuous interval');
+    await evaluate('document.querySelector(".brush-handle[data-mode=end]").focus()');
+    await command('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'ArrowLeft', code: 'ArrowLeft', windowsVirtualKeyCode: 37 });
+    assert.equal((await selection()).length, 2, 'Keyboard resizes the focused range edge by one day');
+    assert.ok(await evaluate('getComputedStyle(document.activeElement).outlineStyle !== "none"'), 'Range handle has visible keyboard focus');
+    await evaluate('document.querySelector(".trend-plot").focus()');
+    await command('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Home', code: 'Home', windowsVirtualKeyCode: 36 });
     await enter();
-    assert.equal(await evaluate('document.querySelectorAll(".activity-hit[data-selected=true]").length'), 1, 'Keyboard activates the focused bar');
-    assert.ok(await evaluate('getComputedStyle(document.activeElement).stroke !== "none"'), 'Focused chart bar has visible stroke');
-    await click('#activity-chart summary');
+    assert.equal((await selection()).length, 1, 'Keyboard selects the inspected interval');
+    await command('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'ArrowRight', code: 'ArrowRight', windowsVirtualKeyCode: 39 });
+    await command('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, modifiers: 8 });
+    assert.equal((await selection()).length, 2, 'Shift+Enter extends the range');
+    await evaluate('document.querySelector(".brush-band").focus()');
+    await command('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'ArrowRight', code: 'ArrowRight', windowsVirtualKeyCode: 39 });
+    assert.match((await selection())[0], /Feb 2/);
+    assert.equal((await selection()).length, 2, 'Keyboard moves the whole band without changing duration');
+    await click('#activity-chart > details > summary');
     await click('#activity-chart .activity-choice');
     assert.match(await evaluate('document.getElementById("explore-comparison").textContent'), /outside the current report/, 'The first date has no loaded baseline');
     await click('#clear-explorer');
-    await click('#activity-chart summary');
+    await click('#activity-chart > details > summary');
 
     await evaluate('document.querySelector("[data-workspace=models]").focus()');
     assert.equal(await evaluate('document.activeElement.dataset.workspace'), "models");
@@ -316,6 +559,7 @@ try {
     await change('project-filter', payload.filterOptions.projects[1]);
     assert.equal(await evaluate('document.getElementById("scope-summary").textContent'), 'Project: ' + payload.filterOptions.projects[0], 'Summary reflects the applied report, not drafts');
     await change('project-filter', payload.filterOptions.projects[0]);
+    await evaluate('window.smokeNow = Date.parse("2026-01-01T12:00:00.000Z")');
     await change("time-preset", "7");
     await until(ready);
     assert.equal(await evaluate('document.querySelector(".metric-value").textContent'), "0");
@@ -329,8 +573,9 @@ try {
     assert.doesNotMatch(appliedDates.summary, /All time|All projects|All machines/);
     await click('#reset-filters');
     await until(ready);
+    await change('time-preset', 'all'); await until(ready);
     assert.equal(await evaluate('document.querySelector(".metric-value").textContent'), payload.report.counts.successfulReads.toLocaleString("en-US"));
-    assert.equal(await evaluate('document.getElementById("scope-summary").hidden'), true, 'Reset hides the summary');
+    assert.equal(await evaluate('document.getElementById("scope-summary").hidden'), true, 'All time hides the date summary after Reset');
     await change('machine-filter', payload.filterOptions.machines[0]);
     await until(ready);
     assert.equal(await evaluate('document.getElementById("scope-summary").textContent'), 'Machine: ' + payload.filterOptions.machines[0]);
@@ -350,6 +595,7 @@ try {
     assert.match(await evaluate('document.getElementById("scope-summary").textContent'), /^2025-02-01T01:23:00.000Z to Latest record/);
     await click('#reset-filters');
     await until(ready);
+    await change('time-preset', 'all'); await until(ready);
     await click('#toggle-filters');
 
     await command("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
@@ -372,17 +618,27 @@ try {
     await screenshot(join(directory, 'filters-mobile.png'));
     await click('#reset-filters');
     await until(ready);
+    await change('time-preset', 'all'); await until(ready);
     await helpFromEveryTab();
     await click('[data-workspace=overview]');
+    await click('#activity-chart > details > summary'); await until('document.querySelectorAll(".activity-choice").length > 0'); await click('#activity-chart > details > summary');
     await noOverflow();
     await screenshot(join(directory, "overview-mobile.png"));
     await command('Emulation.setTouchEmulationEnabled', { enabled: true });
-    await evaluate('document.querySelector("#activity-chart svg").scrollIntoView({block:"center"})');
-    const mobilePoints = await evaluate('Array.from(document.querySelectorAll(".activity-hit"), hit => { const r=hit.getBoundingClientRect(); return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}; })');
-    await command('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ ...mobilePoints[14], id: 0 }] });
-    await command('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ ...mobilePoints[16], id: 0 }] });
+    await evaluate('document.querySelector(".trend-plot").scrollIntoView({block:"center"})');
+    const mobilePoints = await evaluate('(() => { const r=document.querySelector(".trend-plot").getBoundingClientRect(); return [14.2,16.8].map(day => ({x:r.x+day/21*r.width,y:r.y+r.height/2})); })()');
+    await command('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ ...mobilePoints[0], id: 0 }] });
+    await command('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ ...mobilePoints[1], id: 0 }] });
     await command('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-    assert.equal(await evaluate('document.querySelectorAll(".activity-hit[data-selected=true]").length'), 3, 'Touch drag selects a range');
+    assert.equal((await selection()).length, 3, 'Touch drag selects a range');
+    await screenshot(join(directory, 'brush-mobile.png'));
+    await chartScreenshot('trends-mobile-detail.png');
+    const touchSelection = await selection();
+    await command('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ ...mobilePoints[0], id: 0 }] });
+    await command('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ ...mobilePoints[1], id: 0 }] });
+    await command('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] });
+    assert.deepEqual(await selection(), touchSelection, 'Touch cancellation preserves the committed range');
+    assert.equal(await evaluate('document.querySelector(".trend-plot").dataset.dragging'), 'false');
     await click('#clear-explorer');
     await command('Emulation.setTouchEmulationEnabled', { enabled: false });
     await click('#skill-table button.link');
@@ -408,12 +664,41 @@ try {
     await screenshot(join(directory, "paths-mobile.png"));
 
     await evaluate('(async () => { window.smokeFetch = window.fetch; window.smokePayload = await window.fetch("/api/dashboard").then(response => response.json()); })()');
+    await evaluate(`window.fetch = async () => new Response(JSON.stringify(${JSON.stringify(manySkillsPayload)})); document.getElementById('refresh-data').click();`);
+    await until(ready); await click('[data-workspace=overview]');
+    await evaluate('document.querySelector(".trend-chooser summary").focus()'); await enter();
+    await until('document.activeElement.type === "search"');
+    await evaluate('document.activeElement.value = "chooser-"; document.activeElement.dispatchEvent(new Event("input", { bubbles: true }))');
+    assert.equal(await evaluate('document.querySelectorAll(".trend-options button").length'), 21);
+    for (const firstNewName of ['chooser-20', 'chooser-40']) {
+      await evaluate('Array.from(document.querySelectorAll(".trend-options button")).find(item => item.textContent === "More results").focus()');
+      await enter();
+      assert.equal(await evaluate('document.activeElement.textContent'), firstNewName, 'Chooser pagination focuses the first newly available skill');
+      await enter();
+      assert.ok((await evaluate('Array.from(document.querySelectorAll(".trend-label"), item => item.dataset.skill)')).includes(firstNewName));
+      assert.equal(await evaluate('document.activeElement.type'), 'search');
+    }
+    assert.equal(await evaluate('document.querySelectorAll(".trend-options button").length'), 45);
+    await key('Escape'); await noOverflow();
+    await evaluate(`window.fetch = async () => new Response(JSON.stringify(${JSON.stringify(catalogOnlyPayload)})); document.getElementById('refresh-data').click();`);
+    await until(ready);
+    assert.equal(await evaluate('document.querySelector(".trend-controls").hidden'), true, 'No chart-add actions without a dated extent');
+    assert.equal(await evaluate('document.querySelector(".trend-chooser summary").getClientRects().length'), 0);
+    assert.equal(await evaluate('document.querySelectorAll(".trend-plot").length'), 0);
+    assert.match(await evaluate('document.getElementById("activity-chart").textContent'), /No activity recorded yet/);
+    await click('#catalog-context summary');
+    assert.ok(await evaluate('document.querySelectorAll("#catalog-list button.link").length > 0'), 'Catalog-only reports retain their catalog');
+    await noOverflow(); await chartScreenshot('catalog-only-mobile.png');
+    await evaluate('window.fetch = window.smokeFetch; document.getElementById("reset-filters").click()'); await until(ready);
+    await change('time-preset', 'all'); await until(ready);
     await evaluate(`window.fetch = async () => new Response(JSON.stringify(${JSON.stringify(repeatedPayload)})); document.getElementById('refresh-data').click();`);
     await until(ready);
     await click('[data-workspace=overview]');
     await evaluate('Array.from(document.querySelectorAll("#skill-table button.link")).find(item => item.textContent === "mako").click()');
-    await click('#activity-chart summary');
-    await evaluate('document.querySelectorAll("#activity-chart .activity-choice")[1].click()');
+    await click('#activity-chart > details > summary');
+    await evaluate('document.querySelector(".trend-plot").focus()'); await key('End'); await enter();
+    await evaluate('document.querySelector(".brush-handle[data-mode=start]").focus()');
+    for (let hour = 0; hour < 23; hour++) await key('ArrowLeft');
     assert.equal(await evaluate('document.querySelector("#explore-totals").textContent'), '1matching paths2successful reads', 'Repeat reads do not add paths');
     const controlledComparison = await evaluate('document.getElementById("explore-comparison").textContent');
     assert.match(controlledComparison, /2 paths · 4 reads/);
@@ -425,6 +710,19 @@ try {
     assert.equal(await evaluate('document.querySelector("#explore-model-list small").textContent'), '1 path', 'Model path counts do not duplicate a run');
     await noOverflow();
     await screenshot(join(directory, 'comparison-repeated-mobile.png'));
+    const repeatedPoint = await evaluate('({...Array.from(document.querySelectorAll("g[data-skill] .trend-dot")).find(point => point.parentElement.dataset.skill === "mako" && point.dataset.bin === "34").dataset})');
+    assert.equal(repeatedPoint.runs, '1'); assert.equal(repeatedPoint.total, '2', 'Repeated reads do not inflate the plotted share');
+    await evaluate(`window.fetch = async () => new Response(JSON.stringify(${JSON.stringify(sparsePayload)})); document.getElementById('refresh-data').click();`);
+    await until(ready);
+    assert.equal(await evaluate('document.querySelectorAll(".trend-dot[data-bin=\\"1\\"]").length'), 0, 'Empty periods have no plotted zero');
+    const sparseLine = await evaluate('Array.from(document.querySelectorAll(".trend-line")).find(line => line.dataset.skill === "mako").getAttribute("d")');
+    assert.equal((sparseLine.match(/M/g) || []).length, 2, 'The trend breaks across a period without read-bearing runs');
+    assert.ok(!sparseLine.includes('L'), 'No interpolated line bridges the missing period');
+    await evaluate('document.querySelector(".trend-plot").focus()');
+    await command('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Home', code: 'Home', windowsVirtualKeyCode: 36 });
+    await command('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'ArrowRight', code: 'ArrowRight', windowsVirtualKeyCode: 39 });
+    assert.match(await evaluate('document.querySelector(".trend-label small").textContent'), /No read-bearing runs/);
+    await screenshot(join(directory, 'trends-gap-mobile.png'));
     await evaluate('window.fetch = window.smokeFetch; document.getElementById("refresh-data").click()');
     await until(ready);
     await evaluate(`window.fetch = async () => new Response(JSON.stringify(${JSON.stringify(mixedPayload)})); document.getElementById('refresh-data').click();`);
@@ -549,8 +847,16 @@ try {
     assert.equal(await evaluate('document.getElementById("skill-detail").hidden'), true, 'No impossible skill selection placeholder');
     await noZeroPagers();
 
+    await command('Page.addScriptToEvaluateOnNewDocument', { source: 'window.smokeNow = Date.parse("2026-01-01T12:00:00.000Z");' });
+    await command('Page.navigate', { url: rich.url }); await until(ready);
+    assert.equal(await evaluate('document.getElementById("time-preset").value'), '7');
+    assert.equal(await evaluate('document.querySelector(".metric-value").textContent'), '0', 'Historical database starts with an honest empty week');
+    await noOverflow(); await screenshot(join(directory, 'historical-empty-week.png'));
+    await change('time-preset', 'all'); await until(ready);
+    assert.equal(await evaluate('document.querySelector(".metric-value").textContent'), payload.report.counts.successfulReads.toLocaleString('en-US'), 'All time recovers historical data');
     await command("Page.navigate", { url: empty.url });
     await until(ready);
+    await change('time-preset', 'all'); await until(ready);
     assert.equal(await evaluate('document.querySelector(".metric-value").textContent'), "0");
     assert.match(await evaluate('document.getElementById("activity-chart").textContent'), /No activity recorded yet/);
     assert.equal(await evaluate('document.getElementById("scope-summary").hidden'), true);

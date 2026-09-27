@@ -20,7 +20,7 @@ export const dashboardHtml = `<!doctype html>
     </nav>
     <div class="scope-bar">
       <p id="scope-summary" hidden></p>
-      <div class="scope-actions"><label class="inline-label">Period<select id="time-preset"><option value="all">All time</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="custom">Custom dates</option></select></label><button type="button" id="toggle-filters" class="quiet" aria-expanded="false" aria-controls="scope-panel">Filters</button><button type="button" id="reset-filters" class="quiet">Reset</button></div>
+      <div class="scope-actions"><label class="inline-label">Period<select id="time-preset"><option value="all">All time</option><option value="7" selected>Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="custom">Custom dates</option></select></label><button type="button" id="toggle-filters" class="quiet" aria-expanded="false" aria-controls="scope-panel">Filters</button><button type="button" id="reset-filters" class="quiet">Reset</button></div>
     </div>
     <section id="scope-panel" class="panel" hidden aria-label="Filters">
       <form id="filter-form" class="filter-grid">
@@ -29,8 +29,8 @@ export const dashboardHtml = `<!doctype html>
         <label>Command source <span>Requests only</span><select id="source-filter" name="source"><option value="">All command sources</option><option value="interactive">Interactive</option><option value="rpc">RPC</option><option value="extension">Extension</option></select></label>
         <label>Model provider <span>Reads only</span><select id="model-provider-filter" name="modelProvider"><option value="">All providers</option></select></label>
         <label>Model <span>Reads only</span><select id="model-id-filter" name="modelId"><option value="">All models</option></select></label>
-        <label>From (UTC)<input id="from-filter" name="fromObservedAt" type="datetime-local"></label>
-        <label>To (UTC)<input id="to-filter" name="toObservedAt" type="datetime-local"></label>
+        <label>From (UTC)<input id="from-filter" name="fromObservedAt" type="datetime-local" step="0.001"></label>
+        <label>To (UTC)<input id="to-filter" name="toObservedAt" type="datetime-local" step="0.001"></label>
         <div class="filter-actions"><button type="submit">Apply filters</button></div>
       </form>
       <p class="footnote">Filters apply to all tabs.</p>
@@ -43,7 +43,7 @@ export const dashboardHtml = `<!doctype html>
           <div id="overview-cards" class="metrics-grid" aria-label="Filtered totals"></div>
           <div id="evidence-context" class="evidence-context"></div>
           <div class="overview-grid">
-            <section class="panel activity-panel" aria-labelledby="activity-heading"><div class="section-heading"><div><h2 id="activity-heading">Activity over time</h2></div><div class="activity-actions"><span class="small muted">UTC</span><button id="view-explorer" class="quiet" type="button" hidden>View selection</button></div></div><div id="activity-chart"></div></section>
+            <section class="panel activity-panel" aria-labelledby="activity-heading"><div class="section-heading"><div><h2 id="activity-heading">Skill trends</h2></div><div class="activity-actions"><span class="small muted">UTC</span><button id="view-explorer" class="quiet" type="button" hidden>View selection</button></div></div><div id="activity-chart"></div></section>
             <section class="panel" aria-labelledby="skills-heading"><div class="section-heading"><div><h2 id="skills-heading">Most-read skills</h2></div><span class="small muted">Successful reads</span></div><label class="search-label"><span class="sr-only">Find a skill</span><input id="skill-search" type="search" placeholder="Find a skill…"></label><div id="skill-table"></div></section>
           </div>
           <section id="explorer-panel" class="panel explorer-panel" aria-labelledby="explorer-heading" tabindex="-1" hidden>
@@ -147,22 +147,43 @@ p { color: var(--muted); }
 .metric-card:last-child .metric-value { color: var(--accent); }
 .evidence-context { display: flex; flex-wrap: wrap; gap: 8px 24px; font-size: 12px; padding: 12px 2px 22px; color: var(--muted); }
 .overview-grid { display: grid; grid-template-columns: minmax(0,1.55fr) minmax(330px,1fr); gap: 18px; }
-.activity-svg { display: block; width: 100%; height: 240px; touch-action: pan-y; }
-.activity-svg text { font: 11px ui-sans-serif, system-ui, sans-serif; fill: var(--muted); }
-.activity-svg .gridline { stroke: #e9ece6; stroke-width: 1; }
-.activity-svg .read-bar { fill: var(--teal); }
-.activity-svg .failure-bar { fill: #c15b40; }
 .activity-actions { display: flex; align-items: center; gap: 12px; }
 .activity-actions button { font-size: 11px; padding: 5px 8px; }
-.activity-hit { fill: transparent; cursor: crosshair; touch-action: pan-y; }
-.activity-hit:hover, .activity-hit:focus { fill: #26726518; stroke: var(--teal); stroke-width: 2px; }
-.activity-hit[data-selected=true] { fill: #26726526; stroke: var(--teal); stroke-width: 2px; }
-.activity-hit[data-preview=true] { fill: #26726526; stroke: var(--teal); stroke-width: 2px; }
-.activity-hit:focus { outline: none; }
-.chart-axis, .legend { display: flex; justify-content: space-between; gap: 12px; font-size: 11px; color: var(--muted); }
-.legend { justify-content: start; flex-wrap: wrap; margin-top: 14px; }
-.legend span::before { content: ''; display: inline-block; width: 7px; height: 7px; background: var(--teal); margin-right: 6px; border-radius: 2px; }
-.legend .failure::before { background: #c15b40; }
+.trend-layout { display: grid; grid-template-columns: minmax(108px, 26%) minmax(0, 1fr); gap: 0 14px; margin-top: 14px; }
+.trend-controls { display: flex; align-items: start; gap: 12px; margin: 12px 0; flex-wrap: wrap; }
+.trend-chooser { min-width: 0; max-width: 100%; }
+.trend-chooser summary { cursor: pointer; padding: 10px 0; font-size: 12px; }
+.trend-chooser .search-label { margin: 8px 0; }
+.trend-options { display: grid; max-height: 240px; overflow: auto; gap: 4px; }
+.trend-options button { text-align: left; overflow-wrap: anywhere; }
+.trend-entry { display: flex; min-width: 0; }
+.trend-entry .trend-label { flex: 1; }
+.trend-remove { align-self: center; padding: 8px; min-width: 28px; min-height: 36px; }
+.trend-labels { display: grid; grid-auto-rows: 64px; min-width: 0; }
+.trend-label { display: flex; flex-direction: column; justify-content: center; gap: 2px; min-width: 0; padding: 6px 8px; border: 0; border-left: 3px solid var(--skill-color); border-radius: 0; background: transparent; text-align: left; color: var(--ink); font-size: 12px; line-height: 1.3; }
+.trend-label > span { flex-shrink: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+.trend-label:hover, .trend-label[aria-pressed=true] { background: var(--soft); }
+.trend-label small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
+.trend-plot { position: relative; min-width: 0; touch-action: pan-y; user-select: none; cursor: crosshair; }
+.activity-svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.activity-svg .gridline { stroke: #e9ece6; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.trend-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.trend-dot { fill: none; stroke-width: 4; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.trend-cursor { position: absolute; top: 0; bottom: 0; width: 1px; background: #9eaaa580; pointer-events: none; }
+.brush-shade { position: absolute; top: 0; bottom: 0; background: #f6f7f2b3; pointer-events: none; }
+.brush-shade.before { left: 0; }.brush-shade.after { right: 0; }
+.brush-band { position: absolute; top: 0; bottom: 0; padding: 0; border: 0; border-left: 1px solid #26726599; border-right: 1px solid #26726599; border-radius: 5px; background: #26726514; cursor: grab; }
+.brush-band:hover { background: #26726520; }
+.trend-plot[data-dragging=true], .trend-plot[data-dragging=true] * { cursor: grabbing; }
+.trend-plot[data-pointer=true]:focus { outline: none; }
+.brush-handle { position: absolute; top: calc(50% - 22px); height: 44px; width: 24px; padding: 0; border: 0; border-radius: 0; background: transparent; transform: translateX(-50%); cursor: ew-resize; touch-action: pan-y; }
+.brush-handle::after { content: ''; position: absolute; top: calc(50% - 15px); left: 8px; width: 8px; height: 30px; border: 2px solid white; border-radius: 6px; background: var(--teal); box-shadow: 0 1px 4px #233d3220; }
+.brush-handle:hover { background: #2672650c; }
+.chart-axis { display: flex; justify-content: space-between; gap: 12px; font-size: 11px; color: var(--muted); grid-column: 2; padding-top: 10px; }
+.trend-readout, .brush-range { font-size: 11px; color: var(--muted); min-height: 1.5em; margin-top: 12px; font-variant-numeric: tabular-nums; }
+.brush-range { color: var(--teal); margin-top: 4px; }
+.activity-data { min-width: 640px; }
+.activity-choice[aria-pressed=true] { background: var(--soft); }
 details { margin-top: 15px; }
 summary { color: var(--muted); font-size: 12px; font-weight: 600; }
 details[open] > summary { margin-bottom: 15px; }
@@ -280,7 +301,7 @@ dt { color: var(--muted); }dd { margin: 0; overflow-wrap: anywhere; }
 @media (max-width: 760px) {
   .explore-layout { grid-template-columns: 1fr; gap: 20px; }
   .compare-row { grid-template-columns: minmax(0,1fr) 68px 68px; }
-  .shell { width: calc(100% - 28px); }.app-header { padding: 12px 14px; }.identity { gap: 9px; }.identity-note { display: none; }.header-actions { gap: 8px; }.preview { font-size: 9px; }.workspace-nav { gap: 24px; }.scope-bar { align-items: start; flex-direction: column; gap: 10px; }.scope-actions { width: 100%; }.scope-actions .inline-label { margin-right: auto; }.page-heading { align-items: start; gap: 12px; }.page-heading p { font-size: 12px; }.panel { padding: 17px; }.metrics-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }.metric-card { padding: 17px; }.metric-card:nth-child(2) { border-right: 0; }.metric-card:nth-child(-n+2) { border-bottom: 1px solid var(--line); }.metric-value { font-size: 31px; }.overview-grid, .relationship-grid, .path-layout { grid-template-columns: 1fr; }.filter-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }.activity-svg { height: 210px; }.section-heading { align-items: start; flex-wrap: wrap; }.section-heading > button { font-size: 11px; }.path-toolbar { gap: 12px; }.path-toolbar .search-label { max-width: none; flex: 1; min-width: 140px; }.path-toolbar .inline-label { max-width: 100%; }.path-toolbar select { max-width: 160px; }.route-master { margin-bottom: 0; }.route-detail { min-height: 0; }.step-heading { flex-wrap: wrap; gap: 4px; }.relationship-flow { gap: 6px; }.skill-node { font-size: 11px; }
+  .shell { width: calc(100% - 28px); }.app-header { padding: 12px 14px; }.identity { gap: 9px; }.identity-note { display: none; }.header-actions { gap: 8px; }.preview { font-size: 9px; }.workspace-nav { gap: 24px; }.scope-bar { align-items: start; flex-direction: column; gap: 10px; }.scope-actions { width: 100%; }.scope-actions .inline-label { margin-right: auto; }.page-heading { align-items: start; gap: 12px; }.page-heading p { font-size: 12px; }.panel { padding: 17px; }.metrics-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }.metric-card { padding: 17px; }.metric-card:nth-child(2) { border-right: 0; }.metric-card:nth-child(-n+2) { border-bottom: 1px solid var(--line); }.metric-value { font-size: 31px; }.overview-grid, .relationship-grid, .path-layout { grid-template-columns: 1fr; }.filter-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }.trend-layout { column-gap: 10px; }.section-heading { align-items: start; flex-wrap: wrap; }.section-heading > button { font-size: 11px; }.path-toolbar { gap: 12px; }.path-toolbar .search-label { max-width: none; flex: 1; min-width: 140px; }.path-toolbar .inline-label { max-width: 100%; }.path-toolbar select { max-width: 160px; }.route-master { margin-bottom: 0; }.route-detail { min-height: 0; }.step-heading { flex-wrap: wrap; gap: 4px; }.relationship-flow { gap: 6px; }.skill-node { font-size: 11px; }
 }
 @media (max-width: 760px) {
   .matrix th:first-child { width: 150px; }
@@ -296,8 +317,10 @@ const state = {
   requestId: 0, controller: null, report: null, workspace: 'overview',
   focus: { kind: 'all' }, routeKey: null, skillSelection: null,
   explore: { skillName: null, interval: null },
-  pages: { skills: 0, models: 0, columns: 0, relationships: 0, routes: 0, steps: 0, catalog: 0, identities: 0, evidence: 0 },
+  trends: { kind: 'top', count: 5 },
+  pages: { activity: 0, skills: 0, models: 0, columns: 0, relationships: 0, routes: 0, steps: 0, catalog: 0, identities: 0, evidence: 0 },
 };
+let activityView = null;
 const number = (value) => value.toLocaleString('en-US');
 const count = (value, singular, plural = singular + 's') => number(value) + ' ' + (value === 1 ? singular : plural);
 const sessionLabels = { machineId: 'Machine', sourceId: 'Account source', projectCwd: 'Project', sessionId: 'Session ID', segmentId: 'Segment ID', runId: 'Run ID' };
@@ -398,7 +421,16 @@ function resetSelections() {
   for (const key of Object.keys(state.pages)) state.pages[key] = 0;
   for (const id of ['skill-search', 'model-search', 'route-search', 'catalog-search', 'route-model']) $(id).value = '';
 }
+function applyTimePreset() {
+  const preset = $('time-preset').value;
+  if (preset === 'custom') return;
+  if (preset === 'all') { $('from-filter').value = ''; $('to-filter').value = ''; return; }
+  const now = Date.now();
+  $('to-filter').value = new Date(now).toISOString().slice(0, -1);
+  $('from-filter').value = new Date(now - Number(preset) * 86400000).toISOString().slice(0, -1);
+}
 async function loadDashboard() {
+  applyTimePreset();
   const requestId = ++state.requestId;
   state.controller?.abort(); state.controller = new AbortController();
   state.report = null;
@@ -475,82 +507,310 @@ function renderOverview() {
   $('evidence-context').append(node('span', count(coverage.captureGaps, 'capture gap') + ' · ' + count(coverage.droppedObservations, 'record') + ' lost · ' + count(coverage.filteredOmissions, 'record') + ' hidden by filters'));
 }
 function svgNode(tag, attrs) { const item = document.createElementNS('http://www.w3.org/2000/svg', tag); for (const [key, value] of Object.entries(attrs)) item.setAttribute(key, String(value)); return item; }
+function mountTimeBrush(plot, activity, readout, onChange, onInspect) {
+  const stepMs = Math.min(activity.binWidthMs, 86400000); const start = Date.parse(activity.startAt);
+  const steps = (Date.parse(activity.endAt) - start) / stepMs;
+  const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+  const at = (step) => new Date(start + step * stepMs).toISOString();
+  const interval = (from, to) => ({ startAt: at(from), endAt: at(to) });
+  const position = (event) => { const box = plot.getBoundingClientRect(); return clamp((event.clientX - box.left) / box.width * steps, 0, steps); };
+  const before = node('div', null, 'brush-shade before'); const after = node('div', null, 'brush-shade after');
+  const band = node('button', null, 'brush-band'); band.type = 'button'; band.dataset.mode = 'move';
+  const handles = ['start', 'end'].map((mode) => {
+    const handle = node('button', null, 'brush-handle'); handle.type = 'button'; handle.dataset.mode = mode;
+    handle.setAttribute('role', 'slider'); handle.setAttribute('aria-orientation', 'horizontal');
+    handle.setAttribute('aria-label', mode === 'start' ? 'Selection start time' : 'Selection end time (exclusive)');
+    return handle;
+  });
+  plot.append(before, after, band, ...handles);
+  plot.tabIndex = 0; plot.setAttribute('role', 'group');
+  plot.setAttribute('aria-label', 'Skill trends. Drag to select dates. Arrow keys inspect intervals. Enter selects. Shift extends. Escape clears.');
+  let selected = null; let gesture = null; let inspected = activity.bins.length - 1;
+  function paint(range, preview = false) {
+    for (const element of [before, after, band, ...handles]) element.hidden = range === null;
+    plot.dataset.dragging = String(preview);
+    if (range === null) { readout.textContent = 'Drag across the chart to explore dates.'; return; }
+    const [from, to] = range;
+    before.style.width = from / steps * 100 + '%'; after.style.width = (steps - to) / steps * 100 + '%';
+    band.style.left = from / steps * 100 + '%'; band.style.width = (to - from) / steps * 100 + '%';
+    handles[0].style.left = from / steps * 100 + '%'; handles[1].style.left = to / steps * 100 + '%';
+    const first = preview ? clamp(Math.floor(from), 0, steps - 1) : from; const last = preview ? clamp(Math.ceil(to), first + 1, steps) : to;
+    const label = intervalLabel(at(first), at(last)) + ' UTC';
+    band.setAttribute('aria-label', 'Move ' + label + '. Use Left or Right arrow keys.');
+    readout.textContent = label + (preview ? ' · release to select' : ' · drag the band to move it');
+    const minimumWidth = Math.min(1, last - first);
+    for (const [index, handle] of handles.entries()) {
+      handle.setAttribute('aria-valuemin', String(index === 0 ? 0 : first + minimumWidth));
+      handle.setAttribute('aria-valuemax', String(index === 0 ? last - minimumWidth : steps));
+      handle.setAttribute('aria-valuenow', String(index === 0 ? first : last));
+      handle.setAttribute('aria-valuetext', timeLabel(at(index === 0 ? first : last)) + ' UTC' + (index === 1 ? ' (exclusive)' : ''));
+    }
+  }
+  function preview(step) {
+    const { mode, anchor, range } = gesture;
+    if (mode === 'create') return [Math.min(anchor, step), Math.max(anchor, step)];
+    const [from, to] = range;
+    const minimumWidth = Math.min(1, to - from);
+    if (mode === 'start') return [clamp(from + (step - anchor), 0, to - minimumWidth), to];
+    if (mode === 'end') return [from, clamp(to + (step - anchor), from + minimumWidth, steps)];
+    const next = clamp(from + (step - anchor), 0, steps - (to - from));
+    return [next, next + to - from];
+  }
+  function cancel() {
+    if (gesture === null) return;
+    const pointer = gesture.pointer; gesture = null;
+    if (plot.hasPointerCapture(pointer)) plot.releasePointerCapture(pointer);
+    paint(selected);
+  }
+  plot.addEventListener('pointerdown', (event) => {
+    if (!event.isPrimary || event.button !== 0 || gesture !== null) return;
+    const anchor = position(event); let mode = event.target.dataset.mode || 'create';
+    if (selected && (mode === 'start' || mode === 'end')) mode = Math.abs(anchor - selected[0]) < Math.abs(anchor - selected[1]) ? 'start' : 'end';
+    gesture = { mode, anchor, range: selected, pointer: event.pointerId };
+    plot.dataset.pointer = 'true'; plot.setPointerCapture(event.pointerId); plot.focus({ preventScroll: true });
+    paint(mode === 'create' ? [anchor, anchor] : selected, true);
+  });
+  plot.addEventListener('pointermove', (event) => {
+    if (gesture !== null && event.pointerId !== gesture.pointer) return;
+    const step = position(event);
+    inspected = Math.min(activity.bins.length - 1, Math.floor(step * stepMs / activity.binWidthMs)); onInspect(inspected);
+    if (gesture !== null) paint(preview(step), true);
+  });
+  plot.addEventListener('pointerup', (event) => {
+    if (gesture === null || event.pointerId !== gesture.pointer) return;
+    const step = position(event); const movement = Math.round(step - gesture.anchor);
+    const range = preview(step).map((value) => Math.round(value * stepMs) / stepMs); const mode = gesture.mode;
+    gesture = null;
+    if (plot.hasPointerCapture(event.pointerId)) plot.releasePointerCapture(event.pointerId);
+    let from; let to;
+    if (mode === 'move') {
+      const width = selected[1] - selected[0];
+      from = clamp(selected[0] + movement, 0, steps - width); to = from + width;
+    }
+    else { from = clamp(Math.floor(range[0]), 0, steps - 1); to = clamp(Math.ceil(range[1]), from + 1, steps); }
+    onChange(interval(from, to), event.shiftKey && mode === 'create');
+  });
+  plot.addEventListener('pointercancel', cancel); plot.addEventListener('lostpointercapture', cancel);
+  plot.addEventListener('blur', () => { delete plot.dataset.pointer; });
+  plot.addEventListener('keydown', (event) => {
+    delete plot.dataset.pointer;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      if (gesture !== null) cancel();
+      else { onChange(null); plot.focus({ preventScroll: true }); }
+      return;
+    }
+    if (gesture !== null) return;
+    const mode = event.target.dataset.mode;
+    if (mode && selected && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+      event.preventDefault();
+      let [from, to] = selected; const delta = (event.key === 'ArrowLeft' ? -1 : 1) * (event.shiftKey ? 7 : 1);
+      const minimumWidth = Math.min(1, to - from);
+      if (mode === 'start') from = event.key === 'Home' ? 0 : event.key === 'End' ? to - minimumWidth : clamp(from + delta, 0, to - minimumWidth);
+      else if (mode === 'end') to = event.key === 'Home' ? from + minimumWidth : event.key === 'End' ? steps : clamp(to + delta, from + minimumWidth, steps);
+      else {
+        const width = to - from;
+        from = event.key === 'Home' ? 0 : event.key === 'End' ? steps - width : clamp(from + delta, 0, steps - width); to = from + width;
+      }
+      onChange(interval(from, to)); return;
+    }
+    if (event.target !== plot) return;
+    if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+      event.preventDefault();
+      inspected = event.key === 'Home' ? 0 : event.key === 'End' ? activity.bins.length - 1 : clamp(inspected + (event.key === 'ArrowLeft' ? -1 : 1), 0, activity.bins.length - 1);
+      onInspect(inspected, true);
+    } else if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault(); const bin = activity.bins[inspected]; onChange({ startAt: bin.startAt, endAt: bin.endAt }, event.shiftKey);
+    }
+  });
+  return (value) => {
+    selected = value === null ? null : [(Date.parse(value.startAt) - start) / stepMs, (Date.parse(value.endAt) - start) / stepMs];
+    paint(selected);
+  };
+}
+function availableTrendNames() {
+  const activity = state.report.activity;
+  const dated = new Set(activity.kind === 'bucketed' ? activity.bins.flatMap(bin => bin.skills.map(entry => entry.name)) : []);
+  return state.report.skillGroups.filter(group => dated.has(group.name)).map(group => group.name);
+}
+function displayedTrendNames() {
+  return state.trends.kind === 'top' ? availableTrendNames().slice(0, state.trends.count) : state.trends.names;
+}
+function addTrend(name) {
+  const names = displayedTrendNames();
+  if (!names.includes(name)) state.trends = { kind: 'custom', names: [...names, name] };
+}
+function mountTrendControls(target) {
+  const controls = node('div', null, 'trend-controls');
+  controls.hidden = state.report.activity.kind === 'empty' || state.report.skillGroups.length === 0;
+  const chooser = node('details', null, 'trend-chooser');
+  const summary = node('summary', 'Add skills');
+  const searchLabel = node('label', 'Find a skill', 'search-label');
+  const search = node('input'); search.type = 'search'; search.placeholder = 'Search skill names'; searchLabel.append(search);
+  const results = node('div', null, 'trend-options');
+  const status = node('p', null, 'sr-only'); status.setAttribute('role', 'status');
+  let limit = 20;
+  function choices() {
+    const names = displayedTrendNames();
+    const candidates = state.report.skillGroups.filter(group => group.name.toLowerCase().includes(search.value.toLowerCase()));
+    results.replaceChildren();
+    for (const group of candidates.slice(0, limit)) {
+      const action = button(group.name, () => {
+        addTrend(group.name); updateActivitySelection();
+        status.textContent = group.name + ' added to trends.';
+        search.focus({ preventScroll: true });
+      });
+      action.disabled = names.includes(group.name);
+      if (action.disabled) action.textContent += ' · Added';
+      results.append(action);
+    }
+    if (!candidates.length) results.append(empty('No skills match this search.'));
+    if (candidates.length > limit) results.append(button('More results', () => {
+      const firstNew = limit; limit += 20; choices();
+      const next = Array.from(results.querySelectorAll('button')).slice(firstNew).find(action => !action.disabled);
+      (next || search).focus();
+    }));
+  }
+  search.addEventListener('input', () => { limit = 20; choices(); });
+  chooser.append(summary, searchLabel, results, status);
+  chooser.addEventListener('toggle', () => { if (chooser.open) { choices(); search.focus({ preventScroll: true }); } });
+  chooser.addEventListener('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); chooser.open = false; summary.focus({ preventScroll: true }); } });
+  const more = button('Show more', () => {
+    if (state.trends.kind === 'top') state.trends = { kind: 'top', count: state.trends.count + 5 };
+    else {
+      const remaining = availableTrendNames().filter(name => !state.trends.names.includes(name));
+      state.trends = { kind: 'custom', names: [...state.trends.names, ...remaining.slice(0, 5)] };
+    }
+    updateActivitySelection();
+  });
+  controls.append(chooser, more); target.append(controls);
+  return () => {
+    const names = new Set(displayedTrendNames());
+    more.disabled = availableTrendNames().every(name => names.has(name));
+    if (chooser.open) choices();
+  };
+}
 function renderActivity() {
-  const target = $('activity-chart'); target.replaceChildren();
+  const target = $('activity-chart'); target.replaceChildren(); activityView = null;
   const report = state.report; const activity = report.activity;
+  const updateControls = mountTrendControls(target); updateControls();
   if (activity.kind === 'empty') target.append(empty(hasFilters() ? 'No dated activity matches these filters.' : totalEvidence(report.counts) === 0 && report.routes.length === 0 ? 'No activity recorded yet.' : 'No dated activity recorded.'));
   else {
-    const max = Math.max(1, ...activity.bins.map((bin) => bin.counts.successfulReads + bin.counts.failedReads));
-    const svg = svgNode('svg', { viewBox: '0 0 680 240', role: 'group', 'aria-labelledby': 'activity-title activity-description', class: 'activity-svg', preserveAspectRatio: 'none' });
-    const title = svgNode('title', { id: 'activity-title' }); title.textContent = 'Read activity in UTC';
-    const description = svgNode('desc', { id: 'activity-description' }); description.textContent = count(activity.bins.length, 'time bucket') + ' from ' + date(activity.startAt) + '. Select a bar or drag across bars to explore a UTC interval. Green bars show successful reads, orange bars show failures. Exact counts, including requests, wrappers, and zeros, follow in the data table.';
-    svg.append(title, description);
-    for (const fraction of [0, .5, 1]) {
-      const y = 215 - fraction * 190; svg.append(svgNode('line', { x1: 37, x2: 678, y1: y, y2: y, class: 'gridline' }));
-      const label = svgNode('text', { x: 27, y: y + 4, 'text-anchor': 'end' }); label.textContent = number(Math.round(max * fraction)); svg.append(label);
+    const binSkills = activity.bins.map((bin) => new Map(bin.skills.map((entry) => [entry.name, entry.readRuns])));
+    const colors = ['#267265', '#477a9c', '#a86539', '#78698f', '#737c35'];
+    const layout = node('div', null, 'trend-layout'); const labels = node('div', null, 'trend-labels');
+    const plot = node('div', null, 'trend-plot');
+    const svg = svgNode('svg', { role: 'img', 'aria-labelledby': 'activity-title activity-description', class: 'activity-svg', preserveAspectRatio: 'none' });
+    const cursor = node('div', null, 'trend-cursor');
+    plot.append(svg, cursor);
+    const axis = node('div', null, 'chart-axis'); axis.append(node('span', date(activity.startAt, activity.binWidthMs < 86400000)), node('span', date(activity.binWidthMs < 86400000 ? activity.endAt : new Date(Date.parse(activity.endAt) - 1).toISOString(), activity.binWidthMs < 86400000)));
+    layout.append(labels, plot, axis);
+    const noTrends = empty(availableTrendNames().length ? 'No skills displayed. Add skills to compare.' : hasFilters() ? 'No dated successful reads match these filters.' : 'No dated successful reads to compare.'); target.append(noTrends);
+    const readout = node('p', null, 'trend-readout'); const rangeReadout = node('p', null, 'brush-range');
+    const announcement = node('p', null, 'sr-only'); announcement.setAttribute('role', 'status'); announcement.setAttribute('aria-live', 'polite');
+    const explanation = node('p', 'Share of runs with each skill · 0–100% in every row', 'small muted');
+    const coverage = node('p', 'Only runs with successful reads count. ' + (activity.binWidthMs < 86400000 ? count(activity.binWidthMs / 3600000, 'hour') : count(activity.binWidthMs / 86400000, 'day')) + ' per point. Gaps mean no read-bearing runs.', 'footnote');
+    target.append(explanation, layout, readout, rangeReadout, announcement, coverage);
+    const scroll = node('div', null, 'table-wrap'); const details = disclosure('View activity data', scroll); target.append(details);
+    let shown = []; let inspected = activity.bins.length - 1;
+    function inspect(index, announce = false) {
+      inspected = index; const bin = activity.bins[index];
+      cursor.style.left = ((Date.parse(bin.startAt) + Date.parse(bin.endAt)) / 2 - Date.parse(activity.startAt)) / (Date.parse(activity.endAt) - Date.parse(activity.startAt)) * 100 + '%';
+      readout.textContent = intervalLabel(bin.startAt, bin.endAt) + ' · ' + count(bin.readRuns, 'read-bearing run');
+      labels.querySelectorAll('.trend-label').forEach((label, row) => {
+        const paths = binSkills[index].get(shown[row]) || 0;
+        label.querySelector('small').textContent = bin.readRuns ? Math.round(paths / bin.readRuns * 100) + '% · ' + paths + '/' + bin.readRuns : 'No read-bearing runs';
+        label.title = shown[row] + ': ' + (bin.readRuns ? count(paths, 'run') + ' of ' + number(bin.readRuns) : 'No read-bearing runs') + ' · ' + intervalLabel(bin.startAt, bin.endAt);
+      });
+      if (announce) announcement.textContent = readout.textContent + '. ' + Array.from(labels.querySelectorAll('.trend-label'), (label) => label.title).join('. ');
     }
-    const width = 636 / activity.bins.length;
-    activity.bins.forEach((bin, index) => {
-      const reads = bin.counts.successfulReads / max * 190; const failures = bin.counts.failedReads / max * 190;
-      const group = svgNode('g', {}); const tooltip = svgNode('title', {}); tooltip.textContent = date(bin.startAt) + ': ' + countsText(bin.counts); group.append(tooltip);
-      group.append(svgNode('rect', { x: 39 + index * width, y: 215 - reads, width: Math.max(1, width * .7), height: reads, rx: 1, class: 'read-bar' }), svgNode('rect', { x: 39 + index * width, y: 215 - reads - failures, width: Math.max(1, width * .7), height: failures, rx: 1, class: 'failure-bar' }));
-      const hit = svgNode('rect', { x: 39 + index * width, y: 24, width: Math.max(1, width * .9), height: 192, class: 'activity-hit', role: 'button', tabindex: 0, 'data-index': index, 'aria-label': 'Select ' + intervalLabel(bin.startAt, bin.endAt) + ' UTC: ' + countsText(bin.counts) });
-      hit.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectActivityBin(index, event.shiftKey); } });
-      hit.addEventListener('click', (event) => { if (event.detail === 0) selectActivityBin(index, event.shiftKey); });
-      group.append(hit); svg.append(group);
-    });
-    let dragStart = null;
-    svg.addEventListener('pointerdown', (event) => {
-      const hit = event.target.closest?.('.activity-hit');
-      if (!hit) return;
-      dragStart = Number(hit.dataset.index);
-      svg.setPointerCapture(event.pointerId);
-    });
-    svg.addEventListener('pointermove', (event) => {
-      if (dragStart === null) return;
-      const end = activityIndexAt(svg, event.clientX, activity.bins.length);
-      svg.querySelectorAll('.activity-hit').forEach((hit, index) => { hit.dataset.preview = String(index >= Math.min(dragStart, end) && index <= Math.max(dragStart, end)); });
-    });
-    svg.addEventListener('pointerup', (event) => {
-      if (dragStart === null) return;
-      const end = activityIndexAt(svg, event.clientX, activity.bins.length);
-      const start = dragStart; dragStart = null;
-      svg.querySelectorAll('.activity-hit').forEach((hit) => { delete hit.dataset.preview; });
-      if (svg.hasPointerCapture(event.pointerId)) svg.releasePointerCapture(event.pointerId);
-      selectActivityBin(start, event.shiftKey, end);
-    });
-    svg.addEventListener('pointercancel', () => { dragStart = null; svg.querySelectorAll('.activity-hit').forEach((hit) => { delete hit.dataset.preview; }); });
-    target.append(svg);
-    const axis = node('div', null, 'chart-axis'); axis.append(node('span', date(activity.startAt)), node('span', date(new Date(Date.parse(activity.endAt) - 1).toISOString()))); target.append(axis);
-    const legend = node('div', null, 'legend'); legend.append(node('span', 'Successful reads'), node('span', 'Read failures', 'failure')); target.append(legend);
-    target.append(node('p', count(Math.round(activity.binWidthMs / 86400000), 'day') + ' per bar · UTC. Drag to select a range; hold Shift to extend it.', 'footnote'));
-    const data = table(['UTC interval', 'Reads', 'Failures', 'Requests', 'Wrappers']);
-    activity.bins.forEach((bin, index) => {
-      const row = node('tr'); const cell = node('td');
-      const action = button(intervalLabel(bin.startAt, bin.endAt), (event) => selectActivityBin(index, event.shiftKey), 'link activity-choice');
-      action.setAttribute('aria-label', 'Select ' + intervalLabel(bin.startAt, bin.endAt) + ' UTC'); cell.append(action); row.append(cell);
-      [bin.counts.successfulReads, bin.counts.failedReads, bin.counts.requests, bin.counts.wrappers].forEach((value) => row.append(node('td', value)));
-      data.lastChild.append(row);
-    });
-    const scroll = node('div', null, 'table-wrap'); scroll.append(data); target.append(disclosure('View activity data', scroll));
+    function renderData() {
+      const data = table(['UTC interval', 'Read-bearing runs', ...shown, 'Reads', 'Failures', 'Requests', 'Wrappers'], 'Skill shares count each run once. Other counts include repeated records.'); data.className = 'activity-data';
+      pageItems(activity.bins, 'activity', 24).forEach((bin, offset) => {
+        const index = state.pages.activity * 24 + offset;
+        const row = node('tr'); const cell = node('td');
+        const action = button(intervalLabel(bin.startAt, bin.endAt), (event) => selectActivityBin(index, event.shiftKey), 'link activity-choice');
+        action.dataset.bin = index; action.setAttribute('aria-pressed', String(state.explore.interval !== null && bin.startAt >= state.explore.interval.startAt && bin.endAt <= state.explore.interval.endAt));
+        action.setAttribute('aria-label', 'Select ' + intervalLabel(bin.startAt, bin.endAt) + ' UTC'); cell.append(action); row.append(cell, node('td', bin.readRuns));
+        for (const name of shown) {
+          const paths = binSkills[index].get(name) || 0;
+          row.append(node('td', bin.readRuns ? Math.round(paths / bin.readRuns * 100) + '% (' + paths + '/' + bin.readRuns + ')' : 'Unavailable'));
+        }
+        [bin.counts.successfulReads, bin.counts.failedReads, bin.counts.requests, bin.counts.wrappers].forEach((value) => row.append(node('td', value)));
+        data.lastChild.append(row);
+      });
+      scroll.replaceChildren(data, pagination('activity', activity.bins.length, 24, renderData));
+    }
+    details.addEventListener('toggle', () => { if (details.open) renderData(); });
+    const setRange = mountTimeBrush(plot, activity, rangeReadout, selectExploreInterval, inspect);
+    activityView = (selection) => {
+      updateControls();
+      const names = displayedTrendNames();
+      noTrends.hidden = names.length > 0;
+      for (const element of [layout, explanation, readout, rangeReadout, coverage]) element.hidden = names.length === 0;
+      if (JSON.stringify(names) !== JSON.stringify(shown) || !svg.firstChild) {
+        shown = names; labels.replaceChildren(); svg.replaceChildren();
+        const height = Math.max(1, names.length) * 64; svg.setAttribute('viewBox', '0 0 600 ' + height); plot.style.height = height + 'px';
+        const title = svgNode('title', { id: 'activity-title' }); title.textContent = 'Skill shares over time';
+        const description = svgNode('desc', { id: 'activity-description' }); description.textContent = 'Each named row shows the percent of read-bearing runs containing that skill, from zero to 100 percent. Repeated reads count once per run. Exact counts follow in the data table.';
+        svg.append(title, description);
+        names.forEach((name, row) => {
+          const color = colors[row % colors.length]; const label = button('', () => selectExploreSkill(name), 'trend-label');
+          label.dataset.skill = name; label.style.setProperty('--skill-color', color); label.append(node('span', name), node('small'));
+          const entry = node('div', null, 'trend-entry');
+          const remove = button('×', () => {
+            state.trends = { kind: 'custom', names: displayedTrendNames().filter(value => value !== name) };
+            updateActivitySelection();
+            const next = labels.querySelectorAll('.trend-remove')[Math.min(row, shown.length - 1)]
+              || target.querySelector('.trend-controls:not([hidden]) summary');
+            if (next) next.focus({ preventScroll: true });
+            else { $('activity-heading').tabIndex = -1; $('activity-heading').focus({ preventScroll: true }); }
+          }, 'quiet trend-remove');
+          remove.setAttribute('aria-label', 'Remove ' + name + ' from trends'); entry.append(label, remove); labels.append(entry);
+          const top = row * 64 + 10; const bottom = top + 44;
+          for (const y of [top, bottom]) svg.append(svgNode('line', { x1: 0, x2: 600, y1: y, y2: y, class: 'gridline' }));
+          let path = ''; let connected = false; const dots = svgNode('g', { 'data-skill': name });
+          activity.bins.forEach((bin, index) => {
+            if (!bin.readRuns) { connected = false; return; }
+            const paths = binSkills[index].get(name) || 0;
+            const x = ((Date.parse(bin.startAt) + Date.parse(bin.endAt)) / 2 - Date.parse(activity.startAt)) / (Date.parse(activity.endAt) - Date.parse(activity.startAt)) * 600;
+            const y = bottom - paths / bin.readRuns * 44;
+            path += (connected ? ' L ' : ' M ') + x + ' ' + y; connected = true;
+            const dot = svgNode('path', { d: 'M ' + x + ' ' + y + ' h 0.01', stroke: color, class: 'trend-dot', 'data-bin': index, 'data-runs': paths, 'data-total': bin.readRuns });
+            dots.append(dot);
+          });
+          svg.append(svgNode('path', { d: path, stroke: color, class: 'trend-line', 'data-skill': name }), dots);
+        });
+        if (details.open) renderData();
+        else scroll.replaceChildren();
+      }
+      labels.querySelectorAll('.trend-label').forEach((label) => label.setAttribute('aria-pressed', String(label.dataset.skill === selection.skillName)));
+      inspect(inspected); setRange(selection.interval);
+    };
   }
-  if (report.coverage.undatedEvidence > 0) target.append(node('p', count(report.coverage.undatedEvidence, 'record') + ' without a usable timestamp. Not shown in the activity chart.', 'footnote'));
+  if (report.coverage.undatedEvidence > 0) target.append(node('p', count(report.coverage.undatedEvidence, 'record') + ' without a usable timestamp. Not shown in the skill trends.', 'footnote'));
+}
+function timeLabel(value) {
+  return value.replace('T', ' ').replace(/\.000Z$/, '').replace(/Z$/, '');
 }
 function intervalLabel(startAt, endAt) {
+  if (!startAt.endsWith('T00:00:00.000Z') || !endAt.endsWith('T00:00:00.000Z')) {
+    return timeLabel(startAt) + ' – ' + timeLabel(endAt) + ' (end exclusive)';
+  }
   const last = new Date(Date.parse(endAt) - 1).toISOString();
   return startAt.slice(0, 10) === last.slice(0, 10) ? date(startAt) : date(startAt) + ' – ' + date(last);
 }
-function activityIndexAt(svg, clientX, count) {
-  const box = svg.getBoundingClientRect();
-  return Math.max(0, Math.min(count - 1, Math.floor((((clientX - box.left) / box.width) * 680 - 39) / (636 / count))));
-}
-function selectActivityBin(index, extend = false, end = index) {
-  const bins = state.report.activity.bins;
-  const selectedStart = extend && state.explore.interval ? bins.findIndex((bin) => bin.startAt === state.explore.interval.startAt) : -1;
-  const first = Math.min(selectedStart < 0 ? index : selectedStart, index, end);
-  const last = Math.max(selectedStart < 0 ? index : selectedStart, index, end);
-  state.explore.interval = { startAt: bins[first].startAt, endAt: bins[last].endAt };
+function selectExploreInterval(interval, extend = false) {
+  const current = state.explore.interval;
+  state.explore.interval = extend && interval && current ? {
+    startAt: interval.startAt < current.startAt ? interval.startAt : current.startAt,
+    endAt: interval.endAt > current.endAt ? interval.endAt : current.endAt,
+  } : interval;
   renderExplore();
+}
+function selectActivityBin(index, extend = false) {
+  const bin = state.report.activity.bins[index];
+  selectExploreInterval({ startAt: bin.startAt, endAt: bin.endAt }, extend);
 }
 function focusExploration() {
   const panel = $('explorer-panel');
@@ -559,19 +819,16 @@ function focusExploration() {
   if (!panel.hidden) panel.scrollIntoView({ block: 'nearest' });
 }
 function selectExploreSkill(name) {
+  if (state.explore.skillName !== name) addTrend(name);
   state.explore.skillName = state.explore.skillName === name ? null : name;
   renderExplore(); focusExploration();
 }
 function updateActivitySelection() {
   const interval = state.explore.interval;
   $('view-explorer').hidden = !interval && !state.explore.skillName;
-  $('activity-chart').querySelectorAll('.activity-hit').forEach((hit) => {
-    const bin = state.report.activity.bins[Number(hit.dataset.index)];
-    const selected = interval !== null && bin.startAt >= interval.startAt && bin.endAt <= interval.endAt;
-    hit.dataset.selected = String(selected); hit.setAttribute('aria-pressed', String(selected));
-  });
-  $('activity-chart').querySelectorAll('.activity-choice').forEach((action, index) => {
-    const bin = state.report.activity.bins[index];
+  activityView?.(state.explore);
+  $('activity-chart').querySelectorAll('.activity-choice').forEach((action) => {
+    const bin = state.report.activity.bins[Number(action.dataset.bin)];
     action.setAttribute('aria-pressed', String(interval !== null && bin.startAt >= interval.startAt && bin.endAt <= interval.endAt));
   });
 }
@@ -630,17 +887,21 @@ function renderComparison() {
   let interval = state.explore.interval;
   const recent = interval === null;
   if (recent) {
-    if (activity.kind !== 'bucketed' || activity.bins.length < 2) {
+    if (activity.kind !== 'bucketed') {
       target.append(node('h3', 'Period comparison'), empty('The report needs at least two time intervals to compare.'));
       return;
     }
-    const bins = activity.bins; const size = Math.min(7, Math.floor(bins.length / 2));
-    interval = { startAt: bins[bins.length - size].startAt, endAt: bins.at(-1).endAt };
+    const first = Math.max(Date.parse(activity.startAt), Date.parse(state.report.scope.fromObservedAt ?? activity.startAt));
+    const end = Math.min(Date.parse(activity.endAt), state.report.scope.toObservedAt ? Date.parse(state.report.scope.toObservedAt) + 1 : Date.parse(activity.endAt));
+    const step = Math.min(activity.binWidthMs, 86400000);
+    const size = Math.min(7 * 86400000, Math.floor((end - first) / 2 / step) * step || Math.floor((end - first) / 2));
+    if (size < 1) { target.append(empty('The report needs two elapsed periods to compare.')); return; }
+    interval = { startAt: new Date(end - size).toISOString(), endAt: new Date(end).toISOString() };
   }
   const duration = Date.parse(interval.endAt) - Date.parse(interval.startAt);
   const previousStart = new Date(Date.parse(interval.startAt) - duration).toISOString();
   const heading = node('div', null, 'section-heading');
-  heading.append(node('h3', recent ? 'Recent ' + count(Math.round(duration / 86400000), 'day') + ' vs previous period' : 'Compared with previous period'));
+  heading.append(node('h3', recent ? 'Recent period vs previous period' : 'Compared with previous period'));
   if (recent) heading.append(button('Explore these dates', () => { state.explore.interval = interval; renderExplore(); focusExploration(); }, 'link'));
   target.append(heading);
   const earliest = state.report.activity.startAt;
@@ -950,14 +1211,12 @@ $('preview-label').hidden = new URLSearchParams(location.search).get('preview') 
 document.querySelectorAll('[data-workspace]').forEach((item) => item.addEventListener('click', () => showWorkspace(item.dataset.workspace)));
 $('filter-form').addEventListener('submit', (event) => { event.preventDefault(); loadDashboard(); });
 $('refresh-data').addEventListener('click', loadDashboard);
-$('reset-filters').addEventListener('click', () => { $('filter-form').reset(); $('time-preset').value = 'all'; resetSelections(); loadDashboard(); });
+$('reset-filters').addEventListener('click', () => { $('filter-form').reset(); $('time-preset').value = '7'; state.trends = { kind: 'top', count: 5 }; resetSelections(); loadDashboard(); });
 $('machine-filter').addEventListener('change', () => { for (const id of ['project-filter', 'model-provider-filter', 'model-id-filter']) $(id).value = ''; loadDashboard(); });
 $('toggle-filters').addEventListener('click', () => { $('scope-panel').hidden = !$('scope-panel').hidden; $('toggle-filters').setAttribute('aria-expanded', String(!$('scope-panel').hidden)); });
 $('time-preset').addEventListener('change', () => {
   const preset = $('time-preset').value;
   if (preset === 'custom') { $('scope-panel').hidden = false; $('toggle-filters').setAttribute('aria-expanded', 'true'); $('from-filter').focus(); return; }
-  if (preset === 'all') { $('from-filter').value = ''; $('to-filter').value = ''; }
-  else { const now = new Date(); $('to-filter').value = now.toISOString().slice(0, 16); $('from-filter').value = new Date(now.getTime() - Number(preset) * 86400000).toISOString().slice(0, 16); }
   loadDashboard();
 });
 for (const id of ['from-filter', 'to-filter']) $(id).addEventListener('change', () => { $('time-preset').value = 'custom'; });

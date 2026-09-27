@@ -178,7 +178,7 @@ test("dashboard analytics handles empty, catalog-only, bounded empty, and sparse
   const bounded = report([], [], { fromObservedAt: dayOne, toObservedAt: dayThree });
   assert.equal(bounded.activity.kind, "bucketed");
   if (bounded.activity.kind !== "bucketed") return;
-  assert.equal(bounded.activity.bins.length, 3);
+  assert.equal(bounded.activity.bins.length, 49);
   assert.ok(bounded.activity.bins.every((bin) => JSON.stringify(bin.counts) === JSON.stringify(zero)));
   const result = report([run([group([
     item(read("a"), 1, "2026-01-01T23:59:59.999Z"),
@@ -186,12 +186,60 @@ test("dashboard analytics handles empty, catalog-only, bounded empty, and sparse
   ])])]);
   assert.equal(result.activity.kind, "bucketed");
   if (result.activity.kind !== "bucketed") return;
-  assert.equal(result.activity.binWidthMs, 86_400_000);
-  assert.equal(result.activity.startAt, "2026-01-01T00:00:00.000Z");
-  assert.equal(result.activity.endAt, "2026-01-04T00:00:00.000Z");
-  assert.deepEqual(result.activity.bins.map((bin) => bin.counts.successfulReads), [1, 0, 1]);
+  assert.equal(result.activity.binWidthMs, 3_600_000);
+  assert.equal(result.activity.startAt, "2026-01-01T23:00:00.000Z");
+  assert.equal(result.activity.endAt, "2026-01-03T01:00:00.000Z");
+  assert.deepEqual(result.activity.bins.map((bin) => bin.counts.successfulReads), [1, ...Array.from({ length: 24 }, () => 0), 1]);
   const extended = report([run([group([item(read("a"))])])], [], { toObservedAt: dayThree });
-  assert.equal(extended.activity.kind === "bucketed" && extended.activity.bins.length, 3);
+  assert.equal(extended.activity.kind === "bucketed" && extended.activity.bins.length, 49);
+});
+
+test("skill trends count distinct read-bearing runs per UTC bin and exact skill name", () => {
+  const result = report([
+    run([group([
+      item(read("a"), 1), item(read("a"), 2),
+      item({ kind: "read-result", skill: skill("a", "/variant/SKILL.md"), model: null, outcome: "success", toolCallId: "variant" }, 3),
+      item(read("b"), 4), item(read("a"), 5, dayThree), item(read("undated"), 6, "invalid"),
+    ])]),
+    run([group([item(read("b")), item(read("A"), 2)])], { runId: "second" }),
+    run([group([item(read("failure", null, "error"))])], { runId: "failed" }),
+    run([group([item({ kind: "command-intent", skillName: "a", source: "interactive" })])], { runId: "request" }),
+    run([group([item({ kind: "wrapper-observed", skill: skill("a"), wrapperSource: "expanded-prompt" })])], { runId: "wrapper" }),
+  ]);
+  assert.equal(result.activity.kind, "bucketed");
+  if (result.activity.kind !== "bucketed") return;
+  assert.deepEqual(result.activity.bins.map(({ readRuns, skills }) => ({ readRuns, skills })), [
+    { readRuns: 2, skills: [{ name: "a", readRuns: 1 }, { name: "A", readRuns: 1 }, { name: "b", readRuns: 2 }] },
+    ...Array.from({ length: 47 }, () => ({ readRuns: 0, skills: [] })),
+    { readRuns: 1, skills: [{ name: "a", readRuns: 1 }] },
+  ]);
+  assert.equal(result.activity.bins[0]?.counts.successfulReads, 6);
+});
+
+test("skill trends retain shares when work volume or repeated reads increase", () => {
+  const runs = [
+    run([group([item(read("a")), item(read("a"), 2), item(read("b"), 3)])]),
+    run([group([item(read("b"))])], { runId: "other" }),
+  ];
+  const original = report(runs).activity;
+  const busier = report(Array.from({ length: 4 }, (_, copy) => runs.map(entry => ({ ...entry, segmentId: "copy-" + copy }))).flat()).activity;
+  assert.equal(original.kind, "bucketed"); assert.equal(busier.kind, "bucketed");
+  if (original.kind !== "bucketed" || busier.kind !== "bucketed") return;
+  const shares = (activity: typeof original) => activity.bins.map(bin => bin.skills.map(entry => entry.readRuns / bin.readRuns));
+  assert.deepEqual(shares(original), [[0.5, 1]]);
+  assert.deepEqual(shares(busier), shares(original));
+});
+
+test("skill trends deduplicate runs across days inside an adaptive bin", () => {
+  const result = report([run([group([item(read("a"), 1), item(read("a"), 2, "2026-01-02T12:00:00.000Z")])])], [], {
+    fromObservedAt: "2026-01-01T00:00:00.000Z", toObservedAt: "2027-01-01T00:00:00.000Z",
+  });
+  assert.equal(result.activity.kind, "bucketed");
+  if (result.activity.kind !== "bucketed") return;
+  assert.ok(result.activity.binWidthMs > 86_400_000);
+  assert.equal(result.activity.bins[0]?.readRuns, 1);
+  assert.deepEqual(result.activity.bins[0]?.skills, [{ name: "a", readRuns: 1 }]);
+  assert.ok(result.activity.bins.slice(1).every(bin => bin.readRuns === 0 && bin.skills.length === 0));
 });
 
 test("dashboard analytics bounds multi-year activity without losing evidence counts", () => {
@@ -309,5 +357,42 @@ test("dashboard analytics consumes real store scope, same-turn grouping, and fil
   } finally {
     await store.close();
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+
+test("hourly activity uses exact evidence timestamps, offsets, inclusive edges, and per-hour run sets", () => {
+  const result = report([run([group([
+    item(read("a"), 1, "2026-01-01T10:59:59.999Z"),
+    item(read("a"), 2, "2026-01-01T11:00:00.000Z"),
+    item(read("a"), 3, "2026-01-01T13:00:00+02:00"),
+    item(read("a", null, "error"), 4, "2026-01-01T11:00:00.000Z"),
+    item({ kind: "command-intent", skillName: "a", source: "rpc" }, 5, "2026-01-01T10:45:00.000Z"),
+    item({ kind: "wrapper-observed", skill: skill("a"), wrapperSource: "expanded-prompt" }, 6, "2026-01-01T11:00:00.000Z"),
+  ])])], [], { fromObservedAt: "2026-01-01T10:30:00.000Z", toObservedAt: "2026-01-01T11:00:00.000Z" });
+  assert.equal(result.activity.kind, "bucketed");
+  if (result.activity.kind !== "bucketed") return;
+  assert.equal(result.activity.binWidthMs, 3_600_000);
+  assert.deepEqual(result.activity.bins.map(bin => bin.counts), [
+    { requests: 1, wrappers: 0, successfulReads: 1, failedReads: 0 },
+    { requests: 0, wrappers: 1, successfulReads: 2, failedReads: 1 },
+  ]);
+  assert.deepEqual(result.activity.bins.map(bin => [bin.readRuns, bin.skills]), [
+    [1, [{ name: "a", readRuns: 1 }]], [1, [{ name: "a", readRuns: 1 }]],
+  ]);
+});
+
+test("activity resolution uses elapsed scope before UTC boundary alignment", () => {
+  for (const [end, width, length] of [
+    ["2026-01-08T10:30:00.000Z", 3_600_000, 169],
+    ["2026-01-08T10:30:00.001Z", 86_400_000, 8],
+    ["2026-01-01T10:30:00.000Z", 3_600_000, 1],
+  ] satisfies [string, number, number][]) {
+    const activity = report([], [], { fromObservedAt: "2026-01-01T10:30:00.000Z", toObservedAt: end }).activity;
+    assert.equal(activity.kind, "bucketed");
+    if (activity.kind !== "bucketed") continue;
+    assert.equal(activity.binWidthMs, width);
+    assert.equal(activity.bins.length, length);
+    assert.ok(activity.bins.every(bin => bin.readRuns === 0));
   }
 });

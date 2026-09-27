@@ -86,6 +86,8 @@ export async function aggregateBrowserSmoke({ url, username, password, machines,
     await command("Page.navigate", { url });
     const ready = 'document.getElementById("status-text")?.textContent === "Ready"';
     await until(ready);
+    await evaluate('document.getElementById("time-preset").value = "all"; document.getElementById("time-preset").dispatchEvent(new Event("change"));');
+    await until(ready);
     assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#machine-filter option"), option => option.value).filter(Boolean)'), machines);
     assert.ok((await evaluate('document.getElementById("skill-table").textContent')).includes("<script>synthetic</script>"));
     await evaluate('document.querySelector("[data-workspace=models]").click(); document.querySelector("#model-matrix tbody tr button.link").click()');

@@ -42,7 +42,13 @@ type Activity =
       binWidthMs: number;
       startAt: string;
       endAt: string;
-      bins: readonly Readonly<{ startAt: string; endAt: string; counts: Counts }>[];
+      bins: readonly Readonly<{
+        startAt: string;
+        endAt: string;
+        counts: Counts;
+        readRuns: number;
+        skills: readonly Readonly<{ name: string; readRuns: number }>[];
+      }>[];
     }>;
 type ModelCell = Readonly<{ skillKey: SkillKey; successfulReads: number; failedReads: number }>;
 type ModelColumn = Readonly<{
@@ -92,14 +98,15 @@ type SkillAccumulator = Mutable<Omit<SkillSummary, "counts" | "routeKeys">> & {
 type ModelAccumulator = Mutable<Omit<ModelColumn, "cells">> & { cells: Map<SkillKey, Mutable<ModelCell>> };
 type SameGroupRelationship = Omit<Extract<Relationship, { kind: "same-group" }>, "evidence"> & { evidence: SameGroupEvidence[] };
 type NextGroupRelationship = Omit<Extract<Relationship, { kind: "next-group" }>, "evidence"> & { evidence: NextGroupEvidence[] };
-const DAY_MS = 86_400_000;
+const HOUR_MS = 3_600_000;
+const DAY_MS = 24 * HOUR_MS;
 
 /** Inputs are existing store views for the same filter; chains must not use the legacy skill filter. */
 export function buildDashboardReport({ filter, skills, chains }: ReportInput): DashboardReport {
   const counts = emptyCounts();
   const skillIndex = new Map<SkillKey, SkillAccumulator>();
   const modelIndex = new Map<string, ModelAccumulator>();
-  const days = new Map<number, Mutable<Counts>>();
+  const timespan: { first: number | undefined; last: number | undefined } = { first: undefined, last: undefined };
   const sameGroups = new Map<string, SameGroupRelationship>();
   const nextGroups = new Map<string, NextGroupRelationship>();
   const coverage: Mutable<DashboardReport["coverage"]> = {
@@ -137,16 +144,15 @@ export function buildDashboardReport({ filter, skills, chains }: ReportInput): D
         routeCounts[countKind] += 1;
         skill.counts[countKind] += 1;
         skill.routeKeys.add(key);
-        const day = utcDay(item.observedAt);
-        if (day === null) coverage.undatedEvidence += 1;
+        const time = activityTime(item.observedAt);
+        if (time === null) coverage.undatedEvidence += 1;
         else {
           const timestamp = new Date(item.observedAt).toISOString();
           skill.lastEvidenceAt = latest(skill.lastEvidenceAt, timestamp);
           times.first = earliest(times.first, timestamp);
           times.last = latest(times.last, timestamp);
-          const dayCounts = days.get(day) ?? emptyCounts();
-          dayCounts[countKind] += 1;
-          days.set(day, dayCounts);
+          timespan.first = Math.min(timespan.first ?? time, time);
+          timespan.last = Math.max(timespan.last ?? time, time);
         }
         if (item.evidence.kind === "read-result") {
           addModelRead(modelIndex, skill.key, item.evidence);
@@ -195,7 +201,7 @@ export function buildDashboardReport({ filter, skills, chains }: ReportInput): D
   const skillGroups = buildSkillGroups(summaries, modelIndex);
   return {
     scope: { ...filter }, counts, skillsRead: skillGroups.filter((group) => group.counts.successfulReads > 0).length,
-    skills: summaries, skillGroups, activity: buildActivity(filter, days),
+    skills: summaries, skillGroups, activity: buildActivity(filter, timespan, routes),
     models: [...modelIndex.entries()].sort(([left], [right]) => left.localeCompare(right))
       .map(([, model]) => ({ ...model, cells: [...model.cells.values()].sort((left, right) => left.skillKey.localeCompare(right.skillKey)) })),
     relationships: [...sameGroups.values(), ...nextGroups.values()], routes, coverage,
@@ -302,31 +308,50 @@ function latest(current: string | null, value: string): string {
   return current === null || Date.parse(value) > Date.parse(current) ? value : current;
 }
 
-function utcDay(value: string | undefined): number | null {
+function activityTime(value: string | undefined): number | null {
   if (value === undefined) return null;
   const time = Date.parse(value);
-  const day = Math.floor(time / DAY_MS) * DAY_MS;
-  return Number.isFinite(time) && Number.isFinite(new Date(day + DAY_MS).getTime()) ? day : null;
+  return Number.isFinite(time) && Number.isFinite(new Date(Math.floor(time / DAY_MS) * DAY_MS + DAY_MS).getTime()) ? time : null;
 }
 
-function buildActivity(filter: DashboardFilter, days: ReadonlyMap<number, Counts>): Activity {
-  const sortedDays = [...days.keys()].sort((left, right) => left - right);
-  const start = utcDay(filter.fromObservedAt) ?? sortedDays.at(0);
-  const last = utcDay(filter.toObservedAt) ?? sortedDays.at(-1);
-  if (start === undefined || last === undefined || start > last) return { kind: "empty", timezone: "UTC" };
-  const end = last + DAY_MS;
-  const binWidthMs = Math.ceil(((end - start) / DAY_MS) / 90) * DAY_MS;
-  const bins: { startAt: string; endAt: string; counts: Mutable<Counts> }[] = [];
+function buildActivity(filter: DashboardFilter, timespan: { first: number | undefined; last: number | undefined }, routes: readonly Route[]): Activity {
+  const first = activityTime(filter.fromObservedAt) ?? timespan.first;
+  const lastIncluded = activityTime(filter.toObservedAt) ?? timespan.last;
+  if (first === undefined || lastIncluded === undefined || first > lastIncluded) return { kind: "empty", timezone: "UTC" };
+  const stepMs = lastIncluded - first <= 7 * DAY_MS ? HOUR_MS : DAY_MS;
+  const start = Math.floor(first / stepMs) * stepMs;
+  const end = Math.floor(lastIncluded / stepMs) * stepMs + stepMs;
+  const binWidthMs = stepMs === HOUR_MS ? HOUR_MS : Math.ceil((end - start) / DAY_MS / 90) * DAY_MS;
+  const bins: {
+    startAt: string; endAt: string; counts: Mutable<Counts>;
+    runs: Set<RouteKey>; skills: Map<string, Set<RouteKey>>;
+  }[] = [];
   for (let cursor = start; cursor < end; cursor += binWidthMs) {
-    bins.push({ startAt: new Date(cursor).toISOString(), endAt: new Date(Math.min(cursor + binWidthMs, end)).toISOString(), counts: emptyCounts() });
+    bins.push({
+      startAt: new Date(cursor).toISOString(), endAt: new Date(Math.min(cursor + binWidthMs, end)).toISOString(),
+      counts: emptyCounts(), runs: new Set(), skills: new Map(),
+    });
   }
-  for (const [day, counts] of days) {
-    const bin = bins[Math.floor((day - start) / binWidthMs)];
-    if (!bin) continue;
-    bin.counts.requests += counts.requests;
-    bin.counts.wrappers += counts.wrappers;
-    bin.counts.successfulReads += counts.successfulReads;
-    bin.counts.failedReads += counts.failedReads;
+  for (const route of routes) for (const step of route.steps) {
+    if (step.kind !== "observations") continue;
+    for (const item of step.items) {
+      const time = activityTime(item.observedAt);
+      if (time === null || time < first || time > lastIncluded) continue;
+      const bin = bins[Math.floor((time - start) / binWidthMs)];
+      if (!bin) continue;
+      bin.counts[evidenceCountKind(item.evidence)] += 1;
+      if (item.evidence.kind !== "read-result" || item.evidence.outcome !== "success") continue;
+      bin.runs.add(route.key);
+      const name = item.evidence.skill.name;
+      const runs = bin.skills.get(name) ?? new Set<RouteKey>();
+      runs.add(route.key); bin.skills.set(name, runs);
+    }
   }
-  return { kind: "bucketed", timezone: "UTC", binWidthMs, startAt: new Date(start).toISOString(), endAt: new Date(end).toISOString(), bins };
+  return {
+    kind: "bucketed", timezone: "UTC", binWidthMs, startAt: new Date(start).toISOString(), endAt: new Date(end).toISOString(),
+    bins: bins.map(({ runs, skills, ...bin }) => ({
+      ...bin, readRuns: runs.size,
+      skills: [...skills].sort(([left], [right]) => left.localeCompare(right)).map(([name, paths]) => ({ name, readRuns: paths.size })),
+    })),
+  };
 }
