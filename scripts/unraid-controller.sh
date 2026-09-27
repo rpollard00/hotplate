@@ -80,7 +80,8 @@ validate_journal() {
       .kind == "Container" and (.id|sha) and (.imageId|image) and (.specSha256|sha) and
       .restart == {Name:"unless-stopped",MaximumRetryCount:0} end;
     def backup: (.sha256|sha) and (.path|type == "string");
-    def operation: (.operation|uuid) and (.release|release) and (.previous|previous);
+    def operation: (.operation|uuid) and (.release|release) and (.previous|previous) and
+      (if has("runtimeImageId") then (.runtimeImageId|image) else true end);
     def lifecycle:
       .installation == $installation and
       (if .state == "Ready" then keys == ["installation","state"]
@@ -210,7 +211,7 @@ preflight() {
     spec=$(inspect_container "$current")
     owned_spec "$spec" && attached "$spec" || refuse
     jq -e '.State.Running == true and .State.Health.Status == "healthy" and .HostConfig.RestartPolicy == {Name:"unless-stopped",MaximumRetryCount:0}' <<< "$spec" >/dev/null || refuse
-    [[ $(jq -r .Image <<< "$spec") == "$(jq -r .release.imageId "$journal")" ]] || refuse
+    [[ $(jq -r .Image <<< "$spec") == "$(jq -r '.runtimeImageId // .release.imageId' "$journal")" ]] || refuse
     [[ $(jq -r '.Config.Labels["io.hotplate.operation"]' <<< "$spec") == "$(jq -r .operation "$journal")" ]] || refuse
     [[ $(jq -r .Name <<< "$spec") == "/$(jq -r .candidateName "$journal")" ]] || refuse
     local old_secrets=$appdata/operations/$(jq -r .operation "$journal")
@@ -319,13 +320,20 @@ timeout 600 head -c "$bytes" > "$opdir/image.tar.partial"
 mv "$opdir/image.tar.partial" "$opdir/image.tar"
 manifest=$(tar -xOf "$opdir/image.tar" manifest.json)
 jq -e --arg tag "$(jq -r .tag <<< "$release")" 'length == 1 and .[0].RepoTags == [$tag] and (.[0].Config | test("^([0-9a-f]{64}\\.json|blobs/sha256/[0-9a-f]{64})$"))' <<< "$manifest" >/dev/null
-image_id=$(jq -r .imageId <<< "$release")
+source_image_id=$(jq -r .imageId <<< "$release")
+config_path=$(jq -r '.[0].Config' <<< "$manifest")
+config_digest=$(tar -xOf "$opdir/image.tar" "$config_path" | sha256sum | cut -d ' ' -f1)
+[[ $config_path == "blobs/sha256/$config_digest" || $config_path == "$config_digest.json" ]]
+config_image_id=sha256:$config_digest
 if existing=$(docker image inspect "$(jq -r .tag <<< "$release")"); then
-  [[ $(jq -r '.[0].Id' <<< "$existing") == "$image_id" ]]
+  existing_id=$(jq -r '.[0].Id' <<< "$existing")
+  [[ $existing_id == "$source_image_id" || $existing_id == "$config_image_id" ]]
 fi
 timeout 600 docker image load --input "$opdir/image.tar" >/dev/null
-image=$(docker image inspect "$image_id")
-jq -e --arg id "$image_id" '.[0] | .Id == $id and .Architecture == "amd64" and .Os == "linux" and .Config.User == "node" and .Config.Healthcheck.Test != null' <<< "$image" >/dev/null
+image=$(docker image inspect "$(jq -r .tag <<< "$release")")
+image_id=$(jq -r '.[0].Id' <<< "$image")
+jq -e --arg source "$source_image_id" --arg config "$config_image_id" '.[0] | (.Id == $source or .Id == $config) and .Architecture == "amd64" and .Os == "linux" and .Config.User == "node" and .Config.Healthcheck.Test != null' <<< "$image" >/dev/null
+jq --arg image "$image_id" '.runtimeImageId=$image' "$journal" | atomic "$journal"
 no_writers "$current"
 if [[ -n $current ]]; then
   spec=$(inspect_container "$current")

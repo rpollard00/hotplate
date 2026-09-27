@@ -87,9 +87,11 @@ Status includes the journal state and observed container IDs, running state, hea
 Status is a snapshot, not a lock or authorization to recover.
 
 Apply validates again under a host-local exclusive lock. It streams the archive into a private operation directory and verifies its size and checksum.
-It validates the archive's single release tag before load. It verifies the loaded image ID and platform before replacement.
+It validates the archive's single release tag and configuration digest before load. It verifies the loaded image identity and platform before replacement.
+Docker image stores can report either a manifest ID or a configuration ID for the same transferred image.
+The controller accepts only the release's source ID or the verified configuration digest from the checksum-verified archive.
+It records the accepted runtime ID in the journal. Containers run by that immutable ID, not by tag.
 The release manifest also records the source revision and controller checksum. Changing the controller requires a new build.
-Containers run by image ID, not tag.
 
 Apply disables the old restart policy, stops the old container, and refuses other writers.
 It archives the entire cold data directory, including SQLite sidecars, before disconnecting the old network attachment.
