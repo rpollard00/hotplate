@@ -18,6 +18,8 @@ export type ConnectionCommand = { kind: "connect"; instance: string } | { kind: 
 export type ConnectionStatus = {
   mode: "disabled" | "manual" | "local" | "managed" | "unavailable";
   origin: CollectorOrigin | null;
+  desiredMode: Selection["kind"] | null;
+  desiredOrigin: CollectorOrigin | null;
   desiredRevision: number | null;
   appliedRevision: number | null;
   phase: "enrolling" | "inactive" | "ready" | "transitioning" | "paused" | "closed";
@@ -122,8 +124,11 @@ export class SessionConnection {
       }
     } catch { this.#failure = "Connection status unavailable; private storage could not be read."; }
     return {
-      mode: this.#env.HOTPLATE_DISABLED === "1" ? "disabled" : this.#env.HOTPLATE_CONFIG !== undefined ? "manual" : desired?.kind ?? (this.#control || this.#failure ? "unavailable" : "local"),
-      origin: desired?.kind === "managed" ? desired.origin : this.#env.HOTPLATE_CONFIG !== undefined ? this.#configuration?.enrollment.collectorOrigin ?? null : null,
+      mode: this.#env.HOTPLATE_DISABLED === "1" ? "disabled" : this.#env.HOTPLATE_CONFIG !== undefined ? "manual"
+        : desired ? this.#applied?.kind ?? "unavailable" : this.#control || this.#failure ? "unavailable" : "local",
+      origin: this.#configuration?.enrollment.collectorOrigin ?? null,
+      desiredMode: desired?.kind ?? null,
+      desiredOrigin: desired?.kind === "managed" ? desired.origin : null,
       desiredRevision: desired?.revision ?? null, appliedRevision: this.#applied?.revision ?? null,
       phase: this.#closed ? "closed" : this.#enrollments.size > 0 ? "enrolling" : this.#phase === "paused" ? "paused"
         : desired && desired.revision !== this.#applied?.revision ? "transitioning" : this.#phase,

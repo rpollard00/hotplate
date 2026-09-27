@@ -491,6 +491,7 @@ test("commands await their own idle cutover and shutdown fences enrollment plus 
   const before = await connection.status(); assert.notEqual(before.desiredRevision, before.appliedRevision);
   assert.equal(before.phase, "transitioning");
   assert.equal(before.mode, "local"); assert.equal(before.origin, null);
+  assert.equal(before.desiredMode, "managed"); assert.equal(before.desiredOrigin, f.origin);
   idle?.(); const after = await command; assert.equal(after.desiredRevision, after.appliedRevision);
   const b = await proxyFixture(t);
   const accountA = readAccountConfiguration({ path: join(bundlePath(join(sdk.rootDir, "direct", "hotplate"), f.origin), "account.json") });
@@ -506,6 +507,7 @@ test("commands await their own idle cutover and shutdown fences enrollment plus 
   await until(() => scalar(join(sdk.rootDir, "direct", "hotplate", "control.sqlite"), "SELECT origin AS value FROM selection") === b.origin);
   const duringSwitch = await connection.status();
   assert.equal(duringSwitch.mode, "managed"); assert.equal(duringSwitch.origin, f.origin);
+  assert.equal(duringSwitch.desiredMode, "managed"); assert.equal(duringSwitch.desiredOrigin, b.origin);
   assert.equal(duringSwitch.phase, "transitioning"); assert.deepEqual(duringSwitch.delivery, pendingA);
   releaseSwitch?.(); await switching;
   assert.equal((await connection.status()).origin, b.origin);
@@ -515,6 +517,7 @@ test("commands await their own idle cutover and shutdown fences enrollment plus 
   const disconnecting = connection.execute({ kind: "disconnect" }, { ...sdk.session.extensionRunner.createCommandContext(), waitForIdle: () => disconnectIdle });
   const duringDisconnect = await connection.status();
   assert.equal(duringDisconnect.mode, "managed"); assert.equal(duringDisconnect.origin, b.origin);
+  assert.equal(duringDisconnect.desiredMode, "local"); assert.equal(duringDisconnect.desiredOrigin, null);
   assert.equal(duringDisconnect.phase, "transitioning");
   releaseDisconnect?.(); await disconnecting;
   assert.equal((await connection.status()).mode, "local");

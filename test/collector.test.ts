@@ -258,7 +258,20 @@ async function createSession(fixture: Awaited<ReturnType<typeof createFixture>>,
     cwd: fixture.projectDir,
     agentDir: fixture.agentDir,
     skillsOverride: () => ({ skills: [skill], diagnostics: [] }),
-    extensionFactories: [fakeProviderExtension(fixture.skillPath, fixture.missingSkillPath), hotplateExtension, ...extensions],
+    extensionFactories: [fakeProviderExtension(fixture.skillPath, fixture.missingSkillPath), (pi) => {
+      const names = ["XDG_DATA_HOME", "HOTPLATE_CONFIG"] as const;
+      const previous = names.map(name => process.env[name]);
+      try {
+        process.env.XDG_DATA_HOME = join(fixture.rootDir, "account-data");
+        delete process.env.HOTPLATE_CONFIG;
+        hotplateExtension(pi);
+      } finally {
+        names.forEach((name, index) => {
+          const value = previous[index];
+          if (value === undefined) delete process.env[name]; else process.env[name] = value;
+        });
+      }
+    }, ...extensions],
   });
   await loader.reload();
 

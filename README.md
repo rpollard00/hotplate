@@ -171,7 +171,7 @@ Each Pi session owns an automatic relay; there is no daemon, process-manager ins
 
 Disconnect persists local-only selection and waits for this session's cutover. Runnable peers reconcile approximately every second and check selection before HTTP sends. Already-started requests can commit, and suspended peers can retain old-origin local capture until reconciliation. Disconnect deletes neither history, credentials nor backlog; reconnect resumes that origin's backlog. Independent manual relays are not stopped.
 
-Status is secret-free: effective mode/origin, desired and this session's applied revisions, transition state and available pending/blocked counts. It does not promise that all peers have switched. An unavailable private control store is reported as unavailable, never as a successful local fallback.
+Status is secret-free. `mode`, `origin`, and backlog counts describe this session's applied destination. `desiredMode` and `desiredOrigin` describe the requested destination. Desired/applied revisions and transition state show pending changes. It does not promise that all peers have switched. An unavailable private control store is reported as unavailable, never as a successful local fallback.
 
 Private account state is under `$XDG_DATA_HOME/hotplate` (default `~/.local/share/hotplate`): `control.sqlite` and `connections/<origin hash>/` containing configuration, token and capture SQLite. Keep directories 0700, files 0600, and consistent backups including SQLite sidecars. Do not edit or delete these bindings to switch servers.
 
