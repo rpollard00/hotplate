@@ -6,6 +6,8 @@ import { readIngestToken, type AccountConfiguration } from "./network-config.js"
 import { encodeEnvelope, MAX_ENVELOPE_BYTES, MAX_OBSERVATIONS, MAX_PAYLOAD_BYTES, REQUEST_DEADLINE_MS, validateAcknowledgment } from "./network-protocol.js";
 import { openRelayStore, type DeliveryBlockReason, type DeliveryStatus, type RelayStore } from "./store.js";
 
+export type RelayState = "idle" | "sending" | "backoff" | "paused" | "stopped";
+
 type Attempt = { kind: "committed" } | { kind: "retry" } | { kind: "rejected"; reason: DeliveryBlockReason } | { kind: "paused"; message: string };
 
 export async function readRelayStatus(args: { configuration: AccountConfiguration }): Promise<
@@ -17,7 +19,7 @@ export async function readRelayStatus(args: { configuration: AccountConfiguratio
   finally { await opened.store.close(); }
 }
 
-export async function runRelay(args: { configuration: AccountConfiguration; signal: AbortSignal }): Promise<void> {
+export async function runRelay(args: { configuration: AccountConfiguration; signal: AbortSignal; maySend?: () => boolean; onState?: (state: RelayState) => void }): Promise<void> {
   const { configuration, signal } = args;
   if (signal.aborted) return;
   const endpoint = new URL("/api/ingest", configuration.enrollment.collectorOrigin);
@@ -39,10 +41,12 @@ export async function runRelay(args: { configuration: AccountConfiguration; sign
           await store.settle({ settlement: { kind: "blocked", observationIds: [candidate.observationId], reason: "oversized" }, signal });
         } else observations.push(candidate.observation);
       }
-      if (observations.length === 0) { failures = 0; await delay(1000, undefined, { signal }); continue; }
-      const delivered = await deliverBatch({ observations, configuration, token, endpoint, store, signal });
+      if (observations.length === 0) { args.onState?.("idle"); failures = 0; await delay(1000, undefined, { signal }); continue; }
+      args.onState?.("sending");
+      const delivered = await deliverBatch({ observations, configuration, token, endpoint, store, signal, maySend: args.maySend });
       if (delivered) failures = 0;
       else {
+        args.onState?.("backoff");
         const ceiling = Math.min(60_000, 1000 * 2 ** Math.min(failures, 6));
         failures += 1;
         await delay(Math.floor(ceiling * (0.5 + Math.random() * 0.5)), undefined, { signal });
@@ -53,18 +57,19 @@ export async function runRelay(args: { configuration: AccountConfiguration; sign
       if (error instanceof RelayPaused) throw error;
       throw new Error("Relay delivery stopped. Check credentials, configuration, and local database access, then restart. Pending entries remain retained.");
     }
-  } finally { await store.close(); }
+  } finally { await store.close(); args.onState?.("stopped"); }
 }
 
 class RelayPaused extends Error {}
 
 async function deliverBatch(args: {
-  observations: readonly Observation[]; configuration: AccountConfiguration; token: string; endpoint: URL; store: RelayStore; signal: AbortSignal;
+  observations: readonly Observation[]; configuration: AccountConfiguration; token: string; endpoint: URL; store: RelayStore; signal: AbortSignal; maySend: (() => boolean) | undefined;
 }): Promise<boolean> {
   const pending = [args.observations];
   while (pending.length > 0 && !args.signal.aborted) {
     const observations = pending.pop();
     if (!observations) break;
+    if (args.maySend && !args.maySend()) throw new RelayPaused("Managed selection changed. Delivery paused.");
     const result = await send({ ...args, observations });
     switch (result.kind) {
       case "retry": return false;

@@ -17,6 +17,7 @@ export type AggregationConfiguration = {
   port: number;
   publicOrigin: CollectorOrigin;
   credentialsFile: string;
+  openEnrollment?: boolean;
   transport: Transport;
 };
 
@@ -39,8 +40,9 @@ export function readAccountConfiguration(args: { path: string; env?: NodeJS.Proc
 export function readAggregationConfiguration(args: { path: string }): AggregationConfiguration {
   try {
     const value = object(readJson(args.path));
-    keys(value, ["databasePath", "host", "port", "publicOrigin", "credentialsFile", "trustedHttp"]);
+    keys(value, ["databasePath", "host", "port", "publicOrigin", "credentialsFile", "trustedHttp", "openEnrollment"]);
     const publicOrigin = parseCollectorOrigin(value.publicOrigin);
+    if (value.openEnrollment !== undefined && typeof value.openEnrollment !== "boolean") throw new Error();
     const host = value.host === undefined ? "0.0.0.0" : text(value.host);
     if (!/^[a-zA-Z0-9.:[\]_-]+$/.test(host)) throw new Error();
     const port = value.port === undefined ? 7345 : value.port;
@@ -48,6 +50,7 @@ export function readAggregationConfiguration(args: { path: string }): Aggregatio
     return {
       databasePath: filePath(value.databasePath, args.path), host, port, publicOrigin,
       credentialsFile: filePath(value.credentialsFile, args.path),
+      openEnrollment: value.openEnrollment === true,
       transport: transport(publicOrigin, value.trustedHttp),
     };
   } catch { throw new Error("Invalid aggregate configuration. Check databasePath, publicOrigin, credentialsFile, host, port, and trustedHttp."); }
@@ -121,3 +124,16 @@ function readBoundedFile(path: string, maxBytes: number): string {
   return data.toString("utf8");
 }
 function readJson(path: string): unknown { return JSON.parse(readBoundedFile(path, 1024 * 1024)); }
+
+export function parseConnectionOrigin(instance: string): CollectorOrigin {
+  const raw = instance.includes("://") ? instance : `http://${instance}`;
+  const match = /^(https?):\/\/([A-Za-z0-9.-]+)(?::([0-9]{1,5}))?$/i.exec(raw);
+  if (!match || !match[2] || match[2].length > 253
+    || !match[2].split(".").every(label => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label))
+    || (match[3] !== undefined && (Number(match[3]) < 1 || Number(match[3]) > 65535))) {
+    throw new Error("Invalid instance. Use a DNS name or IPv4 address, optional port, or HTTP/HTTPS origin without a path.");
+  }
+  const url = new URL(raw);
+  if (url.hostname !== match[2].toLowerCase()) throw new Error("Invalid instance authority.");
+  return parseCollectorOrigin(url.origin);
+}

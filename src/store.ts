@@ -1,3 +1,4 @@
+import type { TokenDigest } from "./network-protocol.js";
 import { createHash } from "node:crypto";
 import {
   isObservation, isInputSource, isGapReason, LOCAL_IDENTITY, LOCAL_SOURCE_ID,
@@ -36,7 +37,9 @@ import type {
   SkillTableView,
 } from "./domain.js";
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
+export const MAX_DYNAMIC_SOURCES = 10_000;
+export const ENROLLMENTS_PER_MINUTE = 30;
 const DEFAULT_BUSY_TIMEOUT_MS = 25;
 const DEFAULT_BUSY_RETRIES = 3;
 
@@ -630,12 +633,16 @@ export type IngestResult =
   | { kind: "committed"; accepted: number; duplicate: number }
   | { kind: "conflict"; observationIds: readonly Observation["id"][] }
   | { kind: "unavailable"; reason: "busy" | "cancelled" | "storage-error" };
+export type StaticRegistration = { source: SourceIdentity; tokenDigest: TokenDigest };
+export type RegistrationResult = { kind: "registered"; source: SourceIdentity } | { kind: "refused" | "limited" };
 export interface AggregateStore {
+  register(args: { sourceId: SourceId; tokenDigest: TokenDigest; openEnrollment: boolean; signal?: AbortSignal }): Promise<RegistrationResult>;
+  authenticate(tokenDigest: TokenDigest): SourceIdentity | undefined;
   ingest(args: { source: SourceIdentity; observations: readonly Observation[]; signal?: AbortSignal }): Promise<IngestResult>;
   close(): Promise<void>;
 }
 
-export function openAggregateStore(args: { databasePath: string }): AggregateStore {
+export function openAggregateStore(args: { databasePath: string; staticRegistrations?: readonly StaticRegistration[] }): AggregateStore {
   if (args.databasePath !== ":memory:") createPrivateDirectory(dirname(args.databasePath));
   const db = new DatabaseSync(args.databasePath, { timeout: DEFAULT_BUSY_TIMEOUT_MS, allowExtension: false });
   try {
@@ -644,7 +651,7 @@ export function openAggregateStore(args: { databasePath: string }): AggregateSto
     migrate(db, DEFAULT_BUSY_RETRIES);
     configureWriter(db, "aggregate", DEFAULT_BUSY_RETRIES);
     secureDatabaseFiles(args.databasePath);
-    return new SqliteAggregateStore(db);
+    return new SqliteAggregateStore(db, args.staticRegistrations ?? []);
   } catch (error) { db.close(); throw error; }
 }
 
@@ -654,7 +661,46 @@ class IngestConflict extends Error {
 
 class SqliteAggregateStore implements AggregateStore {
   #closed = false;
-  constructor(readonly db: DatabaseSync) {}
+  #registrations: number[] = [];
+  constructor(readonly db: DatabaseSync, readonly staticRegistrations: readonly StaticRegistration[]) {
+    for (const entry of staticRegistrations) {
+      validateNetworkIdentity(entry.source);
+      if (db.prepare("SELECT 1 FROM registered_sources WHERE source_id = ? OR token_digest = ?")
+        .get(entry.source.sourceId, entry.tokenDigest)) throw new Error("Static and managed identities conflict");
+      if (db.prepare("SELECT 1 FROM observations WHERE source_id = ? AND machine_id != ? UNION SELECT 1 FROM catalog_skills WHERE source_id = ? AND machine_id != ?")
+        .get(entry.source.sourceId, entry.source.machineId, entry.source.sourceId, entry.source.machineId)) throw new Error("Static and historical identities conflict");
+    }
+  }
+
+  authenticate(tokenDigest: TokenDigest): SourceIdentity | undefined {
+    assertOpen(this.#closed);
+    const fixed = this.staticRegistrations.find(entry => entry.tokenDigest === tokenDigest);
+    if (fixed) return fixed.source;
+    const row = this.db.prepare("SELECT source_id, machine_id FROM registered_sources WHERE token_digest = ?").get(tokenDigest);
+    return row ? validateNetworkIdentity({ sourceId: parseSourceId(row.source_id), machineId: parseMachineId(row.machine_id) }) : undefined;
+  }
+
+  async register(args: { sourceId: SourceId; tokenDigest: TokenDigest; openEnrollment: boolean; signal?: AbortSignal }): Promise<RegistrationResult> {
+    const source = validateNetworkIdentity({ sourceId: parseSourceId(args.sourceId), machineId: parseMachineId(`managed-${args.sourceId}`) });
+    if (!/^[a-f0-9]{64}$/.test(args.tokenDigest)) throw new Error("Invalid token digest");
+    return retryTransaction(this.db, () => {
+      assertOpen(this.#closed);
+      const existing = this.db.prepare("SELECT * FROM registered_sources WHERE source_id = ? OR token_digest = ?").all(source.sourceId, args.tokenDigest);
+      if (existing.length > 0) {
+        const row = existing[0];
+        return existing.length === 1 && row?.source_id === source.sourceId && row.token_digest === args.tokenDigest && row.machine_id === source.machineId
+          ? { kind: "registered", source } : { kind: "refused" };
+      }
+      if (!args.openEnrollment || this.staticRegistrations.some(entry => entry.source.sourceId === source.sourceId || entry.tokenDigest === args.tokenDigest)
+        || this.db.prepare("SELECT 1 FROM observations WHERE source_id = ? UNION SELECT 1 FROM catalog_skills WHERE source_id = ?").get(source.sourceId, source.sourceId)) return { kind: "refused" };
+      const now = Date.now();
+      this.#registrations = this.#registrations.filter(time => now - time < 60_000);
+      if (this.#registrations.length >= ENROLLMENTS_PER_MINUTE || count(this.db, "SELECT COUNT(*) AS value FROM registered_sources", []) >= MAX_DYNAMIC_SOURCES) return { kind: "limited" };
+      this.db.prepare("INSERT INTO registered_sources (source_id, machine_id, token_digest) VALUES (?, ?, ?)").run(source.sourceId, source.machineId, args.tokenDigest);
+      this.#registrations.push(now);
+      return { kind: "registered", source };
+    }, args.signal);
+  }
 
   async ingest(args: { source: SourceIdentity; observations: readonly Observation[]; signal?: AbortSignal }): Promise<IngestResult> {
     const source = validateNetworkIdentity(args.source);
@@ -784,10 +830,11 @@ function migrate(db: DatabaseSync, busyRetries: number): void {
     const version = userVersion(db);
     if (version > SCHEMA_VERSION) throw new Error(`Unsupported Hotplate schema version ${version}`);
     if (version === SCHEMA_VERSION) { db.exec("COMMIT"); return; }
-    if (version === 1) {
-      db.exec("ALTER TABLE observations RENAME TO observations_v1; ALTER TABLE catalog_skills RENAME TO catalog_skills_v1");
-    }
-    db.exec(`
+    if (version < 2) {
+      if (version === 1) {
+        db.exec("ALTER TABLE observations RENAME TO observations_v1; ALTER TABLE catalog_skills RENAME TO catalog_skills_v1");
+      }
+      db.exec(`
     CREATE TABLE observations (
       machine_id TEXT NOT NULL,
       source_id TEXT NOT NULL,
@@ -851,20 +898,23 @@ function migrate(db: DatabaseSync, busyRetries: number): void {
     CREATE INDEX delivery_pending_idx ON delivery_outbox(source_id, blocked_reason, captured_at);
     CREATE UNIQUE INDEX aggregate_sequence_idx ON observations(machine_id, source_id, producer_id, sequence) WHERE digest IS NOT NULL;
     `);
-    if (version === 1) {
-      db.exec(`INSERT INTO observations SELECT 'local', 'local', NULL, * FROM observations_v1;
+      if (version === 1) {
+        db.exec(`INSERT INTO observations SELECT 'local', 'local', NULL, * FROM observations_v1;
         INSERT INTO catalog_skills SELECT 'local', 'local', * FROM catalog_skills_v1;
         DROP TABLE observations_v1; DROP TABLE catalog_skills_v1;`);
-    }
-    db.exec(`
+      }
+      db.exec(`
     CREATE INDEX IF NOT EXISTS observations_time_idx ON observations(observed_at);
     CREATE INDEX IF NOT EXISTS observations_scope_idx ON observations(machine_id, source_id, project_cwd, session_id, segment_id, run_id, observed_at);
     CREATE INDEX IF NOT EXISTS observations_skill_idx ON observations(machine_id, source_id, skill_name, skill_path, evidence_kind);
     CREATE INDEX IF NOT EXISTS observations_model_idx ON observations(machine_id, model_provider, model_id, evidence_kind);
     CREATE INDEX IF NOT EXISTS observations_source_idx ON observations(source, evidence_kind);
-    PRAGMA user_version = ${SCHEMA_VERSION};
-    COMMIT;
     `);
+    }
+    db.exec(`CREATE TABLE registered_sources (
+      source_id TEXT PRIMARY KEY, machine_id TEXT NOT NULL, token_digest TEXT NOT NULL UNIQUE
+    ) STRICT;
+    PRAGMA user_version = ${SCHEMA_VERSION}; COMMIT;`);
   } catch (error) {
     rollbackBestEffort(db);
     throw error;
@@ -876,7 +926,7 @@ function assertReadableSchema(db: DatabaseSync): void {
   if (version === 1) {
     throw new Error("Hotplate schema v1 requires an upgrade. Open this database with the current Pi collector or openHotplateStore before reading it.");
   }
-  if (version !== SCHEMA_VERSION) {
+  if (version !== 2 && version !== SCHEMA_VERSION) {
     throw new Error(`Unsupported Hotplate schema version ${version}`);
   }
 }

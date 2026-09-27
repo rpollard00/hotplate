@@ -2,7 +2,7 @@
 
 Hotplate records metadata about skill use in live Pi sessions.
 By default, each OS account writes SQLite locally and serves a read-only dashboard on loopback.
-An optional account relay sends newly captured observations to an authenticated Docker aggregate server.
+Managed Pi connections automatically relay newly captured observations to an authenticated Docker aggregate server while Pi sessions run. Explicit manual capture and relay configuration remains available.
 There is no transcript import or automatic discovery.
 
 Node.js 24.19.0 or later is required.
@@ -46,7 +46,7 @@ If `XDG_DATA_HOME` is set, Hotplate uses this path instead:
 $XDG_DATA_HOME/hotplate/analytics.sqlite
 ```
 
-Set `HOTPLATE_DB` to override the database path:
+Set `HOTPLATE_DB` to override the local-only database path (managed connections always use separate per-origin databases):
 
 ```bash
 HOTPLATE_DB=/absolute/path/to/analytics.sqlite pi
@@ -152,6 +152,33 @@ Shutdown cancels retries after a 500 ms drain budget. A synchronous SQLite call 
 
 ## LAN aggregation
 
+### Connect from Pi
+
+Ask the collector operator to explicitly enable `"openEnrollment": true` (the default is false). Then run:
+
+```text
+/hotplate connect 192.168.88.12
+/hotplate status
+/hotplate disconnect
+```
+
+Bare IPv4/DNS names and optional ports default to HTTP; explicit HTTP/HTTPS origins work. Do not include paths, credentials, queries or fragments.
+HTTP exposes credentials and metadata on the network: use a trusted LAN. Open enrollment permits **any reachable client** to register metadata; it is not trusted membership. Prefer TLS across untrusted networks.
+
+Connect privately persists a stable per-origin identity, registers it, and waits for this session's live capture cutover. Failed registration keeps the previous selection and reusable pending identity. Future Pi sessions reuse the account-wide selection automatically. No old observations or session histories are imported; old databases are never retargeted.
+
+Each Pi session owns an automatic relay; there is no daemon, process-manager installation or leader election. Delivery pauses after the last session exits. Parallel senders are permitted and ingestion deduplicates them. Permanent authorization failures pause delivery until reconnect; outages use bounded exponential backoff. Backlogs have no automatic eviction or size limit.
+
+Disconnect persists local-only selection and waits for this session's cutover. Runnable peers reconcile approximately every second and check selection before HTTP sends. Already-started requests can commit, and suspended peers can retain old-origin local capture until reconciliation. Disconnect deletes neither history, credentials nor backlog; reconnect resumes that origin's backlog. Independent manual relays are not stopped.
+
+Status is secret-free: effective mode/origin, desired and this session's applied revisions, transition state and available pending/blocked counts. It does not promise that all peers have switched. An unavailable private control store is reported as unavailable, never as a successful local fallback.
+
+Private account state is under `$XDG_DATA_HOME/hotplate` (default `~/.local/share/hotplate`): `control.sqlite` and `connections/<origin hash>/` containing configuration, token and capture SQLite. Keep directories 0700, files 0600, and consistent backups including SQLite sidecars. Do not edit or delete these bindings to switch servers.
+
+`HOTPLATE_DISABLED=1` starts no resources. `HOTPLATE_CONFIG` remains an authoritative manual override: managed connect/disconnect refuse to mutate selection, and invalid explicit configuration fails closed. Unset the override and reload Pi to use managed selection. `HOTPLATE_DB` controls only local-only capture. No global Pi settings are edited by these commands.
+
+See [connection policy and bounds](docs/connection.md). Enrollment requests/replies are limited to 4 KiB and ten seconds. The collector permits at most 10,000 dynamic registrations and 30 new registrations per rolling minute per server process; exact retries do not consume these limits. Dynamic SHA-256 token digests persist in the existing aggregate SQLite `/data` volume, not mounted secrets. Closing enrollment refuses new registrations but accepts authenticated exact retries and existing ingest after restart. Managed machine IDs are `managed-<source UUID>`, not hardware attestations.
+
 ### Prepare the server
 
 The container runs only the aggregate server. It cannot discover Pi processes or read remote session files.
@@ -170,13 +197,14 @@ The [Unraid deployment](docs/unraid.md) uses public access at `http://192.168.88
    node -e 'process.stdout.write(require("node:crypto").randomUUID()+"\n")'
    ```
 
-5. Generate a random ingest token for each source:
+5. Generate a random ingest token directly into a new private file, without printing it:
 
    ```bash
-   node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("hex")+"\n")'
+   umask 077
+   node -e 'require("node:fs").writeFileSync("/private/hotplate/source.token", require("node:crypto").randomBytes(32).toString("hex"), {mode:0o600,flag:"wx"})'
    ```
 
-6. Generate a separate random dashboard password with the same command, or explicitly choose the public dashboard policy above.
+6. Generate a separate dashboard password into a different private file, or explicitly choose the public dashboard policy above. Populate the credentials file privately; never paste secrets into command arguments, logs or model conversations.
 7. Register each source UUID and token against a server-assigned `machineId` in the credentials file.
 8. Set `publicOrigin` to the exact browser and relay origin, such as `https://hotplate.lan`.
 
@@ -215,7 +243,7 @@ Also set matching `http://host:port` origins and explicitly change the Compose p
 Plain HTTP exposes tokens, dashboard passwords, and metadata to network observers. Authentication does not provide confidentiality.
 Do not publish the listener on an untrusted interface without TLS.
 
-### Enroll every Pi account
+### Manual enrollment override
 
 1. Install and build Hotplate on every participating machine, as described in the local installation instructions.
 2. Install the Pi package in every participating account, including accounts that run child sessions.
@@ -235,15 +263,15 @@ The first enrolled capture open binds the account database to one source UUID an
 A different source or origin requires a separate database. Token rotation does not change this binding.
 Invalid explicit configuration disables capture for that open, reports a redacted diagnostic, and never falls back to another destination.
 
-Pi performs no HTTP delivery and does not read the ingest token. It writes local observations and immutable delivery entries in one transaction.
+Under `HOTPLATE_CONFIG`, Pi performs no HTTP delivery and does not read the ingest token. It writes local observations and immutable delivery entries in one transaction.
 Existing observations never enter the delivery backlog. Migration and relay startup do not enroll capture or import historical rows.
 Replay after an outage delivers only live observations captured after enrollment.
 
 Child processes require the extension, `HOTPLATE_CONFIG`, and access to the same account database and configuration.
 An isolated child environment does not automatically inherit capture. Install and configure those accounts explicitly.
-To keep an account local-only, leave `HOTPLATE_CONFIG` unset. `HOTPLATE_DISABLED=1` still disables capture entirely.
+To keep a managed account local-only, unset `HOTPLATE_CONFIG` and use `/hotplate disconnect`. An account without a managed selection or manual configuration is local-only. `HOTPLATE_DISABLED=1` still disables capture entirely.
 
-### Run and monitor the account relay
+### Run and monitor a manual account relay
 
 Run one relay under the account that owns the capture database:
 
@@ -251,8 +279,7 @@ Run one relay under the account that owns the capture database:
 node /path/to/hotplate/dist/src/cli.js relay --config /private/account/hotplate.json
 ```
 
-For continuous operation, supervise this command with the account's process manager.
-Set its working environment and restart policy explicitly. Start it after the first enrolled Pi capture creates the database.
+This explicit CLI is independent of managed session relays and is not installed or supervised by the extension. Start it after the first manually enrolled Pi capture creates the database.
 The relay does not create a missing capture database. It exits on missing enrollment or permanent configuration/authentication errors.
 SIGINT and SIGTERM cancel delivery safely. Committed capture remains available after Pi exits.
 
@@ -282,9 +309,9 @@ These network limits do not restrict local capture acceptance.
 Use the [Unraid deployment guide](docs/unraid.md) for a dedicated `br0` address without published host ports.
 It documents private bootstrap configuration and the `scripts/deploy-unraid build`, `plan`, `apply`, and `status` commands.
 Updates retain cold backups and previous release evidence. Interrupted deployments fail closed without automatic database restoration.
-The Unraid pipeline keeps credentials fixed across updates. Credential rotation requires separate reviewed maintenance.
+The Unraid pipeline keeps static ingest credentials fixed across updates; only the requested open-enrollment policy can change alongside the existing dashboard/port policy changes. Credential rotation requires separate reviewed maintenance.
 
-### Rotate credentials
+### Rotate static/manual credentials
 
 1. Add a new random token for the same source UUID and machine identity to the server credentials.
 2. Restart the aggregate server to load the credentials.
@@ -293,7 +320,7 @@ The Unraid pipeline keeps credentials fixed across updates. Credential rotation 
 5. Remove the old server token after the new relay succeeds.
 6. Restart the aggregate server again.
 
-The server can accept overlapping tokens for one source during rotation.
+Static credentials can accept overlapping tokens for one source during rotation. Managed source/token registrations are immutable; do not attempt this procedure on managed bundles.
 The relay reads its token once per run. Rotation preserves the pending backlog and source/origin binding.
 The read credential is separate. Changing it also requires a server restart and a new browser login.
 
@@ -302,11 +329,11 @@ The read credential is separate. Changing it also requires a server restart and 
 Use a SQLite-consistent backup, such as the SQLite backup command, or stop all writers before copying database files.
 Copying only a live database's main file is not a valid backup. WAL sidecars can contain committed data.
 For a stopped backup, retain the main file and any remaining `-wal` and `-shm` files together.
-Back up the capture database, including enrollment and backlog, separately from the aggregate volume and secret files.
+Back up the capture database, including enrollment and backlog, separately from the aggregate volume and secret files. For managed accounts, also preserve the private control database and every complete per-origin bundle, including its token and configuration. Never regenerate a corrupt or incomplete published identity as a recovery shortcut.
 Protect backups as sensitive metadata. Restore file ownership for the writer account or container UID 1000.
 Do not use `docker compose down -v` unless you intend to delete the aggregate database.
 
-Writer opens migrate version 1 databases transactionally to version 2. Migration creates an empty backlog.
+Writer opens migrate version 1/2 databases transactionally to version 3. The version-2 migration creates an empty backlog; version 3 adds the dynamic registry without replacing observations or existing bindings.
 A read-only version 1 dashboard reports an upgrade error without changing the file.
 Back up first, then open the database with the current local Pi collector or `openHotplateStore` to migrate it.
 Aggregate databases start empty or reopen existing aggregate databases. A populated local database cannot become an aggregate.

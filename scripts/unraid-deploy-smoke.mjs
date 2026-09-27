@@ -16,6 +16,7 @@ const network = `${prefix}-net`;
 const controllerImage = `${prefix}:controller`;
 const imageTag = `hotplate-release:${id}`;
 const checks = [];
+process.stdout.write(`${JSON.stringify({ kind: "smoke-start", run: id, directory, network, imageTag, controllerImage })}\n`);
 const hash = buffer => createHash("sha256").update(buffer).digest("hex");
 const docker = (args, options = {}) => execFileSync("docker", args, { cwd: root, encoding: "utf8", maxBuffer: 4 * 1024 * 1024, timeout: 600_000, ...options });
 const socket = JSON.parse(docker(["context", "inspect"]))[0].Endpoints.docker.Host;
@@ -90,6 +91,8 @@ function journal(target) { return JSON.parse(helper("cat", [join(target.appdata,
 function inspect(id) { return JSON.parse(docker(["inspect", id]))[0]; }
 let release;
 let archive;
+const managed = { sourceId: randomUUID(), token: randomBytes(32).toString("hex") };
+const enrollmentPolicies = new Map();
 const credentials = { ingest: [{ sourceId: randomUUID(), machineId: "deployment-smoke", token: randomBytes(32).toString("hex") }], dashboard: { username: "smoke-reader", password: randomBytes(32).toString("hex") } };
 function target(suffix, address) {
   const installation = randomUUID(); installations.add(installation);
@@ -97,7 +100,7 @@ function target(suffix, address) {
 }
 function dashboardPolicy(target) { return new URL(target.origin).port ? { kind: "basic", ...credentials.dashboard } : { kind: "public" }; }
 function request(target, command = "apply") {
-  const aggregate = { databasePath: "/data/aggregate.sqlite", host: "0.0.0.0", port: Number(new URL(target.origin).port || 80), publicOrigin: target.origin, credentialsFile: "/run/secrets/hotplate-credentials.json", trustedHttp: true };
+  const aggregate = { databasePath: "/data/aggregate.sqlite", host: "0.0.0.0", port: Number(new URL(target.origin).port || 80), publicOrigin: target.origin, credentialsFile: "/run/secrets/hotplate-credentials.json", trustedHttp: true, openEnrollment: enrollmentPolicies.get(target.installation) ?? false };
   return { command, target, operation: randomUUID(), release: command === "status" ? null : release, secrets: command === "status" ? null : { aggregate: Buffer.from(JSON.stringify(aggregate)).toString("base64"), credentials: Buffer.from(JSON.stringify({ ...credentials, dashboard: new URL(target.origin).port ? credentials.dashboard : { kind: "public" } })).toString("base64") } };
 }
 async function bridge(target, code) {
@@ -107,10 +110,10 @@ async function bridge(target, code) {
     import {createServer,request} from 'node:http';
     import {probe} from '/probe/scripts/deploy-unraid';
     let input=''; for await (const chunk of process.stdin) input+=chunk;
-    const {origin,dashboard,ingest}=JSON.parse(input);
+    const {origin,dashboard,ingest,managed}=JSON.parse(input);
     ${code}
   `], { stdio: ["pipe", "pipe", "pipe"] });
-  child.stdin.end(JSON.stringify({ origin: target.origin, dashboard: dashboardPolicy(target), ingest: credentials.ingest[0] }));
+  child.stdin.end(JSON.stringify({ origin: target.origin, dashboard: dashboardPolicy(target), ingest: credentials.ingest[0], managed }));
   let stderr = "";
   child.stderr.on("data", chunk => { stderr += chunk; });
   const timer = setTimeout(() => child.kill(), 30_000);
@@ -198,6 +201,20 @@ try {
     process.stdout.write(`${JSON.stringify({ kind: failures.length ? "failed" : "passed", regressions: failures })}\n`);
     assert.deepEqual(failures, []);
   } else {
+  docker(["run", "--rm", "--network", "none", "--label", `io.hotplate.smoke=${id}`, "--read-only", "--user", "0",
+    "--tmpfs", "/tmp:rw,nosuid,nodev", "--entrypoint", "node", imageTag, "--input-type=module", "-e", `
+    import assert from 'node:assert/strict';
+    import {mkdirSync,existsSync} from 'node:fs';
+    import {SessionConnection} from '/app/dist/src/connection.js';
+    mkdirSync('/tmp/account',{mode:0o755}); mkdirSync('/tmp/account/hotplate',{mode:0o700});
+    process.setgid(1000); process.setuid(1000);
+    const connection=new SessionConnection(()=>[],{XDG_DATA_HOME:'/tmp/account',HOTPLATE_DB:'/tmp/local.sqlite'});
+    await connection.start({type:'session_start',reason:'startup'},{ui:{setStatus(){}}});
+    assert.equal((await connection.status()).mode,'unavailable');
+    assert.equal(existsSync('/tmp/local.sqlite'),false);
+    await connection.close();
+  `]);
+  checks.push("UID1000 managed client refuses a foreign-owned private account directory without local fallback");
   const primary = target("primary", ip(12));
   const plan = request(primary, "plan");
   await exchange(controller(plan), plan, null, () => assert.fail());
@@ -233,6 +250,9 @@ try {
     const data=await fetch(origin+'/api/dashboard',{headers:{authorization}}).then(response=>response.json());
     assert.equal(data.overview.observationCount,1);
   `);
+  await bridge(primary, `
+    assert.equal((await fetch(origin+'/api/enroll',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({version:1,...managed})})).status,403);
+  `);
   primary.origin = `http://${primary.address}`;
   for (const mutation of [{ installation: randomUUID() }, { appdata: `${primary.appdata}-other` }, { networkId: "f".repeat(64) },
     { targetSha256: hash(canonical(primary)) }, { version: 3 }, { unexpected: true }]) {
@@ -255,6 +275,17 @@ try {
       assert.equal(helper("cat", [join(primary.appdata, "operations", oldOperation, "credentials.json")]), oldCredentials);
     }
   }
+  for (const openEnrollment of [null, 1, "true", {}, []]) {
+    for (const command of ["plan", "apply"]) {
+      const invalid = request(primary, command);
+      const aggregate = JSON.parse(Buffer.from(invalid.secrets.aggregate, "base64").toString());
+      invalid.secrets.aggregate = Buffer.from(JSON.stringify({ ...aggregate, openEnrollment })).toString("base64");
+      await assert.rejects(exchange(controller(invalid), invalid, null, () => assert.fail()));
+      assert.deepEqual(journal(primary), healthyBeforeInvalidPolicy);
+      assert.equal(inspect(first).State.StartedAt, startedBeforeInvalidPolicy);
+    }
+  }
+  checks.push("Malformed enrollment policies refuse plan/apply without changing the healthy service");
   checks.push("Malformed dashboard policies refuse direct-controller plan and apply without changing the healthy service or journal");
   for (const field of ["ingest", "aggregate"]) {
     const changed = request(primary, "plan");
@@ -270,6 +301,7 @@ try {
   await probe({ ...primary, origin: legacyOrigin });
   checks.push("Legacy marker tampering and immutable configuration changes refused; pre-start recovery retains Basic port7345");
   docker(["exec", first, "node", "-e", "require('node:fs').writeFileSync('/data/persistence-proof','retained')"]);
+  enrollmentPolicies.set(primary.installation, true);
   await apply(primary, "mount-order");
   current = journal(primary);
   assert.notEqual(current.candidate, first);
@@ -309,6 +341,41 @@ try {
   helper("tar", ["-xf", current.backup.path, "-C", backupDirectory]);
   helper("node", ["-e", "const {DatabaseSync}=require('node:sqlite'); const db=new DatabaseSync(process.argv[1],{readOnly:true}); if(db.prepare('SELECT count(*) AS count FROM observations').get().count!==1)process.exit(1); db.close();", join(backupDirectory, "aggregate.sqlite")]);
   checks.push("Legacy Basic7345/absent-sysctl upgrades to public80 as UID1000; production probe sends no Authorization; health, read-only/Host/Origin/ingest guards and database backup verified");
+  const managedCheck = (register, sequence) => `
+    const registration=await fetch(origin+'/api/enroll',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({version:1,...managed}),signal:AbortSignal.timeout(5000)});
+    assert.equal(registration.status,200);
+    assert.deepEqual(await registration.json(),{version:1,sourceId:managed.sourceId,machineId:'managed-'+managed.sourceId});
+    const observation={id:'managed-'+${sequence},producerId:'managed-smoke',sequence:${sequence},observedAt:'2026-02-03T04:05:06.000Z',
+      scope:{projectCwd:'/managed-smoke',sessionId:null,sessionFile:null,segmentId:'live',segmentReason:'startup',runId:null,turnId:null,leafId:null},
+      evidence:{kind:'command-intent',skillName:'managed',source:'interactive'}};
+    const response=await fetch(origin+'/api/ingest',{method:'POST',headers:{authorization:'Bearer '+managed.token,'content-type':'application/json'},
+      body:JSON.stringify({version:1,sourceId:managed.sourceId,observations:[observation]}),signal:AbortSignal.timeout(5000)});
+    assert.equal(response.status,200); assert.equal((await response.json()).${register ? "accepted" : "duplicate"},1);
+    const data=await fetch(origin+'/api/dashboard').then(response=>response.json());
+    assert.equal(data.overview.observationCount,${sequence + 1});
+  `;
+  await bridge(primary, managedCheck(true, 1));
+  docker(["restart", "--time", "15", current.candidate]);
+  await bridge(primary, `
+    for(let i=0;;i++){try{await probe(origin,dashboard);break;}catch(error){if(i===59)throw error;await new Promise(resolve=>setTimeout(resolve,200));}}
+    ${managedCheck(false, 1)}
+  `);
+  await bridge(primary, managedCheck(true, 2));
+  for (let attempt = 0; inspect(current.candidate).State.Health.Status !== "healthy"; attempt++) {
+    assert.ok(attempt < 60, "Restarted managed collector did not become Docker healthy");
+    await delay(500);
+  }
+  enrollmentPolicies.set(primary.installation, false);
+  await apply(primary);
+  current = journal(primary);
+  await bridge(primary, `
+    ${managedCheck(false, 2)}
+    const refused=await fetch(origin+'/api/enroll',{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({version:1,sourceId:'dddddddd-dddd-4ddd-8ddd-dddddddddddd',token:'x'.repeat(64)})});
+    assert.equal(refused.status,403);
+  `);
+  assert.equal(helper("cat", [join(primary.appdata, "operations", oldOperation, "credentials.json")]), oldCredentials);
+  checks.push("Public80 open enrollment assigns a scoped identity; UID1000/read-only container restart preserves dynamic ingest, deduplication and data; closed replacement permits exact retry but refuses new registration without changing static credentials");
   const wrong = { ...primary, installation: randomUUID() };
   await refusal(wrong);
   const unmarked = target("unmarked", ip(13));
@@ -400,4 +467,5 @@ try {
   if (imageBuilt) docker(["image", "rm", imageTag]);
   if (controllerBuilt) docker(["image", "rm", controllerImage]);
   rmSync(directory, { recursive: true, force: true });
+  process.stdout.write(`${JSON.stringify({ kind: "smoke-cleaned", run: id, installations: [...installations], directory, network })}\n`);
 }

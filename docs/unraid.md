@@ -6,7 +6,7 @@ The target is `root@media.media`, network `br0`, address `192.168.88.12`, and or
 The dashboard is public to devices that can reach this LAN address. It requires no dashboard username or password.
 Ingestion still requires account-specific bearer tokens. HTTP sends tokens and metadata without TLS. Do not expose this address to an untrusted network.
 
-Only the operator creates real credentials, accepts host keys, and runs remote commands. Deployment does not enroll Pi capture or start account relays.
+Only the operator creates static credentials, accepts host keys, and runs remote commands. Deployment does not enroll a user account or start account relays. With explicitly enabled open enrollment, each account can use `/hotplate connect 192.168.88.12` from Pi.
 
 ## Prerequisites
 
@@ -47,7 +47,7 @@ const credentials = {
 };
 const aggregate = {
   databasePath: "/data/aggregate.sqlite", host: "0.0.0.0", port: Number(new URL(deploy.origin).port || 80),
-  publicOrigin: deploy.origin, credentialsFile: "/run/secrets/hotplate-credentials.json", trustedHttp: true,
+  publicOrigin: deploy.origin, credentialsFile: "/run/secrets/hotplate-credentials.json", trustedHttp: true, openEnrollment: false,
 };
 for (const [name, value] of [["deploy.json", deploy], ["aggregate.json", aggregate], ["credentials.json", credentials]]) {
   writeFileSync(join(directory, name), JSON.stringify(value, null, 2) + "\n", { mode: 0o600, flag: "wx" });
@@ -62,7 +62,7 @@ Other deployments can retain the legacy `dashboard: {username, password}` policy
 
 The installation UUID, canonical path, host, network identity, and address become fixed at bootstrap.
 Ordinary updates can change the dashboard policy and switch between canonical `http://ADDRESS` (80) and `http://ADDRESS:7345`.
-The aggregate `port` must match the origin. All other aggregate configuration and the entire ingest credential list must remain unchanged.
+The aggregate `port` must match the origin. The optional boolean `openEnrollment` can also change during a reviewed replacement; omission means false. All other aggregate configuration and the entire static ingest credential list must remain unchanged.
 Ingest token rotation and immutable target changes require a separate, reviewed maintenance operation.
 
 For an existing Basic/7345 installation, preserve private copies of the old configuration, then change only:
@@ -119,8 +119,19 @@ Unraid itself need not reach its macvlan peer. The workstation must reach the de
 
 For updates, run the same build, plan, and apply commands with the private configuration described above.
 Even reapplying the same image creates a new operation, cold backup, and container. There is no implicit no-op shortcut.
-Capture enrollment remains explicit. Follow the README account-enrollment procedure with the existing source UUID and token.
-Do not generate a second source identity merely to verify delivery.
+Capture enrollment remains explicit. For managed use, enable `openEnrollment` as described below and let the user issue the Pi command; do not enroll the user's real account as a deployment test. Existing manual accounts keep their source UUID, token and immutable database binding. If the deployment origin changes, configure a separate capture database for the new origin; never retarget the old enrolled database or import its history.
+
+## Open enrollment and Pi account connections
+
+The default is closed. To enable the approved trusted-LAN workflow, preserve all existing private configuration and static credentials, change only aggregate `openEnrollment` to `true`, then build/plan/apply normally. Do not regenerate bootstrap secrets. This policy permits **any client that can reach the instance** to register metadata; it is not trusted membership. Plain HTTP exposes tokens and metadata on the network. Do not expose open enrollment to an untrusted network.
+
+Users run `/hotplate connect 192.168.88.12`, `/hotplate status` and `/hotplate disconnect`. The client privately persists a stable per-origin identity and separate capture database. Automatic relay delivery exists only while Pi sessions operate; no daemon or OS process manager is installed. Last-session exit pauses delivery; reconnection resumes retained backlog. No historical observations are imported or old database bindings retargeted.
+
+Each session owns its collector/relay. Disconnect changes account-wide selection immediately, waits for its own cutover and best-effort aborts owned sends. Other runnable sessions reconcile approximately every second; in-flight requests can commit and suspended peers can retain their former capture destination until reconciliation. Status reports desired and this session's applied revisions, not completion across all peers.
+
+`HOTPLATE_CONFIG` keeps the previous explicit/manual behavior and refuses managed mutations. Invalid explicit configuration does not fall back. `HOTPLATE_DISABLED=1` starts no resources; `HOTPLATE_DB` controls local-only capture, not managed per-origin databases. The standalone relay CLI remains independent and is not stopped by managed disconnect.
+
+Dynamic registrations store SHA-256 token digests and assigned `managed-<source UUID>` identities in the existing owned `/data/aggregate.sqlite`, with no extra writable mount or modification of mounted static credentials. They survive container restart/replacement and normal consistent backups. Closing enrollment refuses new registrations but preserves authenticated exact retries and ingest for existing registrations. Requests/replies are at most 4 KiB with ten-second deadlines; capacity is 10,000 dynamic registrations and rate admission is 30 new registrations per rolling minute per server process. Exact retries do not consume either bound. See [connection details](connection.md).
 
 ## Retained evidence
 
@@ -209,6 +220,7 @@ The application container never receives the Docker socket.
 The smoke covers bootstrap and a legacy version-1 marker with Basic/7345 and no explicit sysctl upgrading to public/80.
 It verifies UID1000, Docker health, production probes without Authorization, anonymous dashboard reads, and denied anonymous ingestion.
 It also verifies Host/Origin and read-only guards, retained SQLite observations, cold backups, and unchanged old configuration.
+Open-enrollment coverage registers a temporary managed source, ingests metadata, restarts the UID1000/read-only container, verifies durable authorization/deduplication/data, then replaces it with closed enrollment and verifies exact retry while refusing new sources. Invalid enrollment policies cannot mutate a healthy service.
 Other checks cover ownership refusals, competing controllers, and corrupt uploads.
 It covers backup/disconnect failures, exact restart-policy restoration, actual unhealthy Docker health, failed acknowledgments, and acknowledgment timeout.
 It kills the controller at stop/start intent and verifies that later apply is refused.

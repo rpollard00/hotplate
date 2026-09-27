@@ -162,7 +162,7 @@ fi
 [[ $controller_hash == "$(jq -r .controllerSha256 <<< "$release")" ]] || refuse
 aggregate=$(jq -er .secrets.aggregate <<< "$request" | base64 -d)
 credentials=$(jq -er .secrets.credentials <<< "$request" | base64 -d)
-jq -e --arg origin "$(jq -r .origin <<< "$target")" --argjson port "$port" '. == {databasePath:"/data/aggregate.sqlite",host:"0.0.0.0",port:$port,publicOrigin:$origin,credentialsFile:"/run/secrets/hotplate-credentials.json",trustedHttp:true}' <<< "$aggregate" >/dev/null || refuse
+jq -e --arg origin "$(jq -r .origin <<< "$target")" --argjson port "$port" '((has("openEnrollment") | not) or (.openEnrollment | type == "boolean")) and (del(.openEnrollment) == {databasePath:"/data/aggregate.sqlite",host:"0.0.0.0",port:$port,publicOrigin:$origin,credentialsFile:"/run/secrets/hotplate-credentials.json",trustedHttp:true})' <<< "$aggregate" >/dev/null || refuse
 jq -e '
   .ingest as $ingest | .dashboard as $dashboard |
   keys == ["dashboard","ingest"] and
@@ -238,7 +238,7 @@ preflight() {
     [[ $(jq -r '.Config.Labels["io.hotplate.operation"]' <<< "$spec") == "$(jq -r .operation "$journal")" ]] || refuse
     [[ $(jq -r .Name <<< "$spec") == "/$(jq -r .candidateName "$journal")" ]] || refuse
     local old_secrets=$appdata/operations/$(jq -r .operation "$journal")
-    jq -e --argjson desired "$aggregate" 'del(.port,.publicOrigin) == ($desired | del(.port,.publicOrigin))' "$old_secrets/aggregate.json" >/dev/null || refuse
+    jq -e --argjson desired "$aggregate" 'del(.port,.publicOrigin,.openEnrollment) == ($desired | del(.port,.publicOrigin,.openEnrollment))' "$old_secrets/aggregate.json" >/dev/null || refuse
     jq -e --argjson desired "$credentials" 'del(.dashboard) == ($desired | del(.dashboard))' "$old_secrets/credentials.json" >/dev/null || refuse
   fi
   no_writers "$current" || refuse

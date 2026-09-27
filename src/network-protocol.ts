@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Observation, SourceId } from "./domain.js";
 import { parseObservation, parseSourceId, serializeObservation } from "./observation.js";
 
@@ -71,4 +72,22 @@ function record(value: unknown): Record<string, unknown> {
 }
 function exactKeys(value: Record<string, unknown>, keys: readonly string[]): void {
   if (Object.keys(value).length !== keys.length || Object.keys(value).some(key => !keys.includes(key))) throw new Error("Unexpected fields");
+}
+
+export const MAX_ENROLLMENT_BYTES = 4096;
+export type TokenDigest = string & { readonly __brand: "TokenDigest" };
+export function ingestTokenDigest(token: string): TokenDigest {
+  if (!/^[A-Za-z0-9._~+/-]{32,512}={0,2}$/.test(token)) throw new Error("Invalid enrollment");
+  return createHash("sha256").update(token).digest("hex") as TokenDigest;
+}
+export function parseEnrollmentRequest(value: unknown): { sourceId: SourceId; tokenDigest: TokenDigest } {
+  const input = record(value);
+  exactKeys(input, ["version", "sourceId", "token"]);
+  if (input.version !== 1 || typeof input.token !== "string") throw new Error("Invalid enrollment");
+  return { sourceId: parseSourceId(input.sourceId), tokenDigest: ingestTokenDigest(input.token) };
+}
+export function validateEnrollmentReply(value: unknown, sourceId: SourceId): void {
+  const input = record(value);
+  exactKeys(input, ["version", "sourceId", "machineId"]);
+  if (input.version !== 1 || input.sourceId !== sourceId || input.machineId !== `managed-${sourceId}`) throw new Error("Invalid enrollment reply");
 }

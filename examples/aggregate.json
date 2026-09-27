@@ -3,5 +3,6 @@
   "host": "0.0.0.0",
   "port": 7345,
   "publicOrigin": "https://hotplate.lan",
-  "credentialsFile": "/run/secrets/hotplate-credentials.json"
+  "credentialsFile": "/run/secrets/hotplate-credentials.json",
+  "openEnrollment": false
 }

@@ -41,7 +41,8 @@ async function readSecrets(config) {
   const aggregate = privateFile(config.aggregateFile);
   const credentials = privateFile(config.credentialsFile);
   const value = JSON.parse(aggregate);
-  exactKeys(value, ["databasePath", "host", "port", "publicOrigin", "credentialsFile", "trustedHttp"]);
+  exactKeys(value, ["databasePath", "host", "port", "publicOrigin", "credentialsFile", "trustedHttp", ...(Object.hasOwn(value, "openEnrollment") ? ["openEnrollment"] : [])]);
+  requireValue(value.openEnrollment === undefined || typeof value.openEnrollment === "boolean");
   requireValue(value.databasePath === "/data/aggregate.sqlite" && value.host === "0.0.0.0" && value.port === Number(new URL(config.origin).port || 80) && value.publicOrigin === config.origin && value.credentialsFile === "/run/secrets/hotplate-credentials.json" && value.trustedHttp === true);
   const { readAggregationCredentials } = await import(pathToFileURL(join(root, "dist/src/network-config.js")));
   const parsed = readAggregationCredentials(config.credentialsFile);

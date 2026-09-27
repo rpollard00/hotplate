@@ -61,7 +61,7 @@ export async function createFixture() {
   };
 }
 
-export async function createSessionFromLocalPackage(fixture: Awaited<ReturnType<typeof createFixture>>) {
+export async function createSessionFromLocalPackage(fixture: Awaited<ReturnType<typeof createFixture>>, duplicatePackage = false) {
   const skill: Skill = {
     name: "integration-skill",
     description: "Use for Hotplate integration tests.",
@@ -71,7 +71,7 @@ export async function createSessionFromLocalPackage(fixture: Awaited<ReturnType<
     disableModelInvocation: false,
   };
 
-  const settingsManager = SettingsManager.inMemory({ packages: [packageRoot], retry: { enabled: false } }, { projectTrusted: true });
+  const settingsManager = SettingsManager.inMemory({ packages: duplicatePackage ? [packageRoot, packageRoot] : [packageRoot], retry: { enabled: false } }, { projectTrusted: true });
   const loader = new DefaultResourceLoader({
     cwd: fixture.projectDir,
     agentDir: fixture.agentDir,
@@ -79,7 +79,13 @@ export async function createSessionFromLocalPackage(fixture: Awaited<ReturnType<
     extensionFactories: [fakeProviderExtension(fixture.skillPath)],
     skillsOverride: () => ({ skills: [skill], diagnostics: [] }),
   });
-  await loader.reload({ resolveProjectTrust: async () => true });
+  const previousDataHome = process.env.XDG_DATA_HOME;
+  process.env.XDG_DATA_HOME = join(fixture.rootDir, "account-data");
+  try { await loader.reload({ resolveProjectTrust: async () => true }); }
+  finally {
+    if (previousDataHome === undefined) delete process.env.XDG_DATA_HOME;
+    else process.env.XDG_DATA_HOME = previousDataHome;
+  }
 
   const loaded = loader.getExtensions();
   assert.deepEqual(loaded.errors, []);

@@ -33,11 +33,11 @@ A contiguous part of a Pi session, split by startup, reload, new session, resume
 One observed skill in one machine, account source, project, session, segment, and run. Activation counts differ from read occurrence counts.
 
 **Machine**:
-An operator-registered host identity shared by its participating account sources.
+A scoped identity grouping account sources. Static credentials use an operator-registered host identity; managed enrollment assigns a distinct identity to its source. Neither is hardware attestation.
 _Avoid_: Source, producer
 
 **Account source**:
-A persistent identity for one participating account installation. Several account sources can belong to one machine.
+A persistent identity for one participating account at one collector origin. Several static account sources can belong to one machine.
 _Avoid_: Machine, command source
 
 **Command source**:
@@ -63,3 +63,18 @@ The combined metadata view from enrolled account sources, with machine and sourc
 An explicit aggregate read-access choice: a separate Basic credential or `dashboard: {kind:"public"}` for anonymous reads.
 Public access does not remove ingest token identity/authentication, Host/Origin checks, or read-only dashboard methods.
 The dedicated trusted-LAN Unraid deployment serves the public dashboard at `http://192.168.88.12` on port 80.
+
+**Managed selection**:
+The account-wide choice of local-only capture or one collector origin. Each running session applies that choice independently.
+
+**Applied revision**:
+The selection revision a particular session has applied to its live capture and delivery. It does not certify that other sessions have switched.
+
+**Open enrollment**:
+Permission for reachable clients to register new account sources. It is not trusted membership and does not replace source-bound ingest authorization.
+
+**Managed connection**:
+A user-selected live enrollment whose delivery operates while participating Pi sessions run. Disconnect selects local-only capture without deleting that enrollment's retained backlog.
+
+**Manual override**:
+Explicit account configuration that takes precedence over managed selection and refuses managed mutations. Delivery is operated independently rather than owned by participating Pi sessions.
