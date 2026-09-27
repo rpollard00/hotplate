@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from "node:net";
 import { parseMachineId } from "./observation.js";
 import { dashboardCss, dashboardHtml, dashboardJs } from "./dashboard/assets.js";
+import { buildDashboardReport, type DashboardReport } from "./dashboard/analytics.js";
 import {
   openHotplateReadStore,
   resolveHotplateDatabasePath,
@@ -44,6 +45,7 @@ type DashboardPayload =
   | {
       kind: "ready";
       databasePath: string;
+      report: DashboardReport;
       overview: Awaited<ReturnType<HotplateReadonlyStore["queryOverview"]>>;
       skills: SkillTableView;
       matrix: Awaited<ReturnType<HotplateReadonlyStore["queryModelMatrix"]>>;
@@ -173,6 +175,7 @@ async function readDashboardPayload(databasePath: string, params: URLSearchParam
     return {
       kind: "ready",
       databasePath: open.databasePath,
+      report: buildDashboardReport({ filter: parsed.filter, skills, chains: allChains }),
       overview,
       skills,
       matrix,
@@ -208,9 +211,27 @@ function parseDashboardParams(params: URLSearchParams): { filter: DashboardFilte
   if (source !== null) filter.source = parseInputSource(source);
   if (modelProvider !== null) filter.modelProvider = modelProvider;
   if (modelId !== null) filter.modelId = modelId;
-  if (fromObservedAt !== null) filter.fromObservedAt = fromObservedAt;
-  if (toObservedAt !== null) filter.toObservedAt = toObservedAt;
+  if (fromObservedAt !== null) filter.fromObservedAt = parseObservedAt(fromObservedAt, "fromObservedAt");
+  if (toObservedAt !== null) filter.toObservedAt = parseObservedAt(toObservedAt, "toObservedAt");
+  if (filter.fromObservedAt !== undefined && filter.toObservedAt !== undefined
+    && Date.parse(filter.fromObservedAt) > Date.parse(filter.toObservedAt)) {
+    throw new Error("fromObservedAt must not be after toObservedAt");
+  }
   return { filter, chainSkillName: nonEmptyParam(params, "chainSkill") };
+}
+
+function parseObservedAt(value: string, name: string): string {
+  const isoFormat = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2}))?$/;
+  const time = Date.parse(value);
+  const calendarDate = value.slice(0, 10);
+  const calendarTime = Date.parse(`${calendarDate}T00:00:00.000Z`);
+  const nextDay = (Math.floor(time / 86_400_000) + 1) * 86_400_000;
+  if (!isoFormat.test(value) || !Number.isFinite(time) || !Number.isFinite(calendarTime)
+    || new Date(calendarTime).toISOString().slice(0, 10) !== calendarDate
+    || !Number.isFinite(new Date(nextDay).getTime())) {
+    throw new Error(`${name} must be a valid ISO date or date and time with a timezone`);
+  }
+  return new Date(time).toISOString();
 }
 
 function nonEmptyParam(params: URLSearchParams, name: string): string | null {
