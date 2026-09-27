@@ -235,6 +235,21 @@ try {
   }
   setMarker(legacyMarker);
   for (const mutation of [{ hostName: "other" }, { address: ip(19), origin: `http://${ip(19)}` }]) await refusal({ ...primary, ...mutation });
+  const healthyBeforeInvalidPolicy = journal(primary);
+  const startedBeforeInvalidPolicy = inspect(first).State.StartedAt;
+  for (const dashboard of [undefined, null, {}, { kind: "public", password: "invalid" }, { kind: "unknown" },
+    { username: "reader", password: "short" }, { username: "reader", password: credentials.ingest[0].token }]) {
+    for (const command of ["plan", "apply"]) {
+      const invalid = request(primary, command);
+      invalid.secrets.credentials = Buffer.from(JSON.stringify({ ...credentials, dashboard })).toString("base64");
+      await assert.rejects(exchange(controller(invalid), invalid, null, () => assert.fail()));
+      assert.deepEqual(journal(primary), healthyBeforeInvalidPolicy);
+      assert.equal(inspect(first).State.Running, true);
+      assert.equal(inspect(first).State.StartedAt, startedBeforeInvalidPolicy);
+      assert.equal(helper("cat", [join(primary.appdata, "operations", oldOperation, "credentials.json")]), oldCredentials);
+    }
+  }
+  checks.push("Malformed dashboard policies refuse direct-controller plan and apply without changing the healthy service or journal");
   for (const field of ["ingest", "aggregate"]) {
     const changed = request(primary, "plan");
     const key = field === "ingest" ? "credentials" : "aggregate";
