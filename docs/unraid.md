@@ -76,7 +76,32 @@ For an existing Basic/7345 installation, preserve private copies of the old conf
 Keep the installation UUID, every ingest token/source/machine identity, and remaining configuration intact. Do not rerun bootstrap credential generation.
 Build, plan, and apply normally. Do not edit the server marker or old operation files. Existing account enrollment is not changed by deployment.
 
-## Build, plan, apply, status
+## Deploy with one command
+
+After the one-time setup, run this command from the checkout:
+
+```sh
+npm run deploy:unraid
+```
+
+The command reads `~/.config/hotplate-unraid/deploy.json` by default. No environment variable is required.
+A nonempty `HOTPLATE_PRIVATE` overrides the private directory. An explicit `--config` path takes precedence over both:
+
+```sh
+npm run deploy:unraid -- --config /absolute/path/deploy.json
+```
+
+An invalid override stops deployment. The command does not fall back to the default configuration.
+
+This command runs `build`, `plan`, `apply`, and `status` in order. It passes the exact new release path between steps automatically.
+The build includes `npm run check`. All existing deployment checks, backups, and application probes remain in effect.
+The command stops at the first failure and exits nonzero. It does not retry, restore the database, or remove retained releases.
+If deployment fails, run the separate `status` command and review the recovery instructions.
+
+CAUTION: This command applies the release without a confirmation prompt. It can stop and replace the running container.
+For a separate plan review before apply, use the manual commands in the next section.
+
+## Manual build, plan, apply, status
 
 ```sh
 scripts/deploy-unraid build --config "$HOTPLATE_PRIVATE/deploy.json"
@@ -91,6 +116,11 @@ Set `RELEASE` to that exact path. Do not select a mutable tag or copy a manifest
 ```sh
 export RELEASE=/absolute/path/releases/UUID/release.json
 scripts/deploy-unraid plan --config "$HOTPLATE_PRIVATE/deploy.json" --release "$RELEASE"
+```
+
+Review the plan before running apply:
+
+```sh
 scripts/deploy-unraid apply --config "$HOTPLATE_PRIVATE/deploy.json" --release "$RELEASE"
 scripts/deploy-unraid status --config "$HOTPLATE_PRIVATE/deploy.json"
 ```
@@ -122,7 +152,7 @@ It runs as UID1000 with all capabilities dropped and `no-new-privileges`. The na
 It mounts the UID1000-owned data directory at `/data` and mounts two individual read-only secret files.
 Unraid itself need not reach its macvlan peer. The workstation must reach the dedicated address.
 
-For updates, run the same build, plan, and apply commands with the private configuration described above.
+For updates, run `npm run deploy:unraid` with the existing private configuration, or use the manual commands.
 Even reapplying the same image creates a new operation, cold backup, and container. There is no implicit no-op shortcut.
 Capture enrollment remains explicit. For managed use, enable `openEnrollment` as described below and let the user issue the Pi command; do not enroll the user's real account as a deployment test. Existing manual accounts keep their source UUID, token and immutable database binding. If the deployment origin changes, configure a separate capture database for the new origin; never retarget the old enrolled database or import its history.
 

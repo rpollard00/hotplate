@@ -311,7 +311,10 @@ These network limits do not restrict local capture acceptance.
 ### Deploy to Unraid over SSH
 
 Use the [Unraid deployment guide](docs/unraid.md) for a dedicated `br0` address without published host ports.
-It documents private bootstrap configuration and the `scripts/deploy-unraid build`, `plan`, `apply`, and `status` commands.
+After the one-time private configuration, run `npm run deploy:unraid` to build, plan, apply, and check status automatically.
+The command defaults to `~/.config/hotplate-unraid/deploy.json`. Set `HOTPLATE_PRIVATE` to override the directory, or use `-- --config /absolute/path/deploy.json` for the highest-priority override.
+It applies without a confirmation prompt.
+The guide also documents separate `scripts/deploy-unraid build`, `plan`, `apply`, and `status` commands for manual plan review.
 Updates retain cold backups and previous release evidence. Interrupted deployments fail closed without automatic database restoration.
 The Unraid pipeline keeps static ingest credentials fixed across updates; only the requested open-enrollment policy can change alongside the existing dashboard/port policy changes. Credential rotation requires separate reviewed maintenance.
 

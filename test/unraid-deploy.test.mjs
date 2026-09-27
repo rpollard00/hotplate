@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { spawn } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createServer } from "node:http";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 import { exchange, probe, readConfiguration, validateRelease } from "../scripts/deploy-unraid";
 
@@ -18,6 +18,119 @@ const configuration = {
 const path = join(directory, "deploy.json");
 test.after(() => rmSync(directory, { recursive: true, force: true }));
 function config(value) { writeFileSync(path, JSON.stringify(value), { mode: 0o600 }); return readConfiguration(path); }
+
+function deploymentFixture(t) {
+  const privateDirectory = mkdtempSync(join(tmpdir(), "hotplate-full-deploy-"));
+  t.after(() => rmSync(privateDirectory, { recursive: true, force: true }));
+  const bin = join(privateDirectory, "bin");
+  mkdirSync(bin);
+  const target = { ...configuration, aggregateFile: join(privateDirectory, "aggregate.json"),
+    credentialsFile: join(privateDirectory, "credentials.json"), releaseDirectory: join(privateDirectory, "releases with spaces") };
+  for (const [name, value] of Object.entries({
+    "deploy.json": target,
+    "aggregate.json": { databasePath: "/data/aggregate.sqlite", host: "0.0.0.0", port: 7345,
+      publicOrigin: target.origin, credentialsFile: "/run/secrets/hotplate-credentials.json", trustedHttp: true },
+    "credentials.json": { ingest: [{ sourceId: randomUUID(), machineId: "test", token: "a".repeat(48) }], dashboard: { kind: "public" } },
+  })) writeFileSync(join(privateDirectory, name), JSON.stringify(value), { mode: 0o600 });
+  const fixture = `#!${process.execPath}
+import { appendFileSync, writeFileSync } from 'node:fs';
+import { basename } from 'node:path';
+const command = basename(process.argv[1]);
+const args = process.argv.slice(2);
+function record(step, detail = {}) {
+  appendFileSync(process.env.DEPLOY_TRACE, JSON.stringify({ step, ...detail }) + '\\n');
+  if (process.env.FAIL_STEP === step) process.exit(1);
+}
+if (command === 'npm') {
+  record('check', { args });
+  console.log('Build output with a misleading Built /tmp/not-the-release/release.json');
+} else if (command === 'jj') {
+  record('revision');
+  console.log('a'.repeat(40));
+} else if (command === 'docker') {
+  record('docker-' + args.slice(0, 2).join('-'));
+  if (args[0] === 'image' && args[1] === 'inspect') console.log(JSON.stringify([{ Os: 'linux', Architecture: 'amd64', Id: 'sha256:' + 'b'.repeat(64) }]));
+  if (args[0] === 'image' && args[1] === 'save') writeFileSync(args[3], 'synthetic image archive');
+} else if (command === 'ssh') {
+  let input = '';
+  process.stdin.on('data', chunk => {
+    input += chunk;
+    if (!input.includes('\\n')) return;
+    const request = JSON.parse(input.split('\\n')[0]);
+    record(request.command, { release: request.release, target: request.target });
+    console.log(JSON.stringify({ kind: 'Result', state: request.command === 'plan' ? 'Ready' : 'Healthy',
+      operation: request.operation, journalState: 'Healthy', containers: [] }));
+    process.stdin.destroy();
+  });
+}
+`;
+  for (const name of ["npm", "jj", "docker", "ssh"]) writeFileSync(join(bin, name), fixture, { mode: 0o700 });
+  const tracePath = join(privateDirectory, "trace.jsonl");
+  return {
+    privateDirectory,
+    run(args = [], overrides = {}) {
+      return spawnSync(process.execPath, [resolve("scripts/deploy-unraid"), "deploy", ...args], {
+        encoding: "utf8", timeout: 20_000,
+        env: { ...process.env, HOME: privateDirectory, PATH: `${bin}:${process.env.PATH}`, HOTPLATE_PRIVATE: privateDirectory, DEPLOY_TRACE: tracePath, ...overrides },
+      });
+    },
+    trace() { return readFileSync(tracePath, "utf8").trim().split("\n").map(line => JSON.parse(line)); },
+  };
+}
+
+for (const selection of ["default", "empty environment", "environment", "explicit"]) test(`full deployment uses the exact new release (${selection} configuration)`, t => {
+  const fixture = deploymentFixture(t);
+  const defaultDirectory = join(fixture.privateDirectory, ".config", "hotplate-unraid");
+  mkdirSync(defaultDirectory, { recursive: true });
+  const useDefault = ["default", "empty environment"].includes(selection);
+  writeFileSync(join(defaultDirectory, "deploy.json"),
+    useDefault ? readFileSync(join(fixture.privateDirectory, "deploy.json")) : "invalid default configuration", { mode: 0o600 });
+  const overrides = selection === "explicit" ? { HOTPLATE_PRIVATE: "/not/the/configuration" }
+    : useDefault ? { HOTPLATE_PRIVATE: selection === "default" ? undefined : "" } : {};
+  const result = fixture.run(selection === "explicit" ? ["--config", join(fixture.privateDirectory, "deploy.json")] : [], overrides);
+  assert.equal(result.status, 0, result.stderr);
+  const events = fixture.trace();
+  assert.deepEqual(events.map(event => event.step), ["check", "revision", "docker-build---platform", "docker-image-inspect", "docker-image-save", "plan", "apply", "status"]);
+  assert.deepEqual(events[0].args, ["run", "check"]);
+  const releasePath = result.stdout.match(/^Built (.+)$/m)?.[1];
+  assert.ok(releasePath?.startsWith(join(fixture.privateDirectory, "releases with spaces")));
+  const release = JSON.parse(readFileSync(releasePath, "utf8"));
+  assert.deepEqual(events[5].release, release);
+  assert.deepEqual(events[6].release, release);
+  assert.equal(events[7].release, null);
+});
+
+for (const step of ["check", "docker-build---platform", "docker-image-save", "plan", "apply", "status"]) {
+  test(`full deployment stops on ${step} failure`, t => {
+    const fixture = deploymentFixture(t);
+    const result = fixture.run([], { FAIL_STEP: step });
+    assert.equal(result.status, 1, result.stderr);
+    assert.equal(fixture.trace().at(-1).step, step);
+  });
+}
+
+test("full deployment rejects missing configuration and unsupported arguments before external commands", t => {
+  const fixture = deploymentFixture(t);
+  const missing = fixture.run([], { HOTPLATE_PRIVATE: undefined });
+  assert.equal(missing.status, 1);
+  assert.match(missing.stderr, /Deployment failed/);
+  for (const args of [["--config"], ["--release", "old.json"], ["--config", join(fixture.privateDirectory, "deploy.json"), "--release", "old.json"]]) {
+    assert.equal(fixture.run(args).status, 1);
+  }
+  assert.throws(() => fixture.trace(), { code: "ENOENT" });
+  const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+  assert.equal(manifest.scripts["deploy:unraid"], "node scripts/deploy-unraid deploy");
+});
+
+test("invalid overrides do not fall back to the default configuration", t => {
+  const fixture = deploymentFixture(t);
+  const defaultDirectory = join(fixture.privateDirectory, ".config", "hotplate-unraid");
+  mkdirSync(defaultDirectory, { recursive: true });
+  writeFileSync(join(defaultDirectory, "deploy.json"), readFileSync(join(fixture.privateDirectory, "deploy.json")), { mode: 0o600 });
+  assert.equal(fixture.run([], { HOTPLATE_PRIVATE: join(fixture.privateDirectory, "missing") }).status, 1);
+  assert.equal(fixture.run(["--config", join(fixture.privateDirectory, "missing.json")]).status, 1);
+  assert.throws(() => fixture.trace(), { code: "ENOENT" });
+});
 
 test("deploy-unraid accepts an explicit private target configuration", () => {
   assert.deepEqual(config(configuration), configuration);

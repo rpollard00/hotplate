@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { spawn, execFileSync } from "node:child_process";
 import { createReadStream, readFileSync, realpathSync, statSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
+import { homedir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { createInterface } from "node:readline";
 
@@ -79,7 +80,9 @@ async function build(config) {
   const release = { version: 1, revision, tag, imageId: image.Id, platform: "linux/amd64", archiveSha256: await hashFile(archive), archiveBytes: statSync(archive).size, controllerSha256: digest(controller) };
   validateRelease(release);
   writeFileSync(join(directory, "release.json"), `${JSON.stringify(release, null, 2)}\n`, { mode: 0o600, flag: "wx" });
-  console.log(`Built ${join(directory, "release.json")}`);
+  const releasePath = join(directory, "release.json");
+  console.log(`Built ${releasePath}`);
+  return releasePath;
 }
 export async function probe(origin, dashboard) {
   for (const path of ["/health", "/api/dashboard"]) {
@@ -159,6 +162,19 @@ export async function exchange(child, request, archive, acknowledge) {
   } finally { clearTimeout(timer); }
 }
 export async function main(args) {
+  if (args[0] === "deploy") {
+    if (args.length === 1) {
+      const privateDirectory = process.env.HOTPLATE_PRIVATE || join(homedir(), ".config", "hotplate-unraid");
+      args = ["deploy", "--config", join(privateDirectory, "deploy.json")];
+    }
+    requireValue(args.length === 3 && args[1] === "--config" && args[2]);
+    const configPath = resolve(args[2]);
+    const releasePath = await build(readConfiguration(configPath));
+    for (const command of ["plan", "apply"]) {
+      await main([command, "--config", configPath, "--release", releasePath]);
+    }
+    return main(["status", "--config", configPath]);
+  }
   const [command, configFlag, configPath, releaseFlag, releasePath] = args;
   requireValue(["build", "plan", "apply", "status"].includes(command) && configFlag === "--config" && configPath);
   requireValue(["plan", "apply"].includes(command) ? args.length === 5 && releaseFlag === "--release" && releasePath : args.length === 3);
