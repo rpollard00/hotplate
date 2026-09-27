@@ -49,6 +49,44 @@ async function until(check: () => boolean): Promise<void> {
   while (!check()) { assert.ok(Date.now() < deadline, "timed out"); await delay(40); }
 }
 
+test("legacy unversioned account control migrates without losing selection or permitting unknown schemas", async t => {
+  const sdk = await sdkSession(t);
+  const context = sdk.session.extensionRunner.createContext();
+  for (const invalid of [false, true]) {
+    const dataHome = join(sdk.rootDir, invalid ? "invalid-legacy" : "valid-legacy");
+    const root = join(dataHome, "hotplate");
+    await mkdir(root, { recursive: true, mode: 0o700 });
+    const path = join(root, "control.sqlite");
+    await writeFile(path, "", { mode: 0o600 });
+    const db = new DatabaseSync(path);
+    db.exec("CREATE TABLE selection (singleton INTEGER PRIMARY KEY CHECK(singleton = 1), revision INTEGER NOT NULL, intent INTEGER NOT NULL, origin TEXT)");
+    db.exec("INSERT INTO selection VALUES (1, 4, 7, NULL)");
+    if (invalid) db.exec("CREATE TABLE unrelated (value TEXT)");
+    db.close();
+    const connection = new SessionConnection(() => [], { XDG_DATA_HOME: dataHome, HOTPLATE_DB: join(root, "local.sqlite") });
+    try {
+      await connection.start({ type: "session_start", reason: "startup" }, context);
+      const status = await connection.status();
+      if (invalid) {
+        assert.equal(status.mode, "unavailable"); assert.equal(status.phase, "paused"); assert.ok(status.failure);
+        const after = await connection.execute({ kind: "disconnect" }, sdk.session.extensionRunner.createCommandContext());
+        assert.equal(after.failure, status.failure);
+        assert.equal(scalar(path, "SELECT user_version AS value FROM pragma_user_version"), 0);
+        assert.equal(scalar(path, "SELECT COUNT(*) AS value FROM sqlite_schema WHERE name='unrelated'"), 1);
+      } else {
+        assert.equal(status.mode, "local"); assert.equal(status.phase, "ready"); assert.equal(status.failure, null);
+        assert.equal(status.appliedRevision, 4); assert.equal(status.desiredRevision, 4);
+        assert.equal(scalar(path, "SELECT intent AS value FROM selection"), 7);
+        assert.equal(scalar(path, "SELECT user_version AS value FROM pragma_user_version"), 1);
+        await connection.close();
+        const reopened = new SessionConnection(() => [], { XDG_DATA_HOME: dataHome, HOTPLATE_DB: join(root, "local.sqlite") });
+        try { await reopened.start({ type: "session_start", reason: "reload" }, context); assert.equal((await reopened.status()).appliedRevision, 4); }
+        finally { await reopened.close(); }
+      }
+    } finally { await connection.close(); }
+  }
+});
+
 test("connection origins canonicalize authority only and reject hostile inputs", () => {
   for (const input of ["hotplate.lan", "HTTP://HOTPLATE.LAN:80", "http://hotplate.lan"]) assert.equal(parseConnectionOrigin(input), "http://hotplate.lan");
   assert.equal(parseConnectionOrigin("192.168.88.12:7345"), "http://192.168.88.12:7345");
