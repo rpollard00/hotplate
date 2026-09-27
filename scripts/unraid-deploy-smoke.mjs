@@ -26,10 +26,11 @@ mkdirSync(locks, { mode: 0o700 });
 const controllerPath = join(directory, "controller.sh");
 writeFileSync(controllerPath, readFileSync(join(root, "scripts/unraid-controller.sh")), { mode: 0o600 });
 const controllerFile = join(directory, "Dockerfile");
-writeFileSync(controllerFile, `FROM node:24.19.0-bookworm-slim\nRUN apt-get update && apt-get install -y --no-install-recommends docker.io jq util-linux && rm -rf /var/lib/apt/lists/*\nCOPY docker-wrapper /usr/local/bin/docker\nCOPY tar-wrapper /usr/local/bin/tar\nRUN chmod 755 /usr/local/bin/docker /usr/local/bin/tar\n`);
+writeFileSync(controllerFile, `FROM node:24.19.0-bookworm-slim\nRUN apt-get update && apt-get install -y --no-install-recommends docker.io jq util-linux && rm -rf /var/lib/apt/lists/*\nCOPY docker-wrapper /usr/local/bin/docker\nCOPY tar-wrapper /usr/local/bin/tar\nCOPY cp-wrapper /usr/local/bin/cp\nRUN chmod 755 /usr/local/bin/docker /usr/local/bin/tar /usr/local/bin/cp\n`);
 writeFileSync(join(directory, "docker-wrapper"), `#!/bin/bash
 set -e
 if [[ $1 == ps ]]; then
+  if [[ \${HOTPLATE_TEST_FAILURE:-} == listing || ( \${HOTPLATE_TEST_FAILURE:-} == listing-recovery && -e ${directory}/listing-failed ) ]]; then exit 42; fi
   ids=$(/usr/bin/docker "$@")
   for container in $ids; do
     label=$(/usr/bin/docker inspect --format '{{index .Config.Labels "io.hotplate.smoke-controller"}}' "$container")
@@ -38,6 +39,7 @@ if [[ $1 == ps ]]; then
   exit 0
 fi
 if [[ \${HOTPLATE_TEST_FAILURE:-} == disconnect && $1 == network && $2 == disconnect ]]; then /usr/bin/docker "$@"; exit 1; fi
+if [[ \${HOTPLATE_TEST_FAILURE:-} == listing-recovery && $1 == network && $2 == disconnect ]]; then /usr/bin/docker "$@"; touch ${directory}/listing-failed; exit 1; fi
 if [[ \${HOTPLATE_TEST_FAILURE:-} == stop-intent && $1 == update && $2 == --restart && $3 == no ]]; then /usr/bin/docker "$@"; /usr/bin/docker kill "$HOTPLATE_TEST_CONTROLLER"; exit 1; fi
 if [[ \${HOTPLATE_TEST_FAILURE:-} == start-intent && $1 == create ]]; then /usr/bin/docker kill "$HOTPLATE_TEST_CONTROLLER"; exit 1; fi
 exec /usr/bin/docker "$@"
@@ -45,6 +47,10 @@ exec /usr/bin/docker "$@"
 writeFileSync(join(directory, "tar-wrapper"), `#!/bin/bash
 if [[ \${HOTPLATE_TEST_FAILURE:-} == backup && $1 == -C ]]; then exit 1; fi
 exec /usr/bin/tar "$@"
+`);
+writeFileSync(join(directory, "cp-wrapper"), `#!/bin/bash
+if [[ \${HOTPLATE_TEST_FAILURE:-} == evidence && $2 == */failure.json ]]; then exit 42; fi
+exec /usr/bin/cp "$@"
 `);
 let controllerBuilt = false;
 let imageBuilt = false;
@@ -106,6 +112,38 @@ try {
   archive = join(directory, "image.tar");
   docker(["save", "--output", archive, imageTag]);
   release = { version: 1, revision: "a".repeat(40), tag: imageTag, imageId: JSON.parse(docker(["image", "inspect", imageTag]))[0].Id, platform: "linux/amd64", archiveSha256: hash(readFileSync(archive)), archiveBytes: statSync(archive).size, controllerSha256: hash(readFileSync(controllerPath)) };
+  if (process.argv.includes("--regressions")) {
+    const failures = [];
+    async function expectRejection(label, operation) {
+      try { await operation(); failures.push(`${label}: command incorrectly succeeded`); } catch {}
+    }
+    const ownership = target("ownership-regression", ip(20));
+    await expectRejection("ownership", () => apply(ownership, "", async candidate => {
+      const operation = inspect(candidate).Config.Labels["io.hotplate.operation"];
+      helper("chmod", ["644", join(ownership.appdata, "operations", operation, "credentials.json")]);
+    }));
+    const ownershipJournal = journal(ownership);
+    if (ownershipJournal.state === "Healthy") failures.push("ownership: recorded Healthy after ownership rejection");
+    const ownershipCandidate = ownershipJournal.candidate ?? ownershipJournal.evidence?.candidate;
+    if (inspect(ownershipCandidate).HostConfig.RestartPolicy.Name !== "no") failures.push("ownership: enabled candidate restart");
+    const listing = target("listing-regression", ip(21));
+    const listingRequest = request(listing, "plan");
+    await expectRejection("listing", () => exchange(controller(listingRequest, "listing"), listingRequest, null, () => assert.fail()));
+    const recovery = target("listing-recovery-regression", ip(22));
+    await apply(recovery);
+    const previous = journal(recovery).candidate;
+    await expectRejection("listing recovery", () => apply(recovery, "listing-recovery"));
+    if (inspect(previous).State.Running) failures.push("listing recovery: restarted old container without enumerating writers");
+    if (journal(recovery).state !== "RecoveryRequired") failures.push("listing recovery: cleared recovery requirement");
+    const evidence = target("evidence-regression", ip(23));
+    await expectRejection("evidence", () => apply(evidence, "evidence", () => { throw new Error("Probe unavailable"); }));
+    const evidenceJournal = journal(evidence);
+    const evidenceCandidate = evidenceJournal.candidate ?? evidenceJournal.evidence?.candidate;
+    if (inspect(evidenceCandidate).State.Running) failures.push("evidence: write failure skipped candidate shutdown");
+    if (inspect(evidenceCandidate).HostConfig.RestartPolicy.Name !== "no") failures.push("evidence: retained restart policy");
+    process.stdout.write(`${JSON.stringify({ kind: failures.length ? "failed" : "passed", regressions: failures })}\n`);
+    assert.deepEqual(failures, []);
+  } else {
   const primary = target("primary", ip(12));
   const plan = request(primary, "plan");
   await exchange(controller(plan), plan, null, () => assert.fail());
@@ -205,6 +243,7 @@ try {
   await refusal(start);
   checks.push("SIGKILL at stop/start intent retains incomplete journal and blocks apply");
   console.log(JSON.stringify({ kind: "passed", checks, limitation: "Local rootless bridge probes do not prove Unraid macvlan workstation reachability." }, null, 2));
+  }
 } finally {
   for (const installation of installations) {
     const ids = docker(["ps", "-aq", "--filter", `label=io.hotplate.installation=${installation}`]).trim().split(/\s+/).filter(Boolean);
