@@ -34,6 +34,8 @@ try {
   let diagnosticPayload;
   let repeatedPayload;
   let sparsePayload;
+  let oneBinPayload;
+  let adaptivePayload;
   let catalogOnlyPayload;
   let manySkillsPayload;
   const comparisonModel = payload.report.models[1].model;
@@ -47,7 +49,6 @@ try {
     const manySkills = { rows: [...skills.rows, ...Array.from({ length: 45 }, (_, index) => ({
       ...catalogRow, skillName: 'chooser-' + String(index).padStart(2, '0'), canonicalPath: '/synthetic/chooser-' + index + '/SKILL.md',
     }))] };
-    manySkillsPayload = { ...payload, report: buildDashboardReport({ filter: {}, skills: manySkills, chains }) };
     catalogOnlyPayload = { ...payload, report: buildDashboardReport({ filter: {}, skills, chains: { runs: [] } }), chains: { runs: [] } };
     const derivationStart = performance.now();
     buildDashboardReport({ filter: {}, skills, chains });
@@ -95,6 +96,11 @@ try {
       ...item, observationId: 'controlled-' + ++serial, sequence: serial, observedAt: at,
       evidence: { ...item.evidence, toolCallId: 'controlled-tool-' + serial },
     })) });
+    const manyChains = { runs: [...chains.runs, { ...makoRun, segmentId: 'many-skills', steps: Array.from({ length: 21 }, (_, day) => controlledStep(
+      Array.from({ length: 45 }, (_, index) => ({ ...makoRead, evidence: { ...makoRead.evidence, skill: { ...makoRead.evidence.skill, name: 'chooser-' + String(index).padStart(2, '0'), canonicalPath: '/synthetic/chooser-' + index + '/SKILL.md' } } })),
+      '2025-02-' + String(day + 1).padStart(2, '0') + 'T10:00:00.000Z',
+    )) }] };
+    manySkillsPayload = { ...payload, report: buildDashboardReport({ filter: {}, skills: manySkills, chains: manyChains }), chains: manyChains };
     const currentDay = '2025-02-21T10:00:00.000Z';
     const previousDay = '2025-02-20T10:00:00.000Z';
     const repeatedChains = { runs: [
@@ -103,6 +109,9 @@ try {
       { ...makoRun, segmentId: 'previous', steps: [controlledStep([makoRead], previousDay)] },
     ] };
     repeatedPayload = { ...payload, report: buildDashboardReport({ filter: { fromObservedAt: "2025-02-20T00:00:00.000Z", toObservedAt: "2025-02-21T23:59:59.999Z" }, skills, chains: repeatedChains }), chains: repeatedChains };
+    const oneBinChains = { runs: [repeatedChains.runs[0]] };
+    oneBinPayload = { ...payload, report: buildDashboardReport({ filter: { fromObservedAt: '2025-02-21T10:00:00.000Z', toObservedAt: '2025-02-21T10:30:00.000Z' }, skills, chains: oneBinChains }), chains: oneBinChains };
+    adaptivePayload = { ...payload, report: buildDashboardReport({ filter: { fromObservedAt: '2024-10-02T00:00:00.000Z', toObservedAt: '2025-02-21T12:00:00.000Z' }, skills, chains: repeatedChains }), chains: repeatedChains };
     const sparseChains = { runs: [...repeatedChains.runs.slice(0, 2), { ...makoRun, segmentId: 'before-gap', steps: [controlledStep([makoRead], '2025-02-19T10:00:00.000Z')] }] };
     sparsePayload = { ...payload, report: buildDashboardReport({ filter: {}, skills, chains: sparseChains }), chains: sparseChains };
   } finally { await opened.store.close(); }
@@ -122,6 +131,62 @@ try {
       await command("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
       await command("Input.dispatchKeyEvent", { type: "char", key: "Enter", text: "\r", unmodifiedText: "\r" });
       await command("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+    }
+    async function searchSkills(value) {
+      await evaluate(`{ const search = document.querySelector('.trend-chooser input[type=search]'); search.value = ${JSON.stringify(value)}; search.dispatchEvent(new Event('input', { bubbles: true })); }`);
+    }
+    async function toggleSkill(name) {
+      await evaluate(`{ const checkbox = Array.from(document.querySelectorAll('.trend-options input[type=checkbox]')).find(item => item.dataset.skill === ${JSON.stringify(name)}); if (!checkbox) throw new Error('Missing checkbox: ' + ${JSON.stringify(name)}); checkbox.focus(); }`);
+      const chooserScroll = await evaluate('document.querySelector(".trend-options").scrollTop');
+      await command('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: ' ', code: 'Space', windowsVirtualKeyCode: 32 });
+      await command('Input.dispatchKeyEvent', { type: 'keyUp', key: ' ', code: 'Space', windowsVirtualKeyCode: 32 });
+      assert.equal(await evaluate('document.querySelector(".trend-chooser").open'), true, 'Skill toggles keep the same chooser open');
+      assert.equal(await evaluate('document.querySelector(".trend-options").scrollTop'), chooserScroll, 'Toggling preserves chooser scroll');
+    }
+    async function colors() {
+      return evaluate('Object.fromEntries(Array.from(document.querySelectorAll(".trend-area"), area => [area.dataset.skill, area.getAttribute("fill")]))');
+    }
+    async function assertStack(activity) {
+      assert.equal(activity.kind, 'bucketed');
+      assert.ok(activity.bins.length > 0);
+      assert.equal(await evaluate('document.querySelectorAll(".trend-plot").length'), 1, 'All selected skills share one plot');
+      const layers = await evaluate('Array.from(document.querySelectorAll(".trend-area"), area => ({name: area.dataset.skill, path: area.getAttribute("d"), fill: area.getAttribute("fill")}))');
+      const names = await evaluate('Array.from(document.querySelectorAll(".trend-label"), item => item.dataset.skill)');
+      assert.ok(names.length > 0, 'Geometry check needs selected layers');
+      assert.deepEqual(layers.map(layer => layer.name), names);
+      const values = names.map(name => activity.bins.map(bin => bin.skills.find(skill => skill.name === name)?.successfulReads ?? 0));
+      const totals = activity.bins.map((_, index) => values.reduce((sum, series) => sum + series[index], 0));
+      const maximum = Math.max(1, ...totals);
+      const start = Date.parse(activity.startAt), duration = Date.parse(activity.endAt) - start;
+      const lower = activity.bins.map(() => 0);
+      const x = time => Math.max(0, Math.min(600, (Date.parse(time) - start) / duration * 600));
+      const y = value => 240 - value / maximum * 240;
+      for (const [layerIndex, layer] of layers.entries()) {
+        assert.ok(layer.fill && layer.fill !== 'none');
+        assert.match(layer.path, /^M.*Z$/i, 'Each area closes its cumulative boundary');
+        assert.doesNotMatch(layer.path, /NaN|Infinity|undefined/);
+        const points = [...layer.path.matchAll(/[ML]\s*(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)/gi)].map(match => [Number(match[1]), Number(match[2])]);
+        const upper = lower.map((value, index) => value + values[layerIndex][index]);
+        const expected = activity.bins.flatMap((bin, index) => [[x(bin.startAt), y(upper[index])], [x(bin.endAt), y(upper[index])]])
+          .concat(activity.bins.flatMap((bin, index) => [[x(bin.startAt), y(lower[index])], [x(bin.endAt), y(lower[index])]]).reverse());
+        assert.equal(points.length, expected.length, 'Every interval has an upper and lower step');
+        for (let index = 0; index < points.length; index++) {
+          assert.ok(points[index].every(Number.isFinite));
+          assert.ok(points[index][0] >= 0 && points[index][0] <= 600 && points[index][1] >= 0 && points[index][1] <= 240);
+          assert.ok(Math.abs(points[index][0] - expected[index][0]) < 0.02 && Math.abs(points[index][1] - expected[index][1]) < 0.02, layer.name + ' cumulative count geometry at point ' + index);
+        }
+        lower.splice(0, lower.length, ...upper);
+      }
+      assert.deepEqual(lower, totals, 'The top area equals the selected successful-read sum');
+      await evaluate('document.querySelector(".trend-plot").focus()');
+      await key('Home');
+      const firstReadouts = await evaluate('Array.from(document.querySelectorAll(".trend-label small"), item => item.textContent)');
+      assert.deepEqual(firstReadouts, values.map(series => series[0].toLocaleString('en-US') + (series[0] === 1 ? ' read' : ' reads')));
+      await key('End');
+      const lastReadouts = await evaluate('Array.from(document.querySelectorAll(".trend-label small"), item => item.textContent)');
+      assert.deepEqual(lastReadouts, values.map(series => series.at(-1).toLocaleString('en-US') + (series.at(-1) === 1 ? ' read' : ' reads')));
+
+
     }
     async function helpFromEveryTab() {
       for (const workspace of ['overview', 'models', 'paths']) {
@@ -160,15 +225,10 @@ try {
     assert.equal(await evaluate('document.querySelector(".metric-value").textContent'), weekly.report.counts.successfulReads.toLocaleString('en-US'));
     assert.equal(await evaluate('document.getElementById("scope-summary").textContent'), '2025-02-14T12:00:00.000Z to 2025-02-21T12:00:00.000Z · UTC');
     assert.equal(await evaluate('document.querySelectorAll("#activity-chart tbody tr").length'), 0, 'The activity table is lazy');
-    assert.match(await evaluate('document.getElementById("activity-chart").textContent'), /1 hour per point/);
+    assert.match(await evaluate('document.getElementById("activity-chart").textContent'), /Reads per interval/);
     await chartScreenshot('weekly-desktop.png');
     const weeklyNames = await evaluate('Array.from(document.querySelectorAll(".trend-label"), item => item.dataset.skill)');
-    const weeklyPoints = await evaluate('Array.from(document.querySelectorAll("g[data-skill] .trend-dot"), point => ({ name: point.parentElement.dataset.skill, bin: Number(point.dataset.bin), runs: Number(point.dataset.runs), total: Number(point.dataset.total) }))');
-    for (const point of weeklyPoints) {
-      const bin = weekly.report.activity.bins[point.bin];
-      assert.equal(point.total, bin.readRuns);
-      assert.equal(point.runs, bin.skills.find(skill => skill.name === point.name)?.readRuns ?? 0);
-    }
+    await assertStack(weekly.report.activity);
     async function key(name, modifiers = 0) {
       await command('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: name, code: name, modifiers, windowsVirtualKeyCode: { Home: 36, End: 35, ArrowLeft: 37, ArrowRight: 39, Escape: 27, Enter: 13, Tab: 9 }[name] });
     }
@@ -182,12 +242,14 @@ try {
     assert.deepEqual(await edgeValues(), [1, 3]);
     await click('.trend-label');
     const selectedChips = await evaluate('document.getElementById("explore-chips").textContent');
-    const beforeExpandScroll = await evaluate('scrollY');
-    await click('.trend-controls > button');
-    assert.equal(await evaluate('scrollY'), beforeExpandScroll, 'Adding rows does not scroll to the explorer');
-    assert.ok(await evaluate('document.querySelectorAll(".trend-label").length > 5'));
+    await click('.trend-chooser summary');
+    await until('document.activeElement.type === "search"');
+    const extraSkill = await evaluate('document.querySelector(".trend-options input[type=checkbox]:not(:checked)").dataset.skill');
+    await toggleSkill(extraSkill);
+    assert.equal(await evaluate('document.querySelectorAll(".trend-label").length'), 6);
     assert.deepEqual((await evaluate('Array.from(document.querySelectorAll(".trend-label"), item => item.dataset.skill)')).slice(0, 5), weeklyNames);
     assert.equal(await evaluate('document.getElementById("explore-chips").textContent'), selectedChips);
+    await key('Escape');
     await click('#activity-chart > details > summary'); await until('document.querySelectorAll(".activity-choice").length > 0');
     assert.equal(await evaluate('document.querySelectorAll("#activity-chart tbody tr").length'), 24, 'Hourly data table is paginated');
     assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#activity-chart th"), item => item.textContent).slice(2, -4)'), await evaluate('Array.from(document.querySelectorAll(".trend-label"), item => item.dataset.skill)'), 'Table columns follow displayed names');
@@ -196,17 +258,22 @@ try {
     assert.match(await evaluate('document.querySelector(".activity-choice").getAttribute("aria-label")'), /12:00:00.*13:00:00.*exclusive/);
     await click('#activity-chart > details > summary');
     await chartScreenshot('weekly-expanded-desktop.png');
-    await click('.trend-remove');
     const removedName = weeklyNames[0];
-    assert.equal(await evaluate('document.getElementById("explore-chips").textContent'), selectedChips);
-    await evaluate('document.querySelector(".trend-chooser summary").focus()'); await enter();
+    const originalColors = await colors();
+    await click('.trend-chooser summary');
     await until('document.activeElement.type === "search"');
-    await evaluate(`document.activeElement.value = ${JSON.stringify(removedName)}; document.activeElement.dispatchEvent(new Event('input', { bubbles: true }));`);
-    await key('Tab'); await enter();
-    assert.ok((await evaluate('Array.from(document.querySelectorAll(".trend-label"), item => item.dataset.skill)')).includes(removedName));
+    await toggleSkill(removedName);
+    assert.equal(await evaluate('document.getElementById("explore-chips").textContent'), selectedChips);
+    for (const [name, color] of Object.entries(await colors())) assert.equal(color, originalColors[name]);
+    await searchSkills(removedName);
+    await toggleSkill(removedName);
+    assert.equal((await colors())[removedName], originalColors[removedName]);
+    assert.equal(await evaluate('document.activeElement.dataset.skill'), removedName);
+    assert.equal(await evaluate('document.querySelector(".trend-chooser input[type=search]").value'), removedName);
     assert.equal(await evaluate('document.getElementById("explore-chips").textContent'), selectedChips);
     await key('Escape');
     assert.equal(await evaluate('document.querySelector(".trend-chooser").open'), false);
+    assert.equal(await evaluate('document.activeElement.tagName'), 'SUMMARY');
     const customNames = await evaluate('Array.from(document.querySelectorAll(".trend-label"), item => item.dataset.skill)');
     await evaluate('window.smokeNow += 3600123'); await click('#refresh-data'); await until(ready);
     assert.match(await evaluate('document.getElementById("scope-summary").textContent'), /2025-02-21T13:00:00.123Z/);
@@ -218,6 +285,7 @@ try {
     await evaluate('window.smokeNow += 3600000'); await click('#refresh-data'); await until(ready);
     assert.equal(await evaluate('document.getElementById("scope-summary").textContent'), '2025-02-21T09:30:00.000Z to 2025-02-21T11:30:00.000Z · UTC');
     assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".trend-label"), item => item.dataset.skill)'), customNames, 'Custom trend names survive scope changes without substitution');
+    assert.deepEqual(await colors(), originalColors, 'Colors survive filtered refresh');
     await evaluate('document.querySelector(".trend-label").click()');
     assert.match(await evaluate('document.getElementById("explore-comparison").textContent'), /Recent period/);
     assert.doesNotMatch(await evaluate('document.getElementById("explore-comparison").textContent'), /0 days|outside the current report/);
@@ -228,6 +296,8 @@ try {
     await evaluate('document.querySelector(".brush-band").focus()'); await key('ArrowLeft');
     const movedPartialRange = await edgeValues();
     assert.ok(Math.abs((movedPartialRange[1] - movedPartialRange[0]) - (partialRange[1] - partialRange[0])) < 1e-9, 'Keyboard movement preserves a partial-hour comparison duration');
+    const partialActivity = await fetch(new URL('/api/dashboard?fromObservedAt=2025-02-21T09:30:00.000Z&toObservedAt=2025-02-21T11:30:00.000Z', rich.url)).then(response => response.json());
+    await assertStack(partialActivity.report.activity);
     await evaluate('document.querySelector(".trend-plot").scrollIntoView({block:"center"})');
     const partialBand = await evaluate('(() => { const r=document.querySelector(".brush-band").getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+20}; })()');
     await command('Input.dispatchMouseEvent', { type: 'mousePressed', ...partialBand, button: 'left', clickCount: 1 });
@@ -249,17 +319,25 @@ try {
     await click('#filter-form button[type=submit]'); await until(ready);
     assert.equal(await evaluate('document.querySelector(".metric-value").textContent'), '0');
     assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".trend-label"), item => item.dataset.skill)'), customNames, 'Absent custom names are retained without substitution');
-    assert.equal(await evaluate('document.querySelectorAll(".trend-dot").length'), 0, 'Missing reads do not become zero-valued points');
-    assert.equal(await evaluate('document.querySelector(".trend-controls").hidden'), true);
-    for (let remaining = customNames.length; remaining > 0; remaining--) {
-      await evaluate('document.querySelector(".trend-remove").focus()'); await enter();
-      assert.equal(await evaluate('document.querySelectorAll(".trend-label").length'), remaining - 1);
-      assert.ok(await evaluate('document.activeElement !== document.body && document.activeElement.getClientRects().length > 0 && !document.activeElement.closest("[hidden]")'), 'Removing an absent custom row retains visible keyboard focus');
+    assert.equal(await evaluate('document.querySelector(".trend-controls").hidden'), false);
+    await click('.trend-chooser summary');
+    await until('document.activeElement.type === "search"');
+    await searchSkills('');
+    for (const name of customNames) {
+      await toggleSkill(name);
+      assert.equal(await evaluate('document.activeElement.dataset.skill'), name, 'Removing absent skills keeps keyboard focus');
     }
-    assert.equal(await evaluate('document.activeElement.id'), 'activity-heading', 'Removing the last absent row focuses the chart heading');
+    assert.equal(await evaluate('document.querySelectorAll(".trend-label").length'), 0);
+    assert.match(await evaluate('document.getElementById("activity-chart").textContent'), /Select skills/);
+    await toggleSkill(customNames[0]);
+    assert.equal(await evaluate('document.querySelectorAll(".trend-label").length'), 1, 'The same chooser recovers an empty selection');
+    await toggleSkill(customNames[0]);
+    await key('Escape');
+    await click('#refresh-data'); await until(ready);
+    assert.equal(await evaluate('document.querySelectorAll(".trend-label").length'), 0, 'Empty custom selection survives refresh');
     await evaluate('window.smokeNow = Date.parse("2025-02-21T12:00:00.000Z")');
     await click('#reset-filters'); await until(ready);
-    assert.equal(await evaluate('document.querySelectorAll(".trend-label").length'), 5);
+    assert.equal(await evaluate('document.querySelectorAll(".trend-label").length'), 5, 'Reset restores the default selection');
     assert.equal(await evaluate('document.getElementById("time-preset").value'), '7');
     assert.equal(await evaluate('document.querySelector(".metric-value").textContent'), weekly.report.counts.successfulReads.toLocaleString('en-US'));
     await evaluate('document.querySelector(".trend-plot").scrollIntoView({block:"center"})');
@@ -269,7 +347,7 @@ try {
     assert.deepEqual(await edgeValues(), [80, 91]);
     await hourlyMouse('mousePressed', 85); await hourlyMouse('mouseMoved', 95); await hourlyMouse('mouseReleased', 95);
     assert.deepEqual(await edgeValues(), [90, 101]);
-    await hourlyMouse('mousePressed', 101); await hourlyMouse('mouseMoved', 105); await hourlyMouse('mouseReleased', 105);
+    await hourlyMouse('mousePressed', 101); await hourlyMouse('mouseMoved', 104.8); await hourlyMouse('mouseReleased', 104.8);
     assert.deepEqual(await edgeValues(), [90, 105]);
     await hourlyMouse('mousePressed', 95); await hourlyMouse('mouseMoved', 110); await key('Escape'); await hourlyMouse('mouseReleased', 110);
     assert.deepEqual(await edgeValues(), [90, 105]);
@@ -293,14 +371,14 @@ try {
     assert.deepEqual(await edgeValues(), [40, 76], 'Cancelling an hourly touch move restores the committed range');
     assert.equal(await evaluate('document.querySelector(".trend-plot").dataset.dragging'), 'false');
     await chartScreenshot('weekly-touch-320.png');
-    await click('.trend-remove');
     await evaluate('document.querySelector(".trend-chooser summary").scrollIntoView({block:"center"})');
     const chooserPoint = await evaluate('(() => {const r=document.querySelector(".trend-chooser summary").getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()');
     await command('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ ...chooserPoint, id: 0 }] });
     await command('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
     await until('document.querySelector(".trend-chooser").open');
     await evaluate(`document.querySelector('.trend-chooser input').value = ${JSON.stringify(weeklyNames[0])}; document.querySelector('.trend-chooser input').dispatchEvent(new Event('input'));`);
-    await click('.trend-options button:not(:disabled)');
+    await toggleSkill(weeklyNames[0]);
+    await toggleSkill(weeklyNames[0]);
     await noOverflow(); await chartScreenshot('weekly-chooser-320.png');
     await command('Emulation.setTouchEmulationEnabled', { enabled: false });
     await command('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1100, deviceScaleFactor: 1, mobile: false });
@@ -333,14 +411,8 @@ try {
     await chartScreenshot('trends-desktop-detail.png');
     assert.equal(await evaluate('document.getElementById("activity-heading").textContent'), 'Skill trends');
     const shownSkills = await evaluate('Array.from(document.querySelectorAll(".trend-label"), item => item.dataset.skill)');
-    assert.equal(shownSkills.length, 5, 'Five named skill lanes, not one total-volume trace');
-    const plotted = await evaluate('Array.from(document.querySelectorAll("g[data-skill] .trend-dot"), point => ({ name: point.parentElement.dataset.skill, bin: Number(point.dataset.bin), runs: Number(point.dataset.runs), total: Number(point.dataset.total) }))');
-    for (const point of plotted) {
-      const bin = payload.report.activity.bins[point.bin];
-      const readings = payload.report.routes.map(route => route.steps.flatMap(step => step.kind === 'observations' ? step.items : []).filter(item => item.evidence.kind === 'read-result' && item.evidence.outcome === 'success' && item.observedAt >= bin.startAt && item.observedAt < bin.endAt));
-      assert.equal(point.total, readings.filter(items => items.length > 0).length, 'Point denominator counts read-bearing runs');
-      assert.equal(point.runs, readings.filter(items => items.some(item => item.evidence.skill.name === point.name)).length, 'Point numerator counts distinct runs containing the named skill');
-    }
+    assert.equal(shownSkills.length, 5, 'Five layers share one count axis');
+    await assertStack(payload.report.activity);
     const offChart = payload.report.skillGroups.filter(group => group.counts.successfulReads > 0).find(group => !shownSkills.includes(group.name)).name;
     await evaluate(`Array.from(document.querySelectorAll("#skill-table button.link")).find(item => item.textContent === ${JSON.stringify(offChart)}).click()`);
     assert.ok((await evaluate('Array.from(document.querySelectorAll(".trend-label"), item => item.dataset.skill)')).includes(offChart), 'Selecting a less frequent skill brings its trend into view');
@@ -669,21 +741,27 @@ try {
     await evaluate('document.querySelector(".trend-chooser summary").focus()'); await enter();
     await until('document.activeElement.type === "search"');
     await evaluate('document.activeElement.value = "chooser-"; document.activeElement.dispatchEvent(new Event("input", { bubbles: true }))');
-    assert.equal(await evaluate('document.querySelectorAll(".trend-options button").length'), 21);
+    assert.equal(await evaluate('document.querySelectorAll(".trend-options input[type=checkbox]").length'), 20);
     for (const firstNewName of ['chooser-20', 'chooser-40']) {
       await evaluate('Array.from(document.querySelectorAll(".trend-options button")).find(item => item.textContent === "More results").focus()');
       await enter();
-      assert.equal(await evaluate('document.activeElement.textContent'), firstNewName, 'Chooser pagination focuses the first newly available skill');
-      await enter();
-      assert.ok((await evaluate('Array.from(document.querySelectorAll(".trend-label"), item => item.dataset.skill)')).includes(firstNewName));
-      assert.equal(await evaluate('document.activeElement.type'), 'search');
+      await toggleSkill(firstNewName);
+      assert.equal(await evaluate('document.activeElement.dataset.skill'), firstNewName);
+      assert.equal(await evaluate('document.querySelector(".trend-chooser input[type=search]").value'), 'chooser-');
     }
-    assert.equal(await evaluate('document.querySelectorAll(".trend-options button").length'), 45);
+    assert.equal(await evaluate('document.querySelectorAll(".trend-options input[type=checkbox]").length'), 45);
+    for (let index = 0; index < 10; index++) await toggleSkill('chooser-' + String(index).padStart(2, '0'));
+    await assertStack(manySkillsPayload.report.activity);
+    const manyColors = Object.values(await colors());
+    assert.ok(manyColors.length >= 12);
+    assert.equal(new Set(manyColors).size, manyColors.length, 'Selected skills do not reuse colors');
+    await command('Emulation.setDeviceMetricsOverride', { width: 320, height: 844, deviceScaleFactor: 1, mobile: true });
+    await noOverflow(); await chartScreenshot('many-skills-chooser-320.png');
     await key('Escape'); await noOverflow();
     await evaluate(`window.fetch = async () => new Response(JSON.stringify(${JSON.stringify(catalogOnlyPayload)})); document.getElementById('refresh-data').click();`);
     await until(ready);
-    assert.equal(await evaluate('document.querySelector(".trend-controls").hidden'), true, 'No chart-add actions without a dated extent');
-    assert.equal(await evaluate('document.querySelector(".trend-chooser summary").getClientRects().length'), 0);
+    assert.equal(await evaluate('document.querySelector(".trend-controls").hidden'), false, 'Absent selections stay removable without dated activity');
+    assert.equal(await evaluate('document.querySelector(".trend-chooser summary").getClientRects().length'), 1);
     assert.equal(await evaluate('document.querySelectorAll(".trend-plot").length'), 0);
     assert.match(await evaluate('document.getElementById("activity-chart").textContent'), /No activity recorded yet/);
     await click('#catalog-context summary');
@@ -710,19 +788,29 @@ try {
     assert.equal(await evaluate('document.querySelector("#explore-model-list small").textContent'), '1 path', 'Model path counts do not duplicate a run');
     await noOverflow();
     await screenshot(join(directory, 'comparison-repeated-mobile.png'));
-    const repeatedPoint = await evaluate('({...Array.from(document.querySelectorAll("g[data-skill] .trend-dot")).find(point => point.parentElement.dataset.skill === "mako" && point.dataset.bin === "34").dataset})');
-    assert.equal(repeatedPoint.runs, '1'); assert.equal(repeatedPoint.total, '2', 'Repeated reads do not inflate the plotted share');
+    await assertStack(repeatedPayload.report.activity);
+    assert.equal(repeatedPayload.report.activity.bins[34].skills.find(skill => skill.name === 'mako').successfulReads, 2);
     await evaluate(`window.fetch = async () => new Response(JSON.stringify(${JSON.stringify(sparsePayload)})); document.getElementById('refresh-data').click();`);
     await until(ready);
-    assert.equal(await evaluate('document.querySelectorAll(".trend-dot[data-bin=\\"1\\"]").length'), 0, 'Empty periods have no plotted zero');
-    const sparseLine = await evaluate('Array.from(document.querySelectorAll(".trend-line")).find(line => line.dataset.skill === "mako").getAttribute("d")');
-    assert.equal((sparseLine.match(/M/g) || []).length, 2, 'The trend breaks across a period without read-bearing runs');
-    assert.ok(!sparseLine.includes('L'), 'No interpolated line bridges the missing period');
+    await assertStack(sparsePayload.report.activity);
+    assert.equal(sparsePayload.report.activity.bins[1].counts.successfulReads, 0, 'Sparse fixture includes a zero interval');
     await evaluate('document.querySelector(".trend-plot").focus()');
     await command('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Home', code: 'Home', windowsVirtualKeyCode: 36 });
     await command('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'ArrowRight', code: 'ArrowRight', windowsVirtualKeyCode: 39 });
-    assert.match(await evaluate('document.querySelector(".trend-label small").textContent'), /No read-bearing runs/);
+    assert.match(await evaluate('document.querySelector(".trend-label small").textContent'), /0 reads/);
     await screenshot(join(directory, 'trends-gap-mobile.png'));
+    await evaluate(`window.fetch = async () => new Response(JSON.stringify(${JSON.stringify(oneBinPayload)})); document.getElementById('refresh-data').click();`);
+    await until(ready);
+    assert.equal(oneBinPayload.report.activity.bins.length, 1);
+    await assertStack(oneBinPayload.report.activity);
+    await chartScreenshot('one-bin-mobile.png');
+    const adaptive = adaptivePayload.report.activity;
+    assert.ok(adaptive.binWidthMs > 86400000, 'Fixture uses adaptive multi-day bins');
+    assert.ok(Date.parse(adaptive.bins.at(-1).endAt) - Date.parse(adaptive.bins.at(-1).startAt) < adaptive.binWidthMs, 'Final adaptive interval is shorter');
+    await evaluate(`window.fetch = async () => new Response(JSON.stringify(${JSON.stringify(adaptivePayload)})); document.getElementById('refresh-data').click();`);
+    await until(ready);
+    await assertStack(adaptive);
+
     await evaluate('window.fetch = window.smokeFetch; document.getElementById("refresh-data").click()');
     await until(ready);
     await evaluate(`window.fetch = async () => new Response(JSON.stringify(${JSON.stringify(mixedPayload)})); document.getElementById('refresh-data').click();`);

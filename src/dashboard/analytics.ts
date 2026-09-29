@@ -47,7 +47,7 @@ type Activity =
         endAt: string;
         counts: Counts;
         readRuns: number;
-        skills: readonly Readonly<{ name: string; readRuns: number }>[];
+        skills: readonly Readonly<{ name: string; readRuns: number; successfulReads: number }>[];
       }>[];
     }>;
 type ModelCell = Readonly<{ skillKey: SkillKey; successfulReads: number; failedReads: number }>;
@@ -324,7 +324,7 @@ function buildActivity(filter: DashboardFilter, timespan: { first: number | unde
   const binWidthMs = stepMs === HOUR_MS ? HOUR_MS : Math.ceil((end - start) / DAY_MS / 90) * DAY_MS;
   const bins: {
     startAt: string; endAt: string; counts: Mutable<Counts>;
-    runs: Set<RouteKey>; skills: Map<string, Set<RouteKey>>;
+    runs: Set<RouteKey>; skills: Map<string, { runs: Set<RouteKey>; successfulReads: number }>;
   }[] = [];
   for (let cursor = start; cursor < end; cursor += binWidthMs) {
     bins.push({
@@ -343,15 +343,15 @@ function buildActivity(filter: DashboardFilter, timespan: { first: number | unde
       if (item.evidence.kind !== "read-result" || item.evidence.outcome !== "success") continue;
       bin.runs.add(route.key);
       const name = item.evidence.skill.name;
-      const runs = bin.skills.get(name) ?? new Set<RouteKey>();
-      runs.add(route.key); bin.skills.set(name, runs);
+      const skill = bin.skills.get(name) ?? { runs: new Set<RouteKey>(), successfulReads: 0 };
+      skill.runs.add(route.key); skill.successfulReads += 1; bin.skills.set(name, skill);
     }
   }
   return {
     kind: "bucketed", timezone: "UTC", binWidthMs, startAt: new Date(start).toISOString(), endAt: new Date(end).toISOString(),
     bins: bins.map(({ runs, skills, ...bin }) => ({
       ...bin, readRuns: runs.size,
-      skills: [...skills].sort(([left], [right]) => left.localeCompare(right)).map(([name, paths]) => ({ name, readRuns: paths.size })),
+      skills: [...skills].sort(([left], [right]) => left.localeCompare(right)).map(([name, skill]) => ({ name, readRuns: skill.runs.size, successfulReads: skill.successfulReads })),
     })),
   };
 }

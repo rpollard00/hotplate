@@ -209,14 +209,17 @@ test("skill trends count distinct read-bearing runs per UTC bin and exact skill 
   assert.equal(result.activity.kind, "bucketed");
   if (result.activity.kind !== "bucketed") return;
   assert.deepEqual(result.activity.bins.map(({ readRuns, skills }) => ({ readRuns, skills })), [
-    { readRuns: 2, skills: [{ name: "a", readRuns: 1 }, { name: "A", readRuns: 1 }, { name: "b", readRuns: 2 }] },
+    { readRuns: 2, skills: [{ name: "a", readRuns: 1, successfulReads: 3 }, { name: "A", readRuns: 1, successfulReads: 1 }, { name: "b", readRuns: 2, successfulReads: 2 }] },
     ...Array.from({ length: 47 }, () => ({ readRuns: 0, skills: [] })),
-    { readRuns: 1, skills: [{ name: "a", readRuns: 1 }] },
+    { readRuns: 1, skills: [{ name: "a", readRuns: 1, successfulReads: 1 }] },
   ]);
   assert.equal(result.activity.bins[0]?.counts.successfulReads, 6);
+  for (const bin of result.activity.bins) {
+    assert.equal(bin.skills.reduce((total, skill) => total + skill.successfulReads, 0), bin.counts.successfulReads);
+  }
 });
 
-test("skill trends retain shares when work volume or repeated reads increase", () => {
+test("skill trends count repeated reads while retaining distinct run counts", () => {
   const runs = [
     run([group([item(read("a")), item(read("a"), 2), item(read("b"), 3)])]),
     run([group([item(read("b"))])], { runId: "other" }),
@@ -228,6 +231,8 @@ test("skill trends retain shares when work volume or repeated reads increase", (
   const shares = (activity: typeof original) => activity.bins.map(bin => bin.skills.map(entry => entry.readRuns / bin.readRuns));
   assert.deepEqual(shares(original), [[0.5, 1]]);
   assert.deepEqual(shares(busier), shares(original));
+  assert.deepEqual(original.bins[0]?.skills.map(skill => skill.successfulReads), [2, 2]);
+  assert.deepEqual(busier.bins[0]?.skills.map(skill => skill.successfulReads), [8, 8]);
 });
 
 test("skill trends deduplicate runs across days inside an adaptive bin", () => {
@@ -238,7 +243,7 @@ test("skill trends deduplicate runs across days inside an adaptive bin", () => {
   if (result.activity.kind !== "bucketed") return;
   assert.ok(result.activity.binWidthMs > 86_400_000);
   assert.equal(result.activity.bins[0]?.readRuns, 1);
-  assert.deepEqual(result.activity.bins[0]?.skills, [{ name: "a", readRuns: 1 }]);
+  assert.deepEqual(result.activity.bins[0]?.skills, [{ name: "a", readRuns: 1, successfulReads: 2 }]);
   assert.ok(result.activity.bins.slice(1).every(bin => bin.readRuns === 0 && bin.skills.length === 0));
 });
 
@@ -378,7 +383,7 @@ test("hourly activity uses exact evidence timestamps, offsets, inclusive edges, 
     { requests: 0, wrappers: 1, successfulReads: 2, failedReads: 1 },
   ]);
   assert.deepEqual(result.activity.bins.map(bin => [bin.readRuns, bin.skills]), [
-    [1, [{ name: "a", readRuns: 1 }]], [1, [{ name: "a", readRuns: 1 }]],
+    [1, [{ name: "a", readRuns: 1, successfulReads: 1 }]], [1, [{ name: "a", readRuns: 1, successfulReads: 2 }]],
   ]);
 });
 

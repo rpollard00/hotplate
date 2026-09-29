@@ -149,26 +149,27 @@ p { color: var(--muted); }
 .overview-grid { display: grid; grid-template-columns: minmax(0,1.55fr) minmax(330px,1fr); gap: 18px; }
 .activity-actions { display: flex; align-items: center; gap: 12px; }
 .activity-actions button { font-size: 11px; padding: 5px 8px; }
-.trend-layout { display: grid; grid-template-columns: minmax(108px, 26%) minmax(0, 1fr); gap: 0 14px; margin-top: 14px; }
-.trend-controls { display: flex; align-items: start; gap: 12px; margin: 12px 0; flex-wrap: wrap; }
-.trend-chooser { min-width: 0; max-width: 100%; }
+.trend-layout { display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 0 10px; margin-top: 14px; }
+.trend-controls { margin: 12px 0; }
+.trend-chooser { width: min(100%, 360px); }
 .trend-chooser summary { cursor: pointer; padding: 10px 0; font-size: 12px; }
 .trend-chooser .search-label { margin: 8px 0; }
-.trend-options { display: grid; max-height: 240px; overflow: auto; gap: 4px; }
-.trend-options button { text-align: left; overflow-wrap: anywhere; }
-.trend-entry { display: flex; min-width: 0; }
-.trend-entry .trend-label { flex: 1; }
-.trend-remove { align-self: center; padding: 8px; min-width: 28px; min-height: 36px; }
-.trend-labels { display: grid; grid-auto-rows: 64px; min-width: 0; }
-.trend-label { display: flex; flex-direction: column; justify-content: center; gap: 2px; min-width: 0; padding: 6px 8px; border: 0; border-left: 3px solid var(--skill-color); border-radius: 0; background: transparent; text-align: left; color: var(--ink); font-size: 12px; line-height: 1.3; }
-.trend-label > span { flex-shrink: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+.trend-options { display: grid; max-height: 264px; overflow: auto; }
+.trend-option { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 6px 8px; cursor: pointer; overflow-wrap: anywhere; }
+.trend-option:hover { background: var(--soft); }
+.trend-option input { width: 18px; height: 18px; flex-shrink: 0; accent-color: var(--teal); }
+.trend-swatch { width: 10px; height: 10px; flex-shrink: 0; border-radius: 2px; background: var(--skill-color); }
+.trend-labels { display: flex; flex-wrap: wrap; gap: 10px 18px; min-width: 0; max-height: 192px; overflow: auto; margin-top: 16px; }
+.trend-label { display: flex; flex-direction: column; justify-content: center; gap: 2px; min-width: 0; max-width: 100%; padding: 6px 8px; border: 0; border-left: 4px solid var(--skill-color); border-radius: 0; background: transparent; text-align: left; color: var(--ink); font-size: 12px; line-height: 1.3; }
+.trend-label > span { overflow-wrap: anywhere; }
 .trend-label:hover, .trend-label[aria-pressed=true] { background: var(--soft); }
-.trend-label small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
-.trend-plot { position: relative; min-width: 0; touch-action: pan-y; user-select: none; cursor: crosshair; }
+.trend-label small { font-size: 11px; font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
+.trend-scale { position: relative; text-align: right; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.trend-scale > span { position: absolute; right: 0; }
+.trend-plot { position: relative; height: 240px; min-width: 0; touch-action: pan-y; user-select: none; cursor: crosshair; }
 .activity-svg { display: block; width: 100%; height: 100%; overflow: visible; }
 .activity-svg .gridline { stroke: #e9ece6; stroke-width: 1; vector-effect: non-scaling-stroke; }
-.trend-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
-.trend-dot { fill: none; stroke-width: 4; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.trend-area { stroke: var(--paper, #fff); stroke-width: 0.6; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
 .trend-cursor { position: absolute; top: 0; bottom: 0; width: 1px; background: #9eaaa580; pointer-events: none; }
 .brush-shade { position: absolute; top: 0; bottom: 0; background: #f6f7f2b3; pointer-events: none; }
 .brush-shade.before { left: 0; }.brush-shade.after { right: 0; }
@@ -301,7 +302,7 @@ dt { color: var(--muted); }dd { margin: 0; overflow-wrap: anywhere; }
 @media (max-width: 760px) {
   .explore-layout { grid-template-columns: 1fr; gap: 20px; }
   .compare-row { grid-template-columns: minmax(0,1fr) 68px 68px; }
-  .shell { width: calc(100% - 28px); }.app-header { padding: 12px 14px; }.identity { gap: 9px; }.identity-note { display: none; }.header-actions { gap: 8px; }.preview { font-size: 9px; }.workspace-nav { gap: 24px; }.scope-bar { align-items: start; flex-direction: column; gap: 10px; }.scope-actions { width: 100%; }.scope-actions .inline-label { margin-right: auto; }.page-heading { align-items: start; gap: 12px; }.page-heading p { font-size: 12px; }.panel { padding: 17px; }.metrics-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }.metric-card { padding: 17px; }.metric-card:nth-child(2) { border-right: 0; }.metric-card:nth-child(-n+2) { border-bottom: 1px solid var(--line); }.metric-value { font-size: 31px; }.overview-grid, .relationship-grid, .path-layout { grid-template-columns: 1fr; }.filter-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }.trend-layout { column-gap: 10px; }.section-heading { align-items: start; flex-wrap: wrap; }.section-heading > button { font-size: 11px; }.path-toolbar { gap: 12px; }.path-toolbar .search-label { max-width: none; flex: 1; min-width: 140px; }.path-toolbar .inline-label { max-width: 100%; }.path-toolbar select { max-width: 160px; }.route-master { margin-bottom: 0; }.route-detail { min-height: 0; }.step-heading { flex-wrap: wrap; gap: 4px; }.relationship-flow { gap: 6px; }.skill-node { font-size: 11px; }
+  .shell { width: calc(100% - 28px); }.app-header { padding: 12px 14px; }.identity { gap: 9px; }.identity-note { display: none; }.header-actions { gap: 8px; }.preview { font-size: 9px; }.workspace-nav { gap: 24px; }.scope-bar { align-items: start; flex-direction: column; gap: 10px; }.scope-actions { width: 100%; }.scope-actions .inline-label { margin-right: auto; }.page-heading { align-items: start; gap: 12px; }.page-heading p { font-size: 12px; }.panel { padding: 17px; }.metrics-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }.metric-card { padding: 17px; }.metric-card:nth-child(2) { border-right: 0; }.metric-card:nth-child(-n+2) { border-bottom: 1px solid var(--line); }.metric-value { font-size: 31px; }.overview-grid, .relationship-grid, .path-layout { grid-template-columns: 1fr; }.filter-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }.trend-plot { height: 200px; }.section-heading { align-items: start; flex-wrap: wrap; }.section-heading > button { font-size: 11px; }.path-toolbar { gap: 12px; }.path-toolbar .search-label { max-width: none; flex: 1; min-width: 140px; }.path-toolbar .inline-label { max-width: 100%; }.path-toolbar select { max-width: 160px; }.route-master { margin-bottom: 0; }.route-detail { min-height: 0; }.step-heading { flex-wrap: wrap; gap: 4px; }.relationship-flow { gap: 6px; }.skill-node { font-size: 11px; }
 }
 @media (max-width: 760px) {
   .matrix th:first-child { width: 150px; }
@@ -321,6 +322,7 @@ const state = {
   pages: { activity: 0, skills: 0, models: 0, columns: 0, relationships: 0, routes: 0, steps: 0, catalog: 0, identities: 0, evidence: 0 },
 };
 let activityView = null;
+const skillColors = new Map();
 const number = (value) => value.toLocaleString('en-US');
 const count = (value, singular, plural = singular + 's') => number(value) + ' ' + (value === 1 ? singular : plural);
 const sessionLabels = { machineId: 'Machine', sourceId: 'Account source', projectCwd: 'Project', sessionId: 'Session ID', segmentId: 'Segment ID', runId: 'Run ID' };
@@ -640,11 +642,33 @@ function addTrend(name) {
   const names = displayedTrendNames();
   if (!names.includes(name)) state.trends = { kind: 'custom', names: [...names, name] };
 }
+function skillColor(name) {
+  if (!skillColors.has(name)) {
+    const palette = ['#267265', '#477aaf', '#c98332', '#9c5fa2', '#cf6260', '#80983b', '#4ca4ad', '#bd6d99', '#806342', '#6977c0', '#c4aa47', '#738b83'];
+    const index = skillColors.size;
+    skillColors.set(name, palette[index] || 'hsl(' + ((index * 137.508) % 360).toFixed(3) + ' 52% ' + (42 + index % 3 * 9) + '%)');
+  }
+  return skillColors.get(name);
+}
+function buildStack(activity, names) {
+  const counts = activity.bins.map(bin => new Map(bin.skills.map(skill => [skill.name, skill.successfulReads])));
+  let totals = activity.bins.map(() => 0);
+  const layers = names.map(name => {
+    const lower = totals;
+    const values = counts.map(bin => bin.get(name) || 0);
+    const upper = lower.map((value, index) => value + values[index]);
+    totals = upper;
+    return { name, values, lower, upper };
+  });
+  return { layers, maximum: Math.max(1, ...totals) };
+}
 function mountTrendControls(target) {
   const controls = node('div', null, 'trend-controls');
-  controls.hidden = state.report.activity.kind === 'empty' || state.report.skillGroups.length === 0;
+  const catalog = [...new Set([...state.report.skillGroups.map(group => group.name), ...displayedTrendNames()])].sort((a, b) => a.localeCompare(b));
+  catalog.forEach(skillColor);
+  controls.hidden = catalog.length === 0;
   const chooser = node('details', null, 'trend-chooser');
-  const summary = node('summary', 'Add skills');
+  const summary = node('summary');
   const searchLabel = node('label', 'Find a skill', 'search-label');
   const search = node('input'); search.type = 'search'; search.placeholder = 'Search skill names'; searchLabel.append(search);
   const results = node('div', null, 'trend-options');
@@ -652,80 +676,76 @@ function mountTrendControls(target) {
   let limit = 20;
   function choices() {
     const names = displayedTrendNames();
-    const candidates = state.report.skillGroups.filter(group => group.name.toLowerCase().includes(search.value.toLowerCase()));
+    const candidates = catalog.filter(name => name.toLowerCase().includes(search.value.toLowerCase()));
     results.replaceChildren();
-    for (const group of candidates.slice(0, limit)) {
-      const action = button(group.name, () => {
-        addTrend(group.name); updateActivitySelection();
-        status.textContent = group.name + ' added to trends.';
-        search.focus({ preventScroll: true });
+    for (const name of candidates.slice(0, limit)) {
+      const label = node('label', null, 'trend-option');
+      const checkbox = node('input'); checkbox.type = 'checkbox'; checkbox.dataset.skill = name; checkbox.checked = names.includes(name);
+      const swatch = node('span', null, 'trend-swatch'); swatch.style.setProperty('--skill-color', skillColor(name));
+      checkbox.addEventListener('change', () => {
+        const current = displayedTrendNames();
+        state.trends = { kind: 'custom', names: checkbox.checked ? [...new Set([...current, name])] : current.filter(value => value !== name) };
+        updateActivitySelection();
+        status.textContent = name + (checkbox.checked ? ' added to chart.' : ' removed from chart.');
       });
-      action.disabled = names.includes(group.name);
-      if (action.disabled) action.textContent += ' · Added';
-      results.append(action);
+      label.append(checkbox, swatch, node('span', name)); results.append(label);
     }
     if (!candidates.length) results.append(empty('No skills match this search.'));
     if (candidates.length > limit) results.append(button('More results', () => {
       const firstNew = limit; limit += 20; choices();
-      const next = Array.from(results.querySelectorAll('button')).slice(firstNew).find(action => !action.disabled);
-      (next || search).focus();
+      results.querySelectorAll('input')[firstNew]?.focus({ preventScroll: true });
     }));
   }
   search.addEventListener('input', () => { limit = 20; choices(); });
   chooser.append(summary, searchLabel, results, status);
   chooser.addEventListener('toggle', () => { if (chooser.open) { choices(); search.focus({ preventScroll: true }); } });
   chooser.addEventListener('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); chooser.open = false; summary.focus({ preventScroll: true }); } });
-  const more = button('Show more', () => {
-    if (state.trends.kind === 'top') state.trends = { kind: 'top', count: state.trends.count + 5 };
-    else {
-      const remaining = availableTrendNames().filter(name => !state.trends.names.includes(name));
-      state.trends = { kind: 'custom', names: [...state.trends.names, ...remaining.slice(0, 5)] };
-    }
-    updateActivitySelection();
-  });
-  controls.append(chooser, more); target.append(controls);
+  controls.append(chooser); target.append(controls);
   return () => {
-    const names = new Set(displayedTrendNames());
-    more.disabled = availableTrendNames().every(name => names.has(name));
-    if (chooser.open) choices();
+    const names = displayedTrendNames();
+    summary.textContent = 'Skills (' + names.length + ')';
+    results.querySelectorAll('input').forEach(checkbox => { checkbox.checked = names.includes(checkbox.dataset.skill); });
   };
 }
 function renderActivity() {
   const target = $('activity-chart'); target.replaceChildren(); activityView = null;
   const report = state.report; const activity = report.activity;
   const updateControls = mountTrendControls(target); updateControls();
-  if (activity.kind === 'empty') target.append(empty(hasFilters() ? 'No dated activity matches these filters.' : totalEvidence(report.counts) === 0 && report.routes.length === 0 ? 'No activity recorded yet.' : 'No dated activity recorded.'));
+  if (activity.kind === 'empty') {
+    activityView = updateControls;
+    target.append(empty(hasFilters() ? 'No dated activity matches these filters.' : totalEvidence(report.counts) === 0 && report.routes.length === 0 ? 'No activity recorded yet.' : 'No dated activity recorded.'));
+  }
   else {
-    const binSkills = activity.bins.map((bin) => new Map(bin.skills.map((entry) => [entry.name, entry.readRuns])));
-    const colors = ['#267265', '#477a9c', '#a86539', '#78698f', '#737c35'];
+    const binSkills = activity.bins.map((bin) => new Map(bin.skills.map((entry) => [entry.name, entry.successfulReads])));
     const layout = node('div', null, 'trend-layout'); const labels = node('div', null, 'trend-labels');
     const plot = node('div', null, 'trend-plot');
     const svg = svgNode('svg', { role: 'img', 'aria-labelledby': 'activity-title activity-description', class: 'activity-svg', preserveAspectRatio: 'none' });
     const cursor = node('div', null, 'trend-cursor');
     plot.append(svg, cursor);
     const axis = node('div', null, 'chart-axis'); axis.append(node('span', date(activity.startAt, activity.binWidthMs < 86400000)), node('span', date(activity.binWidthMs < 86400000 ? activity.endAt : new Date(Date.parse(activity.endAt) - 1).toISOString(), activity.binWidthMs < 86400000)));
-    layout.append(labels, plot, axis);
-    const noTrends = empty(availableTrendNames().length ? 'No skills displayed. Add skills to compare.' : hasFilters() ? 'No dated successful reads match these filters.' : 'No dated successful reads to compare.'); target.append(noTrends);
+    const scale = node('div', null, 'trend-scale');
+    layout.append(scale, plot, axis);
+    const noTrends = empty('Select skills to show their reads.'); target.append(noTrends);
     const readout = node('p', null, 'trend-readout'); const rangeReadout = node('p', null, 'brush-range');
     const announcement = node('p', null, 'sr-only'); announcement.setAttribute('role', 'status'); announcement.setAttribute('aria-live', 'polite');
-    const explanation = node('p', 'Share of runs with each skill · 0–100% in every row', 'small muted');
-    const coverage = node('p', 'Only runs with successful reads count. ' + (activity.binWidthMs < 86400000 ? count(activity.binWidthMs / 3600000, 'hour') : count(activity.binWidthMs / 86400000, 'day')) + ' per point. Gaps mean no read-bearing runs.', 'footnote');
-    target.append(explanation, layout, readout, rangeReadout, announcement, coverage);
+    const explanation = node('p', 'Successful skill reads · Reads per interval', 'small muted');
+    const noReads = node('p', 'No successful reads in this period.', 'footnote');
+    target.append(explanation, layout, noReads, labels, readout, rangeReadout, announcement);
     const scroll = node('div', null, 'table-wrap'); const details = disclosure('View activity data', scroll); target.append(details);
     let shown = []; let inspected = activity.bins.length - 1;
     function inspect(index, announce = false) {
       inspected = index; const bin = activity.bins[index];
       cursor.style.left = ((Date.parse(bin.startAt) + Date.parse(bin.endAt)) / 2 - Date.parse(activity.startAt)) / (Date.parse(activity.endAt) - Date.parse(activity.startAt)) * 100 + '%';
-      readout.textContent = intervalLabel(bin.startAt, bin.endAt) + ' · ' + count(bin.readRuns, 'read-bearing run');
+      readout.textContent = intervalLabel(bin.startAt, bin.endAt) + ' · ' + count(shown.reduce((total, name) => total + (binSkills[index].get(name) || 0), 0), 'selected skill read');
       labels.querySelectorAll('.trend-label').forEach((label, row) => {
-        const paths = binSkills[index].get(shown[row]) || 0;
-        label.querySelector('small').textContent = bin.readRuns ? Math.round(paths / bin.readRuns * 100) + '% · ' + paths + '/' + bin.readRuns : 'No read-bearing runs';
-        label.title = shown[row] + ': ' + (bin.readRuns ? count(paths, 'run') + ' of ' + number(bin.readRuns) : 'No read-bearing runs') + ' · ' + intervalLabel(bin.startAt, bin.endAt);
+        const reads = binSkills[index].get(shown[row]) || 0;
+        label.querySelector('small').textContent = count(reads, 'read');
+        label.title = shown[row] + ': ' + count(reads, 'read') + ' · ' + intervalLabel(bin.startAt, bin.endAt);
       });
       if (announce) announcement.textContent = readout.textContent + '. ' + Array.from(labels.querySelectorAll('.trend-label'), (label) => label.title).join('. ');
     }
     function renderData() {
-      const data = table(['UTC interval', 'Read-bearing runs', ...shown, 'Reads', 'Failures', 'Requests', 'Wrappers'], 'Skill shares count each run once. Other counts include repeated records.'); data.className = 'activity-data';
+      const data = table(['UTC interval', 'Read-bearing runs', ...shown, 'Reads', 'Failures', 'Requests', 'Wrappers'], 'Successful reads by skill. Repeated successful reads count separately.'); data.className = 'activity-data';
       pageItems(activity.bins, 'activity', 24).forEach((bin, offset) => {
         const index = state.pages.activity * 24 + offset;
         const row = node('tr'); const cell = node('td');
@@ -733,8 +753,7 @@ function renderActivity() {
         action.dataset.bin = index; action.setAttribute('aria-pressed', String(state.explore.interval !== null && bin.startAt >= state.explore.interval.startAt && bin.endAt <= state.explore.interval.endAt));
         action.setAttribute('aria-label', 'Select ' + intervalLabel(bin.startAt, bin.endAt) + ' UTC'); cell.append(action); row.append(cell, node('td', bin.readRuns));
         for (const name of shown) {
-          const paths = binSkills[index].get(name) || 0;
-          row.append(node('td', bin.readRuns ? Math.round(paths / bin.readRuns * 100) + '% (' + paths + '/' + bin.readRuns + ')' : 'Unavailable'));
+          row.append(node('td', binSkills[index].get(name) || 0));
         }
         [bin.counts.successfulReads, bin.counts.failedReads, bin.counts.requests, bin.counts.wrappers].forEach((value) => row.append(node('td', value)));
         data.lastChild.append(row);
@@ -747,40 +766,38 @@ function renderActivity() {
       updateControls();
       const names = displayedTrendNames();
       noTrends.hidden = names.length > 0;
-      for (const element of [layout, explanation, readout, rangeReadout, coverage]) element.hidden = names.length === 0;
+      noReads.hidden = names.length === 0 || activity.bins.some((bin, index) => names.some(name => (binSkills[index].get(name) || 0) > 0));
+      for (const element of [layout, labels, explanation, readout, rangeReadout]) element.hidden = names.length === 0;
       if (JSON.stringify(names) !== JSON.stringify(shown) || !svg.firstChild) {
         shown = names; labels.replaceChildren(); svg.replaceChildren();
-        const height = Math.max(1, names.length) * 64; svg.setAttribute('viewBox', '0 0 600 ' + height); plot.style.height = height + 'px';
-        const title = svgNode('title', { id: 'activity-title' }); title.textContent = 'Skill shares over time';
-        const description = svgNode('desc', { id: 'activity-description' }); description.textContent = 'Each named row shows the percent of read-bearing runs containing that skill, from zero to 100 percent. Repeated reads count once per run. Exact counts follow in the data table.';
+        const stack = buildStack(activity, names);
+        const height = 240; const width = 600;
+        svg.setAttribute('viewBox', '0 0 ' + width + ' ' + height);
+        const title = svgNode('title', { id: 'activity-title' }); title.textContent = 'Successful skill reads';
+        const description = svgNode('desc', { id: 'activity-description' }); description.textContent = 'Stacked areas show successful reads for selected skills in each UTC interval. Repeated reads count separately. Exact counts follow in the data table.';
         svg.append(title, description);
-        names.forEach((name, row) => {
-          const color = colors[row % colors.length]; const label = button('', () => selectExploreSkill(name), 'trend-label');
-          label.dataset.skill = name; label.style.setProperty('--skill-color', color); label.append(node('span', name), node('small'));
-          const entry = node('div', null, 'trend-entry');
-          const remove = button('×', () => {
-            state.trends = { kind: 'custom', names: displayedTrendNames().filter(value => value !== name) };
-            updateActivitySelection();
-            const next = labels.querySelectorAll('.trend-remove')[Math.min(row, shown.length - 1)]
-              || target.querySelector('.trend-controls:not([hidden]) summary');
-            if (next) next.focus({ preventScroll: true });
-            else { $('activity-heading').tabIndex = -1; $('activity-heading').focus({ preventScroll: true }); }
-          }, 'quiet trend-remove');
-          remove.setAttribute('aria-label', 'Remove ' + name + ' from trends'); entry.append(label, remove); labels.append(entry);
-          const top = row * 64 + 10; const bottom = top + 44;
-          for (const y of [top, bottom]) svg.append(svgNode('line', { x1: 0, x2: 600, y1: y, y2: y, class: 'gridline' }));
-          let path = ''; let connected = false; const dots = svgNode('g', { 'data-skill': name });
-          activity.bins.forEach((bin, index) => {
-            if (!bin.readRuns) { connected = false; return; }
-            const paths = binSkills[index].get(name) || 0;
-            const x = ((Date.parse(bin.startAt) + Date.parse(bin.endAt)) / 2 - Date.parse(activity.startAt)) / (Date.parse(activity.endAt) - Date.parse(activity.startAt)) * 600;
-            const y = bottom - paths / bin.readRuns * 44;
-            path += (connected ? ' L ' : ' M ') + x + ' ' + y; connected = true;
-            const dot = svgNode('path', { d: 'M ' + x + ' ' + y + ' h 0.01', stroke: color, class: 'trend-dot', 'data-bin': index, 'data-runs': paths, 'data-total': bin.readRuns });
-            dots.append(dot);
-          });
-          svg.append(svgNode('path', { d: path, stroke: color, class: 'trend-line', 'data-skill': name }), dots);
-        });
+        const ticks = [...new Set([stack.maximum, Math.floor(stack.maximum / 2), 0])];
+        scale.replaceChildren(...ticks.map(value => {
+          const tick = node('span', number(value));
+          tick.style.top = (1 - value / stack.maximum) * 100 + '%';
+          tick.style.transform = value === stack.maximum ? '' : value === 0 ? 'translateY(-100%)' : 'translateY(-50%)';
+          return tick;
+        }));
+        for (const value of ticks) {
+          const y = height - value / stack.maximum * height;
+          svg.append(svgNode('line', { x1: 0, x2: width, y1: y, y2: y, class: 'gridline' }));
+        }
+        const start = Date.parse(activity.startAt); const duration = Date.parse(activity.endAt) - start;
+        const x = at => Math.max(0, Math.min(width, (Date.parse(at) - start) / duration * width));
+        const y = value => height - value / stack.maximum * height;
+        for (const layer of stack.layers) {
+          const color = skillColor(layer.name); const label = button('', () => selectExploreSkill(layer.name), 'trend-label');
+          label.dataset.skill = layer.name; label.style.setProperty('--skill-color', color); label.append(node('span', layer.name), node('small')); labels.append(label);
+          const upper = activity.bins.flatMap((bin, index) => [[x(bin.startAt), y(layer.upper[index])], [x(bin.endAt), y(layer.upper[index])]]);
+          const lower = activity.bins.flatMap((bin, index) => [[x(bin.startAt), y(layer.lower[index])], [x(bin.endAt), y(layer.lower[index])]]).reverse();
+          const path = [...upper, ...lower].map((point, index) => (index ? 'L ' : 'M ') + point.join(' ')).join(' ') + ' Z';
+          svg.append(svgNode('path', { d: path, fill: color, class: 'trend-area', 'data-skill': layer.name }));
+        }
         if (details.open) renderData();
         else scroll.replaceChildren();
       }

@@ -6,11 +6,11 @@ The dashboard shows recorded skill activity, model read counts, and paths within
 - Models shows read counts by skill and model. Zero means no matching recorded reads, not a missed opportunity.
 - Session paths shows recorded activity within each run, including requests, wrappers, read groups, and gaps.
 
-The Skill trends chart starts with five named rows on the same 0–100% scale. Each point measures the share of recorded read-bearing runs containing that skill in its UTC interval. Repeated reads count once per run, so more work with the same skill mix does not increase the percentage. The denominator excludes sessions with no recorded successful reads. A period without read-bearing runs has a gap, not a zero. Different skill shares can add to more than 100% because one run can contain several skills.
+The Skill trends chart starts with five skills in one stacked area chart. Each colored area shows successful reads in its UTC interval. Repeated successful reads count separately. The stack height is the total for the displayed skills. Intervals with no recorded successful reads have zero area.
 
-Select a skill in the ranking or chart to inspect its paths. A newly selected skill outside those rows adds a row without replacing another skill. The values beside each name follow the date under the pointer or keyboard cursor.
+Select a skill in the ranking or chart legend to inspect its paths. A newly selected skill outside the chart adds an area without replacing another skill. The values beside each name follow the date under the pointer or keyboard cursor.
 
-Use Add skills to search for exact skill names. Show more adds the next five available trends. Each row has a removal button. These actions preserve the exploration skill and dates. Custom displayed names survive refreshes and filter changes without substitution.
+Open Skills to search for exact skill names. Select or clear a checkbox to add or remove a skill in the same list. These actions preserve the exploration skill and dates. Custom displayed names survive refreshes and filter changes without substitution, even when a skill has no reads in the filtered report. Each skill keeps its color while the page remains open.
 
 Drag across the chart to select dates. One band follows the pointer continuously. New selections use complete UTC hours in hourly views, or complete UTC days in longer views. Drag the band to move the interval without changing its duration, including partial custom periods. Drag either handle to resize it. Press Escape during a drag to cancel it. The ranking, model counts, and matching paths update on release.
 
