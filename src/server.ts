@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { parseMachineId } from "./observation.js";
+import { parseHostId, parseMachineId } from "./observation.js";
 import { dashboardCss, dashboardHtml, dashboardJs } from "./dashboard/assets.js";
 import { buildDashboardReport, type DashboardReport } from "./dashboard/analytics.js";
 import {
@@ -199,6 +199,8 @@ async function readDashboardPayload(databasePath: string, params: URLSearchParam
 
 function parseDashboardParams(params: URLSearchParams): { filter: DashboardFilter; chainSkillName: string | null } {
   const filter: DashboardFilter = {};
+  const host = nonEmptyParam(params, "host");
+  if (host !== null) filter.host = parseHostId(host);
   const machineId = nonEmptyParam(params, "machineId");
   if (machineId !== null) filter.machineId = parseMachineId(machineId);
   const projectCwd = nonEmptyParam(params, "projectCwd");
@@ -288,7 +290,7 @@ function sum(values: readonly number[]): number {
 }
 
 function emptyFilterOptions(): FilterOptions {
-  return { machines: [], projects: [], modelProviders: [], modelIds: [], timeRange: { firstObservedAt: null, lastObservedAt: null } };
+  return { hosts: [], machines: [], projects: [], modelProviders: [], modelIds: [], timeRange: { firstObservedAt: null, lastObservedAt: null } };
 }
 
 function setSecurityHeaders(response: ServerResponse): void {

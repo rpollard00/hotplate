@@ -226,7 +226,7 @@ test("aggregate enforces exact authority and canonical Origin without trusting p
 test("ingest rejects malformed metadata, unknown fields, unsafe counters, timestamps, strings and catalogs", async t => {
   const f = await fixture(t);
   const obs = observation();
-  const invalid = ["not json", envelope([]), JSON.stringify({ version: 2, sourceId, observations: [obs] }), envelope([obs, obs]),
+  const invalid = ["not json", envelope([]), JSON.stringify({ version: 3, sourceId, observations: [obs] }), envelope([obs, obs]),
     envelope([{ ...obs, prompt: "private raw prompt" }]), envelope([{ ...obs, scope: { ...obs.scope, text: "private" } }]),
     envelope([{ ...obs, evidence: { ...obs.evidence, output: "private" } }]), envelope([{ ...obs, sequence: -1 }]),
     envelope([{ ...obs, sequence: Number.MAX_SAFE_INTEGER + 1 }]), envelope([{ ...obs, observedAt: "yesterday" }]),

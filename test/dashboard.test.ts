@@ -67,7 +67,7 @@ test("dashboard serves filtered data, static assets, and rejects unsafe origins"
       assert.equal(hasUnusedCatalogRow(payload), true);
       assert.equal(getArray(getRecord(payload, "chains"), "runs").length, 3);
       const report = getRecord(payload, "report");
-      assert.deepEqual(getRecord(report, "counts"), { requests: 3, wrappers: 2, successfulReads: 3, failedReads: 1 });
+      assert.deepEqual(getRecord(report, "counts"), { requests: 3, wrappers: 2, successfulReads: 3, failedReads: 1, readAttempts: 0, invocations: 0 });
       assert.equal(getNumber(report, "skillsRead"), 2);
       assert.equal(getArray(report, "routes").length, 3);
       assert.deepEqual(getRecord(report, "coverage"), {
@@ -141,7 +141,7 @@ test("dashboard normalizes time bounds and reports invalid or reversed ranges as
       const activity = getRecord(report, "activity");
       assert.equal(activity.kind, "bucketed");
       assert.equal(getArray(activity, "bins").length, 49);
-      assert.deepEqual(getRecord(report, "counts"), { requests: 0, wrappers: 0, successfulReads: 0, failedReads: 0 });
+      assert.deepEqual(getRecord(report, "counts"), { requests: 0, wrappers: 0, successfulReads: 0, failedReads: 0, readAttempts: 0, invocations: 0 });
     } finally {
       await server.close();
     }

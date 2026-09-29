@@ -11,7 +11,7 @@ import { openHotplateStore } from "../src/store.js";
 const machineId = parseMachineId("local");
 const dayOne = "2026-01-01T12:00:00.000Z";
 const dayThree = "2026-01-03T12:00:00.000Z";
-const zero = { requests: 0, wrappers: 0, successfulReads: 0, failedReads: 0 };
+const zero = { requests: 0, wrappers: 0, successfulReads: 0, failedReads: 0, readAttempts: 0, invocations: 0 };
 function skill(name: string, canonicalPath = `/skills/${name}/SKILL.md`) {
   return { name, canonicalPath, version: null };
 }
@@ -47,7 +47,7 @@ test("dashboard analytics separates evidence classes and ignores catalog counter
   ])];
   const inputBefore = JSON.stringify(runs);
   const result = report(runs, [catalog("unused"), catalog("mako")]);
-  assert.deepEqual(result.counts, { requests: 1, wrappers: 1, successfulReads: 2, failedReads: 1 });
+  assert.deepEqual(result.counts, { requests: 1, wrappers: 1, successfulReads: 2, failedReads: 1, readAttempts: 0, invocations: 0 });
   assert.equal(result.skillsRead, 1);
   assert.equal(result.skills.length, 4);
   const unused = result.skills.find((entry) => entry.label === "unused");
@@ -59,7 +59,7 @@ test("dashboard analytics separates evidence classes and ignores catalog counter
   assert.notEqual(mako[0]?.key, mako[1]?.key);
   assert.equal(mako.filter((entry) => entry.cataloged).length, 1);
   assert.equal(result.skillGroups.find((entry) => entry.name === "mako")?.cataloged, true);
-  assert.deepEqual(result.skillGroups.find((entry) => entry.name === "mako")?.counts, { requests: 1, wrappers: 1, successfulReads: 2, failedReads: 0 });
+  assert.deepEqual(result.skillGroups.find((entry) => entry.name === "mako")?.counts, { requests: 1, wrappers: 1, successfulReads: 2, failedReads: 0, readAttempts: 0, invocations: 0 });
   assert.equal(result.routes[0]?.lastEvidenceAt, dayOne);
   assert.deepEqual(result.routes[0]?.counts, result.counts);
   assert.equal(result.relationships.length, 0);
@@ -100,7 +100,7 @@ test("dashboard analytics keeps machine, path, and request-only skill identities
   assert.equal(result.skillGroups.length, 1);
   const rollup = result.skillGroups[0];
   assert.equal(rollup?.name, "same");
-  assert.deepEqual(rollup?.counts, { requests: 1, wrappers: 1, successfulReads: 2, failedReads: 0 });
+  assert.deepEqual(rollup?.counts, { requests: 1, wrappers: 1, successfulReads: 2, failedReads: 0, readAttempts: 0, invocations: 0 });
   assert.equal(rollup?.skillKeys.length, 4);
   assert.equal(rollup?.routeKeys.length, 3);
   assert.deepEqual(rollup?.models, [{ model: null, successfulReads: 2, failedReads: 0 }]);
@@ -308,7 +308,7 @@ test("dashboard analytics exact-name rollups aggregate model cells without mergi
   const grouped = result.skillGroups.find((entry) => entry.name === "a");
   assert.equal(grouped?.cataloged, true);
   assert.equal(grouped?.skillKeys.length, 3);
-  assert.deepEqual(grouped?.counts, { requests: 0, wrappers: 0, successfulReads: 3, failedReads: 1 });
+  assert.deepEqual(grouped?.counts, { requests: 0, wrappers: 0, successfulReads: 3, failedReads: 1, readAttempts: 0, invocations: 0 });
   assert.equal(grouped?.models.find((entry) => entry.model?.provider === "one")?.successfulReads, 2);
   assert.equal(grouped?.models.find((entry) => entry.model?.provider === "two")?.successfulReads, 1);
   assert.equal(grouped?.models.find((entry) => entry.model === null)?.failedReads, 1);
@@ -379,8 +379,8 @@ test("hourly activity uses exact evidence timestamps, offsets, inclusive edges, 
   if (result.activity.kind !== "bucketed") return;
   assert.equal(result.activity.binWidthMs, 3_600_000);
   assert.deepEqual(result.activity.bins.map(bin => bin.counts), [
-    { requests: 1, wrappers: 0, successfulReads: 1, failedReads: 0 },
-    { requests: 0, wrappers: 1, successfulReads: 2, failedReads: 1 },
+    { requests: 1, wrappers: 0, successfulReads: 1, failedReads: 0, readAttempts: 0, invocations: 0 },
+    { requests: 0, wrappers: 1, successfulReads: 2, failedReads: 1, readAttempts: 0, invocations: 0 },
   ]);
   assert.deepEqual(result.activity.bins.map(bin => [bin.readRuns, bin.skills]), [
     [1, [{ name: "a", readRuns: 1, successfulReads: 1 }]], [1, [{ name: "a", readRuns: 1, successfulReads: 2 }]],
@@ -399,5 +399,24 @@ test("activity resolution uses elapsed scope before UTC boundary alignment", () 
     assert.equal(activity.binWidthMs, width);
     assert.equal(activity.bins.length, length);
     assert.ok(activity.bins.every(bin => bin.readRuns === 0));
+  }
+});
+
+test("native hosts keep identities and unknown runs separate from read-run metrics", () => {
+  const result = report([
+    run([group([item(read("mako"), 1)])], { host: "claude-code" }),
+    run([group([item(read("mako"), 2)])], { host: "opencode-v2" }),
+    run([group([item({ kind: "read-attempt", skill: skill("mako"), toolCallId: "attempt", model: null }, 3)])], { host: "codex" }),
+    run([group([item({ kind: "skill-invocation", skill: { name: "mako", canonicalPath: null, version: null }, toolCallId: "invoke", outcome: "success", model: null }, 4)])], { host: "claude-code" }),
+  ]);
+  assert.equal(result.skills.length, 4);
+  assert.equal(new Set(result.routes.map(route => route.key)).size, 4);
+  assert.equal(result.counts.readAttempts, 1);
+  assert.equal(result.counts.invocations, 1);
+  assert.equal(result.counts.successfulReads, 2);
+  assert.equal(result.models[0]?.successfulReads, 2);
+  assert.equal(result.activity.kind, "bucketed");
+  if (result.activity.kind === "bucketed") {
+    assert.equal(result.activity.bins.reduce((total, bin) => total + bin.readRuns, 0), 0);
   }
 });

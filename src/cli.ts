@@ -25,6 +25,16 @@ type NetworkArgs = { command: "relay"; configPath: string; status: boolean } | {
 type CliArgs = ServeArgs | DemoArgs | NetworkArgs | { command: "help" };
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {
+  if (argv[0] === "capture") {
+    const { runCaptureCommand } = await import("./integrations/command.js");
+    await runCaptureCommand(argv.length === 2 ? argv[1] : undefined);
+    return;
+  }
+  if (argv[0] === "integration") {
+    const { runIntegrationCommand } = await import("./integrations/install.js");
+    runIntegrationCommand(argv.slice(1));
+    return;
+  }
   const args = parseArgs(argv);
   if (args.command === "help") {
     process.stdout.write(helpText());
@@ -291,7 +301,7 @@ function parsePort(value: string): number {
 }
 
 function helpText(): string {
-  return `Hotplate dashboard\n\nUsage:\n  hotplate serve [--db path] [--host 127.0.0.1] [--port 7345]\n  hotplate demo --db path [--force]\n  hotplate relay --config path [--status]\n  hotplate aggregate --config path\n\nRelay status reports enrollment, pending count/bytes/oldest time, and blocked count without delivery.\nNetwork commands require explicit configuration. Capture enrolls only with HOTPLATE_CONFIG in Pi.\nThe serve command opens a loopback-only, read-only dashboard.\nThe demo command writes only to the explicit --db path.\n`;
+  return `Hotplate dashboard\n\nUsage:\n  hotplate serve [--db path] [--host 127.0.0.1] [--port 7345]\n  hotplate demo --db path [--force]\n  hotplate relay --config path [--status]\n  hotplate aggregate --config path\n  hotplate integration install|remove|status [codex|claude-code|opencode-v1|opencode-v2] [--global] [--binary path]\n  hotplate capture <host> < native-hook.json\n\nRelay status reports enrollment, pending count/bytes/oldest time, and blocked count without delivery.\nNetwork commands require explicit configuration. Capture enrolls only with explicit HOTPLATE_CONFIG. Native integrations default to local capture.\nThe serve command opens a loopback-only, read-only dashboard.\nThe demo command writes only to the explicit --db path.\n`;
 }
 
 if (isCliEntrypoint()) {

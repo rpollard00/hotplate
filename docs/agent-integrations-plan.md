@@ -1,6 +1,8 @@
 # Agent integration plan
 
-Planning status: proposed, 2026-09-28. No integration is implemented by this document.
+Accepted plan, 2026-09-28. Implementation and operational limits are documented in [coding-agent integrations](integrations.md).
+
+Runtime verification refined the evidence contract: Codex shell hooks omit exit status, so supported absolute literal reads produce separate read-attempt evidence. Successful-read metrics exclude those attempts. OpenCode v2 uses `path` and skill `id`, while v1 uses `filePath` and skill `name`.
 
 Hotplate will capture live skill-use evidence from Codex, Claude Code, OpenCode v1, and OpenCode v2 through native adapters. The adapters will share durable capture and delivery code with Pi.
 
@@ -9,7 +11,7 @@ The initial design uses a Node capture command and the existing explicit relay. 
 1. Ground the existing capture flow: complete.
 2. Compare two independent designs: complete.
 3. Specify the proposed interface and verification gates: complete.
-4. Implement: excluded from this planning request.
+4. Implement: authorized in the subsequent orchestration request.
 5. Revisit the design: required if capability probes invalidate its assumptions.
 
 Current working-copy baseline: change `xszymokt`, commit `6cadbaa1`. Existing dashboard edits are outside this plan.
@@ -47,7 +49,7 @@ OpenCode v1 loads skills through its native `skill` tool. A completed native inv
 
 V1 remains an active release target: its changelog lists `1.18.33` on September 28, 2026. [OpenCode v1 changelog](https://opencode.ai/changelog)
 
-Installed versions inspected: Codex `0.158.0`, Claude Code `2.1.283`, OpenCode v2 `2.0.15`. V1 was not inspected locally. These are probe targets, not verified minimum versions.
+Versions inspected during planning: Codex `0.158.0`, Claude Code `2.1.283`, OpenCode v2 `2.0.15`. V1 had not yet been inspected locally at planning time. Implementation verification later included v1 `1.18.33`; see the [verification report](integration-verification.md). These are tested versions, not verified minimum versions.
 
 **OpenCode compatibility strategy**
 

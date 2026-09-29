@@ -157,7 +157,7 @@ export class HotplateCollector {
 
   #fact(evidence: Evidence, scope = this.#scope): Observation {
     this.#sequence += 1;
-    return { id: `${this.#producerId}:${this.#sequence}`, producerId: this.#producerId,
+    return { host: "pi", id: `${this.#producerId}:${this.#sequence}`, producerId: this.#producerId,
       sequence: this.#sequence, observedAt: this.#now().toISOString(), scope: { ...scope }, evidence };
   }
 

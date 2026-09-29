@@ -1,14 +1,14 @@
 import { createHash } from "node:crypto";
 import type {
-  ChainObservation, DashboardFilter, ModelRef, SkillChainRun, SkillChainView, SkillTableView,
+  HostId, ChainObservation, DashboardFilter, ModelRef, SkillChainRun, SkillChainView, SkillTableView,
 } from "../domain.js";
 
 type SkillKey = string & { readonly __brand: "DashboardSkillKey" };
 type RouteKey = string & { readonly __brand: "DashboardRouteKey" };
-type Counts = Readonly<{ requests: number; wrappers: number; successfulReads: number; failedReads: number }>;
+type Counts = Readonly<{ requests: number; wrappers: number; successfulReads: number; failedReads: number; readAttempts: number; invocations: number }>;
 type SkillIdentity =
-  | Readonly<{ kind: "resolved"; machineId: SkillChainRun["machineId"]; name: string; canonicalPath: string }>
-  | Readonly<{ kind: "request-only"; machineId: SkillChainRun["machineId"]; name: string }>;
+  | Readonly<{ kind: "resolved"; host: HostId; machineId: SkillChainRun["machineId"]; name: string; canonicalPath: string }>
+  | Readonly<{ kind: "request-only"; host: HostId; machineId: SkillChainRun["machineId"]; name: string }>;
 type SkillSummary = Readonly<{
   key: SkillKey;
   identity: SkillIdentity;
@@ -116,7 +116,7 @@ export function buildDashboardReport({ filter, skills, chains }: ReportInput): D
   for (const row of skills.rows) {
     if (!row.cataloged || row.canonicalPath === null) continue;
     getSkill(skillIndex, {
-      kind: "resolved", machineId: row.machineId, name: row.skillName, canonicalPath: row.canonicalPath,
+      kind: "resolved", host: row.host ?? "unknown", machineId: row.machineId, name: row.skillName, canonicalPath: row.canonicalPath,
     }).cataloged = true;
   }
 
@@ -138,7 +138,7 @@ export function buildDashboardReport({ filter, skills, chains }: ReportInput): D
       }
       const successfulSkills = new Set<SkillKey>();
       const items = step.items.map((item) => {
-        const skill = getSkill(skillIndex, observationIdentity(run.machineId, item.evidence));
+        const skill = getSkill(skillIndex, observationIdentity(run.host ?? "unknown", run.machineId, item.evidence));
         const countKind = evidenceCountKind(item.evidence);
         counts[countKind] += 1;
         routeCounts[countKind] += 1;
@@ -223,6 +223,8 @@ function buildSkillGroups(skills: readonly SkillSummary[], models: ReadonlyMap<s
     const group: GroupAccumulator = groups.get(skill.identity.name) ?? {
       name: skill.identity.name, counts: emptyCounts(), skillKeys: [], routeKeys: new Set(), cataloged: false, models: new Map(),
     };
+    group.counts.readAttempts += skill.counts.readAttempts;
+    group.counts.invocations += skill.counts.invocations;
     group.counts.requests += skill.counts.requests;
     group.counts.wrappers += skill.counts.wrappers;
     group.counts.successfulReads += skill.counts.successfulReads;
@@ -250,17 +252,18 @@ function buildSkillGroups(skills: readonly SkillSummary[], models: ReadonlyMap<s
 }
 
 function emptyCounts(): Mutable<Counts> {
-  return { requests: 0, wrappers: 0, successfulReads: 0, failedReads: 0 };
+  return { requests: 0, wrappers: 0, successfulReads: 0, failedReads: 0, readAttempts: 0, invocations: 0 };
 }
 
-function observationIdentity(machineId: SkillChainRun["machineId"], evidence: ChainObservation["evidence"]): SkillIdentity {
-  if (evidence.kind === "command-intent") return { kind: "request-only", machineId, name: evidence.skillName };
-  return { kind: "resolved", machineId, name: evidence.skill.name, canonicalPath: evidence.skill.canonicalPath };
+function observationIdentity(host: HostId, machineId: SkillChainRun["machineId"], evidence: ChainObservation["evidence"]): SkillIdentity {
+  if (evidence.kind === "command-intent") return { kind: "request-only", host, machineId, name: evidence.skillName };
+  if (evidence.skill.canonicalPath === null) return { kind: "request-only", host, machineId, name: evidence.skill.name };
+  return { kind: "resolved", host, machineId, name: evidence.skill.name, canonicalPath: evidence.skill.canonicalPath };
 }
 
 function getSkill(index: Map<SkillKey, SkillAccumulator>, identity: SkillIdentity): SkillAccumulator {
   const key = createHash("sha256").update(JSON.stringify([
-    identity.kind, identity.machineId, identity.name, identity.kind === "resolved" ? identity.canonicalPath : null,
+    identity.kind, identity.host, identity.machineId, identity.name, identity.kind === "resolved" ? identity.canonicalPath : null,
   ])).digest("hex") as SkillKey;
   const existing = index.get(key);
   if (existing) return existing;
@@ -273,12 +276,15 @@ function getSkill(index: Map<SkillKey, SkillAccumulator>, identity: SkillIdentit
 
 function routeKey(run: SkillChainRun): RouteKey {
   return createHash("sha256").update(JSON.stringify([
-    run.machineId, run.sourceId, run.projectCwd, run.sessionId, run.segmentId, run.runId,
+    run.host ?? "unknown", run.machineId, run.sourceId, run.projectCwd, run.sessionId, run.segmentId, run.runId,
+    run.runId === null && run.host !== undefined && run.host !== "pi" && run.host !== "unknown" ? run.steps : null,
   ])).digest("hex") as RouteKey;
 }
 
 function evidenceCountKind(evidence: ChainObservation["evidence"]): keyof Counts {
   switch (evidence.kind) {
+    case "read-attempt": return "readAttempts";
+    case "skill-invocation": return "invocations";
     case "command-intent": return "requests";
     case "wrapper-observed": return "wrappers";
     case "read-result": return evidence.outcome === "success" ? "successfulReads" : "failedReads";
@@ -341,10 +347,11 @@ function buildActivity(filter: DashboardFilter, timespan: { first: number | unde
       if (!bin) continue;
       bin.counts[evidenceCountKind(item.evidence)] += 1;
       if (item.evidence.kind !== "read-result" || item.evidence.outcome !== "success") continue;
-      bin.runs.add(route.key);
+      const knownRun = route.scope.runId !== null || route.scope.host === undefined || route.scope.host === "unknown" || route.scope.host === "pi";
+      if (knownRun) bin.runs.add(route.key);
       const name = item.evidence.skill.name;
       const skill = bin.skills.get(name) ?? { runs: new Set<RouteKey>(), successfulReads: 0 };
-      skill.runs.add(route.key); skill.successfulReads += 1; bin.skills.set(name, skill);
+      if (knownRun) skill.runs.add(route.key); skill.successfulReads += 1; bin.skills.set(name, skill);
     }
   }
   return {

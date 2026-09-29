@@ -1,3 +1,6 @@
+export type HostId = "pi" | "codex" | "claude-code" | "opencode-v1" | "opencode-v2" | "unknown";
+export type NativeHostId = Exclude<HostId, "pi" | "unknown">;
+
 export type MachineId = string & { readonly __brand: "MachineId" };
 export type SourceId = string & { readonly __brand: "SourceId" };
 export type CollectorOrigin = string & { readonly __brand: "CollectorOrigin" };
@@ -27,7 +30,11 @@ export type GapReason =
   | "shutdown-deadline"
   | "invalid-observation";
 
+export type InvocationSkillRef = { name: string; canonicalPath: string | null; version: string | null };
+
 export type Evidence =
+  | { kind: "read-attempt"; skill: SkillRef; toolCallId: string; model: ModelRef }
+  | { kind: "skill-invocation"; skill: InvocationSkillRef; toolCallId: string; outcome: "success" | "error"; model: ModelRef }
   | {
       kind: "command-intent";
       skillName: string;
@@ -69,6 +76,7 @@ export type ObservationScope = {
 };
 
 export type Observation = {
+  host?: HostId;
   id: string;
   producerId: string;
   sequence: number;
@@ -84,6 +92,7 @@ export type CaptureWriteSummary = {
 };
 
 export type DashboardFilter = {
+  host?: HostId;
   machineId?: MachineId;
   projectCwd?: string;
   sessionId?: string | null;
@@ -100,10 +109,14 @@ export type ChainFilter = DashboardFilter & {
   includeCommandIntent?: boolean;
   includeWrapperObserved?: boolean;
   includeReadResult?: boolean;
+  includeSkillInvocation?: boolean;
+  includeReadAttempt?: boolean;
 };
 
 export type OverviewView = {
   observationCount: number;
+  skillInvocationCount: number;
+  readAttemptCount: number;
   commandIntentCount: number;
   rpcCommandIntentCount: number;
   wrapperObservedCount: number;
@@ -119,11 +132,14 @@ export type OverviewView = {
 };
 
 export type SkillTableRow = {
+  host?: HostId;
   machineId: MachineId;
   skillName: string;
   canonicalPath: string | null;
   version: string | null;
   cataloged: boolean;
+  skillInvocationCount?: number;
+  readAttemptCount?: number;
   commandIntentCount: number;
   interactiveCommandIntentCount: number;
   rpcCommandIntentCount: number;
@@ -141,6 +157,7 @@ export type SkillTableView = {
 };
 
 export type ModelMatrixRow = {
+  host: HostId;
   machineId: MachineId;
   skillName: string;
   canonicalPath: string;
@@ -162,7 +179,9 @@ export type ChainObservation = {
   evidence:
     | Extract<Evidence, { kind: "command-intent" }>
     | Extract<Evidence, { kind: "wrapper-observed" }>
-    | Extract<Evidence, { kind: "read-result" }>;
+    | Extract<Evidence, { kind: "read-result" }>
+    | Extract<Evidence, { kind: "skill-invocation" }>
+    | Extract<Evidence, { kind: "read-attempt" }>;
 };
 
 export type SkillChainStep =
@@ -181,6 +200,7 @@ export type SkillChainStep =
     };
 
 export type SkillChainRun = {
+  host?: HostId;
   machineId: MachineId;
   sourceId: SourceId | "local";
   sessionId: string | null;
@@ -209,6 +229,7 @@ export type CaptureHealthView = {
 };
 
 export type DashboardFilterOptions = {
+  hosts: readonly HostId[];
   machines: readonly MachineId[];
   projects: readonly string[];
   modelProviders: readonly string[];

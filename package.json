@@ -3,11 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Live Pi skill analytics with local SQLite and optional authenticated LAN aggregation.",
+  "description": "Live coding-agent skill analytics with local SQLite and optional authenticated LAN aggregation.",
   "exports": {
     ".": "./dist/src/index.js",
     "./extension": "./dist/src/extension.js",
-    "./server": "./dist/src/server.js"
+    "./server": "./dist/src/server.js",
+    "./integrations/opencode-v1": "./dist/src/integrations/opencode/v1-entry.js",
+    "./integrations/opencode-v2": "./dist/src/integrations/opencode/v2-entry.js"
   },
   "bin": {
     "hotplate": "./dist/src/cli.js"
@@ -21,7 +23,9 @@
     "package.json"
   ],
   "pi": {
-    "extensions": ["./src/extension.ts"]
+    "extensions": [
+      "./src/extension.ts"
+    ]
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -49,5 +53,10 @@
     "@earendil-works/pi-coding-agent": "^0.87.1",
     "@types/node": "^24.0.0",
     "typescript": "^5.6.0"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
   }
 }

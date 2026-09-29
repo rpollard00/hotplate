@@ -24,6 +24,7 @@ export const dashboardHtml = `<!doctype html>
     </div>
     <section id="scope-panel" class="panel" hidden aria-label="Filters">
       <form id="filter-form" class="filter-grid">
+        <label>Agent host<select id="host-filter" name="host"><option value="">All agent hosts</option></select></label>
         <label>Machine<select id="machine-filter" name="machineId"><option value="">All machines</option></select></label>
         <label>Project<select id="project-filter" name="projectCwd"><option value="">All projects</option></select></label>
         <label>Command source <span>Requests only</span><select id="source-filter" name="source"><option value="">All command sources</option><option value="interactive">Interactive</option><option value="rpc">RPC</option><option value="extension">Extension</option></select></label>
@@ -63,7 +64,7 @@ export const dashboardHtml = `<!doctype html>
           <section id="skill-detail" class="panel" aria-live="polite"></section>
         </section>
         <section id="paths-workspace" aria-labelledby="paths-heading" hidden>
-          <div class="page-heading"><div><h1 id="paths-heading">Session paths</h1><p>Recorded activity within each run.</p></div></div>
+          <div class="page-heading"><div><h1 id="paths-heading">Session paths</h1><p>Recorded activity by session and available run.</p></div></div>
           <div class="path-toolbar panel"><div><strong id="path-focus-label">All session paths</strong><p class="small">These controls filter paths only.</p><button id="back-to-explorer" type="button" class="link" hidden>Back to exploration</button></div><label class="search-label"><span class="sr-only">Search session paths</span><input id="route-search" type="search" placeholder="Find project or skill…"></label><label class="inline-label">Model<select id="route-model"><option value="">All models</option></select></label><button type="button" id="clear-path-focus" class="quiet">Reset path filters</button></div>
           <div id="relationship-detail" class="panel" hidden></div>
           <div class="path-layout"><section class="panel route-master" aria-label="Recent session paths"><div class="section-heading"><h2>Recent paths</h2><span class="small muted" id="route-count"></span></div><div id="route-list"></div><div id="route-pagination"></div></section><section id="chain-view" class="panel route-detail" aria-label="Selected session path" tabindex="-1"></section></div>
@@ -325,10 +326,10 @@ let activityView = null;
 const skillColors = new Map();
 const number = (value) => value.toLocaleString('en-US');
 const count = (value, singular, plural = singular + 's') => number(value) + ' ' + (value === 1 ? singular : plural);
-const sessionLabels = { machineId: 'Machine', sourceId: 'Account source', projectCwd: 'Project', sessionId: 'Session ID', segmentId: 'Segment ID', runId: 'Run ID' };
+const sessionLabels = { host: 'Agent host', machineId: 'Machine', sourceId: 'Account source', projectCwd: 'Project', sessionId: 'Session ID', segmentId: 'Segment ID', runId: 'Run ID' };
 const gapLabels = { 'queue-overflow': 'Capture queue full', 'db-busy': 'Database busy', 'db-error': 'Database error', 'shutdown-deadline': 'Capture stopped before saving', 'invalid-observation': 'Invalid record' };
 const wrapperLabels = { 'expanded-prompt': 'input after expansion', 'unknown-pasted-or-transformed': 'source unknown' };
-const stepLabels = { 'read-result': 'Read group', 'command-intent': 'Request', 'wrapper-observed': 'Wrapper' };
+const stepLabels = { 'read-attempt': 'Read attempt', 'skill-invocation': 'Native skill invocation', 'read-result': 'Read group', 'command-intent': 'Request', 'wrapper-observed': 'Wrapper' };
 const commandLabels = { interactive: 'Interactive', rpc: 'RPC', extension: 'Extension' };
 class DashboardFetchError extends Error {}
 const pageLabels = { models: 'skill rows', columns: 'model columns' };
@@ -352,10 +353,10 @@ function date(value, withTime = false) {
 function project(path) { return path.split('/').filter(Boolean).at(-1) || path; }
 function modelLabel(model) { return model ? model.provider + ' / ' + model.id : 'Unknown model'; }
 function sameModel(left, right) { return left === null ? right === null : right !== null && left.provider === right.provider && left.id === right.id; }
-function countsText(counts) { return [count(counts.successfulReads, 'read'), count(counts.failedReads, 'failure'), count(counts.requests, 'request'), count(counts.wrappers, 'wrapper')].join(' · '); }
+function countsText(counts) { return [count(counts.successfulReads, 'read'), count(counts.failedReads, 'failure'), count(counts.requests, 'request'), count(counts.wrappers, 'wrapper'), ...(counts.readAttempts ? [count(counts.readAttempts, 'read attempt')] : []), ...(counts.invocations ? [count(counts.invocations, 'native invocation')] : [])].join(' · '); }
 function hasFilters() { return Object.values(state.report.scope).some((value) => value !== undefined && value !== null && value !== ''); }
 function noResults(subject, search = '') { return search ? 'No ' + subject + ' match this search.' : hasFilters() ? 'No ' + subject + ' match these filters.' : 'No ' + subject + ' recorded yet.'; }
-function totalEvidence(counts) { return counts.successfulReads + counts.failedReads + counts.requests + counts.wrappers; }
+function totalEvidence(counts) { return counts.successfulReads + counts.failedReads + counts.requests + counts.wrappers + (counts.readAttempts || 0) + (counts.invocations || 0); }
 function disclosure(title, content) { const details = node('details'); details.append(node('summary', title), content); return details; }
 function table(headers, caption) {
   const result = node('table');
@@ -474,6 +475,7 @@ async function loadDashboard() {
 function renderFilterOptions(options) {
   if (!options) return;
   for (const [id, label, values] of [
+    ['host-filter', 'All agent hosts', options.hosts || []],
     ['machine-filter', 'All machines', options.machines], ['project-filter', 'All projects', options.projects],
     ['model-provider-filter', 'All providers', options.modelProviders], ['model-id-filter', 'All models', options.modelIds],
   ]) setOptions($(id), label, values.map((value) => ({ value, label: value })));
@@ -483,6 +485,7 @@ function renderScope() {
   const parts = [];
   if (scope.fromObservedAt || scope.toObservedAt) parts.push((scope.fromObservedAt || 'First record') + ' to ' + (scope.toObservedAt || 'Latest record') + ' · UTC');
   if (scope.projectCwd) parts.push('Project: ' + scope.projectCwd);
+  if (scope.host) parts.push('Agent host: ' + scope.host);
   if (scope.machineId) parts.push('Machine: ' + scope.machineId);
   if (scope.source) parts.push((commandLabels[scope.source] || scope.source) + ' requests');
   if (scope.modelProvider) parts.push('Model provider: ' + scope.modelProvider);
@@ -495,7 +498,7 @@ function renderOverview() {
   const metrics = [
     ['Successful reads', report.counts.successfulReads],
     ['Skill names read', report.skillsRead],
-    ['Session paths', report.routes.length, 'One path per run'],
+    ['Session paths', report.routes.length, 'Known runs and unassigned events'],
     ['Read failures', report.counts.failedReads],
   ];
   $('overview-cards').replaceChildren(...metrics.map(([label, value, note]) => {
@@ -503,6 +506,8 @@ function renderOverview() {
     if (note) card.append(node('span', note, 'metric-note')); return card;
   }));
   $('evidence-context').replaceChildren();
+  if (report.counts.readAttempts) $('evidence-context').append(node('span', count(report.counts.readAttempts, 'read attempt') + ' · outcome unknown'));
+  if (report.counts.invocations) $('evidence-context').append(node('span', count(report.counts.invocations, 'native skill invocation')));
   for (const [label, value] of [['request', report.counts.requests], ['wrapper', report.counts.wrappers]]) $('evidence-context').append(node('span', count(value, label)));
   renderActivity(); renderExplore(); renderRelationships(); renderCatalog();
   const coverage = report.coverage;
@@ -874,8 +879,12 @@ function explorationSnapshot(interval, skillName) {
       }
     }
     if (routeReads === 0) continue;
-    result.readRuns += 1; result.reads += routeReads;
-    for (const name of names) result.bySkill.set(name, (result.bySkill.get(name) || 0) + 1);
+    const knownRun = route.scope.runId !== null || !route.scope.host || route.scope.host === 'unknown' || route.scope.host === 'pi';
+    if (knownRun) {
+      result.readRuns += 1;
+      for (const name of names) result.bySkill.set(name, (result.bySkill.get(name) || 0) + 1);
+    }
+    result.reads += routeReads;
     if (matchedReads === 0) continue;
     for (const [name, count] of routeSkillReads) result.matchingReadsBySkill.set(name, (result.matchingReadsBySkill.get(name) || 0) + count);
     for (const [key, entry] of routeModels) {
@@ -1111,7 +1120,7 @@ function renderSkillDetail() {
   const variants = group.skillKeys.map((key) => state.report.skills.find((entry) => entry.key === key)).filter(Boolean);
   for (const variant of pageItems(variants, 'identities', 8)) {
     const item = node('div', null, 'identity-item'); item.dataset.machine = variant.identity.machineId;
-    item.append(node('p', 'Machine: ' + variant.identity.machineId), node('p', variant.identity.kind === 'resolved' ? variant.identity.canonicalPath : 'Request not linked to a file'), node('p', countsText(variant.counts)), node('p', variant.cataloged ? 'In recorded catalog' : 'Not in recorded catalog'));
+    item.append(node('p', 'Agent host: ' + variant.identity.host + ' · Machine: ' + variant.identity.machineId), node('p', variant.identity.kind === 'resolved' ? variant.identity.canonicalPath : 'Skill name not linked to a file'), node('p', countsText(variant.counts)), node('p', variant.cataloged ? 'In recorded catalog' : 'Not in recorded catalog'));
     identities.append(item);
   }
   identities.append(pagination('identities', variants.length, 8, renderSkillDetail));
@@ -1205,18 +1214,18 @@ function renderRouteDetail(route) {
       const group = node('div', null, 'step-group');
       for (const observation of step.items) {
         const evidence = observation.evidence;
-        const kind = evidence.kind === 'command-intent' ? 'request' : evidence.kind === 'wrapper-observed' ? 'wrapper' : evidence.outcome === 'success' ? 'read' : 'failure';
+        const kind = evidence.kind === 'read-attempt' ? 'attempt' : evidence.kind === 'skill-invocation' ? 'invocation' : evidence.kind === 'command-intent' ? 'request' : evidence.kind === 'wrapper-observed' ? 'wrapper' : evidence.outcome === 'success' ? 'read' : 'failure';
         const inExploration = state.focus.kind === 'explore' && evidence.kind === 'read-result' && evidence.outcome === 'success'
           && inInterval(observation.observedAt, state.explore.interval) && (state.explore.skillName === null || evidence.skill.name === state.explore.skillName)
           && (pathModel === undefined || sameModel(evidence.model, pathModel));
         const card = node('div', null, 'observation ' + kind + (inExploration ? ' matching' : ''));
         if (inExploration) card.append(node('span', 'In exploration', 'sr-only'));
-        card.append(node('strong', skillName(observation.skillKey)), node('p', kind === 'request' ? 'Request · ' + (commandLabels[evidence.source] || evidence.source) : kind === 'wrapper' ? 'Wrapper · ' + (wrapperLabels[evidence.wrapperSource] || 'source unknown') : (kind === 'read' ? 'Successful read' : 'Read failure') + ' · ' + modelLabel(evidence.model)));
+        card.append(node('strong', skillName(observation.skillKey)), node('p', kind === 'request' ? 'Request · ' + (commandLabels[evidence.source] || evidence.source) : kind === 'wrapper' ? 'Wrapper · ' + (wrapperLabels[evidence.wrapperSource] || 'source unknown') : (kind === 'attempt' ? 'Read attempt · outcome unknown' : kind === 'invocation' ? 'Native invocation · ' + evidence.outcome : kind === 'read' ? 'Successful read' : 'Read failure') + ' · ' + modelLabel(evidence.model)));
         group.append(card);
       }
       item.append(group);
       const audit = node('div', null, 'route-scope'); audit.append(node('p', 'Turn: ' + (step.turnId ?? 'Unknown') + ' · Leaf: ' + (step.leafId ?? 'Unknown'), 'small'));
-      for (const observation of step.items) audit.append(node('p', 'Record ' + observation.observationId + ' · sequence ' + observation.sequence + ' · ' + observation.observedAt + (observation.evidence.kind === 'command-intent' ? '' : ' · ' + observation.evidence.skill.canonicalPath) + (observation.evidence.kind === 'read-result' ? ' · tool call ' + observation.evidence.toolCallId : observation.evidence.kind === 'wrapper-observed' ? ' · ' + observation.evidence.wrapperSource : ''), 'footnote'));
+      for (const observation of step.items) audit.append(node('p', 'Record ' + observation.observationId + ' · sequence ' + observation.sequence + ' · ' + observation.observedAt + (observation.evidence.kind === 'command-intent' ? '' : ' · ' + (observation.evidence.skill.canonicalPath || 'Path unknown')) + (observation.evidence.kind === 'read-result' ? ' · tool call ' + observation.evidence.toolCallId : observation.evidence.kind === 'wrapper-observed' ? ' · ' + observation.evidence.wrapperSource : ''), 'footnote'));
       item.append(disclosure('Record details', audit));
     }
     timeline.append(item);
@@ -1229,6 +1238,7 @@ document.querySelectorAll('[data-workspace]').forEach((item) => item.addEventLis
 $('filter-form').addEventListener('submit', (event) => { event.preventDefault(); loadDashboard(); });
 $('refresh-data').addEventListener('click', loadDashboard);
 $('reset-filters').addEventListener('click', () => { $('filter-form').reset(); $('time-preset').value = '7'; state.trends = { kind: 'top', count: 5 }; resetSelections(); loadDashboard(); });
+$('host-filter').addEventListener('change', () => { for (const id of ['project-filter', 'model-provider-filter', 'model-id-filter']) $(id).value = ''; loadDashboard(); });
 $('machine-filter').addEventListener('change', () => { for (const id of ['project-filter', 'model-provider-filter', 'model-id-filter']) $(id).value = ''; loadDashboard(); });
 $('toggle-filters').addEventListener('click', () => { $('scope-panel').hidden = !$('scope-panel').hidden; $('toggle-filters').setAttribute('aria-expanded', String(!$('scope-panel').hidden)); });
 $('time-preset').addEventListener('change', () => {

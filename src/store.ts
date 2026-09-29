@@ -2,7 +2,7 @@ import type { TokenDigest } from "./network-protocol.js";
 import { createHash } from "node:crypto";
 import {
   isObservation, isInputSource, isGapReason, LOCAL_IDENTITY, LOCAL_SOURCE_ID,
-  parseMachineId, parseSourceId, parseObservation, serializeObservation, validateEnrollment, validateNetworkIdentity,
+  parseHostId, parseMachineId, parseSourceId, parseObservation, serializeObservation, validateEnrollment, validateNetworkIdentity,
 } from "./observation.js";
 import { existsSync, chmodSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -10,6 +10,7 @@ import { homedir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import { DatabaseSync } from "node:sqlite";
 import type {
+  HostId,
   CaptureEnrollment,
   DashboardFilterOptions,
   MachineId,
@@ -37,7 +38,7 @@ import type {
   SkillTableView,
 } from "./domain.js";
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 export const MAX_DYNAMIC_SOURCES = 10_000;
 export const ENROLLMENTS_PER_MINUTE = 30;
 const DEFAULT_BUSY_TIMEOUT_MS = 25;
@@ -196,11 +197,15 @@ class SqliteHotplateStore implements HotplateStore {
 
   async queryFilterOptions(filter: DashboardFilter): Promise<DashboardFilterOptions> {
     assertOpen(this.#closed);
-    const params = filter.machineId === undefined ? [] : [filter.machineId];
-    const where = filter.machineId === undefined ? "" : "WHERE machine_id = ?";
+    const params: SqlValue[] = [];
+    const clauses: string[] = [];
+    if (filter.machineId !== undefined) { params.push(filter.machineId); clauses.push("machine_id = ?"); }
+    if (filter.host !== undefined) { params.push(filter.host); clauses.push("host = ?"); }
+    const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
     const strings = (sql: string, values: readonly SqlValue[] = params): string[] => this.#db.prepare(sql).all(...values).map(row => requireString(row.value, "filter option"));
     const time = this.#db.prepare(`SELECT MIN(observed_at) AS first, MAX(observed_at) AS last FROM observations ${where}`).get(...params);
     return {
+      hosts: strings("SELECT DISTINCT host AS value FROM observations UNION SELECT DISTINCT host AS value FROM catalog_skills ORDER BY value", []).map(parseHostId),
       machines: strings("SELECT machine_id AS value FROM observations UNION SELECT machine_id AS value FROM catalog_skills ORDER BY value", []).map(parseMachineId),
       projects: strings(`SELECT project_cwd AS value FROM observations ${where} UNION SELECT project_cwd AS value FROM catalog_skills ${where} ORDER BY value`, [...params, ...params]),
       modelProviders: strings(`SELECT DISTINCT model_provider AS value FROM observations ${where || "WHERE 1 = 1"} AND model_provider IS NOT NULL ORDER BY value`),
@@ -216,6 +221,8 @@ class SqliteHotplateStore implements HotplateStore {
     const catalogWhere = catalogWhereClause(filter);
 
     return {
+      readAttemptCount: count(this.#db, `SELECT COUNT(*) AS value FROM observations ${observationWhere(filter, ["AND evidence_kind = 'read-attempt'"]).sql}`, observationWhere(filter, ["AND evidence_kind = 'read-attempt'"]).params),
+      skillInvocationCount: count(this.#db, `SELECT COUNT(*) AS value FROM observations ${observationWhere(filter, ["AND evidence_kind = 'skill-invocation'"]).sql}`, observationWhere(filter, ["AND evidence_kind = 'skill-invocation'"]).params),
       observationCount: count(this.#db, `SELECT COUNT(*) AS value FROM observations ${where.sql}`, where.params),
       commandIntentCount: count(
         this.#db,
@@ -251,12 +258,12 @@ class SqliteHotplateStore implements HotplateStore {
         this.#db,
         `SELECT COUNT(*) AS value FROM (
           SELECT skill_name, skill_path, project_cwd, IFNULL(session_id, ''), segment_id, IFNULL(run_id, '')
-          FROM observations ${skillRunWhere.sql} AND skill_name IS NOT NULL AND (evidence_kind != 'read-result' OR outcome = 'success')
-          GROUP BY machine_id, source_id, skill_name, skill_path, project_cwd, session_id, segment_id, run_id
+          FROM observations ${skillRunWhere.sql} AND skill_name IS NOT NULL AND (run_id IS NOT NULL OR host IN ('unknown', 'pi')) AND (evidence_kind != 'read-result' OR outcome = 'success')
+          GROUP BY host, machine_id, source_id, skill_name, skill_path, project_cwd, session_id, segment_id, run_id
         )`,
         skillRunWhere.params,
       ),
-      catalogSkillCount: count(this.#db, `SELECT COUNT(*) AS value FROM (SELECT 1 FROM catalog_skills ${catalogWhere.sql} GROUP BY machine_id, project_cwd, skill_name, skill_path)`, catalogWhere.params),
+      catalogSkillCount: count(this.#db, `SELECT COUNT(*) AS value FROM (SELECT 1 FROM catalog_skills ${catalogWhere.sql} GROUP BY host, machine_id, project_cwd, skill_name, skill_path)`, catalogWhere.params),
       captureGapCount: count(
         this.#db,
         `SELECT COUNT(*) AS value FROM observations ${observationWhere(filter, ["AND evidence_kind = 'capture-gap'"]).sql}`,
@@ -276,7 +283,7 @@ class SqliteHotplateStore implements HotplateStore {
     assertOpen(this.#closed);
     const rows = new Map<string, MutableSkillTableRow>();
     const catalog = this.#db.prepare(`
-      SELECT machine_id, skill_name, skill_path, skill_version, last_observed_at
+      SELECT host, machine_id, skill_name, skill_path, skill_version, last_observed_at
       FROM catalog_skills ${catalogWhereClause(filter).sql}
       ORDER BY last_observed_at DESC, json_array(skill_version) DESC, machine_id, skill_name, skill_path
     `).all(...catalogWhereClause(filter).params);
@@ -284,12 +291,12 @@ class SqliteHotplateStore implements HotplateStore {
     for (const row of catalog) {
       const skillName = requireString(row.skill_name, "skill_name");
       const canonicalPath = requireString(row.skill_path, "skill_path");
-      const entry = getSkillRow(rows, parseMachineId(row.machine_id), skillName, canonicalPath, nullableString(row.skill_version));
+      const entry = getSkillRow(rows, parseHostId(row.host), parseMachineId(row.machine_id), skillName, canonicalPath, nullableString(row.skill_version));
       entry.cataloged = true;
       entry.lastObservedAt = latestTime(entry.lastObservedAt, nullableString(row.last_observed_at));
     }
 
-    const where = observationWhere(filter, ["AND evidence_kind IN ('command-intent', 'wrapper-observed', 'read-result')"]);
+    const where = observationWhere(filter, ["AND evidence_kind IN ('command-intent', 'wrapper-observed', 'read-result', 'read-attempt', 'skill-invocation')"]);
     const observationRows = this.#db.prepare(`
       SELECT * FROM observations ${where.sql}
       ORDER BY observed_at, producer_id, sequence, id
@@ -303,9 +310,11 @@ class SqliteHotplateStore implements HotplateStore {
         continue;
       }
       const canonicalPath = nullableString(row.skill_path);
-      const entry = getSkillRow(rows, parseMachineId(row.machine_id), skillName, canonicalPath, nullableString(row.skill_version));
+      const entry = getSkillRow(rows, parseHostId(row.host), parseMachineId(row.machine_id), skillName, canonicalPath, nullableString(row.skill_version));
       entry.lastObservedAt = latestTime(entry.lastObservedAt, requireString(row.observed_at, "observed_at"));
 
+      if (kind === "read-attempt") { entry.readAttemptCount += 1; continue; }
+      if (kind === "skill-invocation") { entry.skillInvocationCount += 1; continue; }
       if (kind === "command-intent") {
         entry.commandIntentCount += 1;
         const source = requireInputSource(row.source);
@@ -354,7 +363,7 @@ class SqliteHotplateStore implements HotplateStore {
     const where = observationWhere(filter, ["AND evidence_kind = 'read-result'"]);
     const rows = this.#db.prepare(`
       SELECT
-        machine_id,
+        host, machine_id,
         skill_name,
         skill_path,
         model_provider,
@@ -362,14 +371,15 @@ class SqliteHotplateStore implements HotplateStore {
         SUM(CASE WHEN outcome = 'success' THEN 1 ELSE 0 END) AS successful_read_count,
         SUM(CASE WHEN outcome = 'error' THEN 1 ELSE 0 END) AS failed_read_count,
         COUNT(*) AS read_result_count,
-        COUNT(DISTINCT CASE WHEN outcome = 'success' THEN json_array(machine_id, source_id, project_cwd, session_id, segment_id, run_id, skill_name, skill_path) END) AS unique_activations
+        COUNT(DISTINCT CASE WHEN outcome = 'success' AND (run_id IS NOT NULL OR host IN ('unknown', 'pi')) THEN json_array(host, machine_id, source_id, project_cwd, session_id, segment_id, run_id, skill_name, skill_path) END) AS unique_activations
       FROM observations ${where.sql} AND skill_name IS NOT NULL AND skill_path IS NOT NULL
-      GROUP BY machine_id, skill_name, skill_path, model_provider, model_id
+      GROUP BY host, machine_id, skill_name, skill_path, model_provider, model_id
       ORDER BY skill_name, skill_path, model_provider, model_id
     `).all(...where.params);
 
     return {
       rows: rows.map((row): ModelMatrixRow => ({
+        host: parseHostId(row.host),
         machineId: parseMachineId(row.machine_id),
         skillName: requireString(row.skill_name, "skill_name"),
         canonicalPath: requireString(row.skill_path, "skill_path"),
@@ -387,7 +397,7 @@ class SqliteHotplateStore implements HotplateStore {
     const where = chainBaseWhere(filter);
     const rows = this.#db.prepare(`
       SELECT * FROM observations ${where.sql}
-        AND evidence_kind IN ('command-intent', 'wrapper-observed', 'read-result', 'capture-gap')
+        AND evidence_kind IN ('command-intent', 'wrapper-observed', 'read-result', 'read-attempt', 'skill-invocation', 'capture-gap')
       ORDER BY project_cwd, IFNULL(session_id, ''), segment_id, IFNULL(run_id, ''), observed_at, IFNULL(turn_id, ''), IFNULL(leaf_id, ''), producer_id, sequence, id
     `).all(...where.params);
 
@@ -469,6 +479,16 @@ class SqliteHotplateStore implements HotplateStore {
       throw new Error("Database mode changed. Local capture requires a separate database.");
     }
     for (const observation of observations) {
+      if (observation.id.startsWith("native:")) {
+        const digest = createHash("sha256").update(serializeObservation({ ...observation, observedAt: "" })).digest("hex");
+        const receipt = this.#db.prepare("SELECT digest FROM native_receipts WHERE id = ?").get(observation.id);
+        if (receipt) {
+          if (receipt.digest !== digest) throw new Error("Conflicting native occurrence");
+          duplicate += 1;
+          continue;
+        }
+        this.#db.prepare("INSERT INTO native_receipts (id, digest) VALUES (?, ?)").run(observation.id, digest);
+      }
       if (!insertObservation(this.#db, LOCAL_IDENTITY, observation, null)) {
         duplicate += 1;
         continue;
@@ -488,17 +508,17 @@ class SqliteHotplateStore implements HotplateStore {
 
 function insertObservation(db: DatabaseSync, source: SourceIdentity | typeof LOCAL_IDENTITY, observation: Observation, digest: string | null): boolean {
   const result = db.prepare(`INSERT INTO observations (
-    machine_id, source_id, digest, id, producer_id, sequence, observed_at, project_cwd, session_id, session_file,
+    host, machine_id, source_id, digest, id, producer_id, sequence, observed_at, project_cwd, session_id, session_file,
     segment_id, segment_reason, run_id, turn_id, leaf_id, evidence_kind, skill_name, skill_path, skill_version,
     source, wrapper_source, tool_call_id, outcome, model_provider, model_id, dropped, gap_reason
-  ) VALUES (${Array(27).fill("?").join(",")}) ON CONFLICT(machine_id, source_id, id) DO NOTHING`)
-    .run(source.machineId, source.sourceId, digest, ...flattenObservation(observation).values);
+  ) VALUES (${Array(28).fill("?").join(",")}) ON CONFLICT(machine_id, source_id, id) DO NOTHING`)
+    .run(observation.host ?? "unknown", source.machineId, source.sourceId, digest, ...flattenObservation(observation).values);
   if (numberValue(result.changes) === 0) return false;
   if (observation.evidence.kind === "catalog-snapshot") {
     const upsert = db.prepare(`INSERT INTO catalog_skills (
-      machine_id, source_id, project_cwd, skill_name, skill_path, skill_version, first_observed_at, last_observed_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(machine_id, source_id, project_cwd, skill_name, skill_path) DO UPDATE SET
+      host, machine_id, source_id, project_cwd, skill_name, skill_path, skill_version, first_observed_at, last_observed_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(host, machine_id, source_id, project_cwd, skill_name, skill_path) DO UPDATE SET
       skill_version = CASE WHEN excluded.last_observed_at > catalog_skills.last_observed_at
         OR (excluded.last_observed_at = catalog_skills.last_observed_at
           AND json_array(excluded.skill_version) > json_array(catalog_skills.skill_version))
@@ -506,7 +526,7 @@ function insertObservation(db: DatabaseSync, source: SourceIdentity | typeof LOC
       first_observed_at = MIN(catalog_skills.first_observed_at, excluded.first_observed_at),
       last_observed_at = MAX(catalog_skills.last_observed_at, excluded.last_observed_at)`);
     for (const skill of observation.evidence.skills) {
-      upsert.run(source.machineId, source.sourceId, observation.scope.projectCwd, skill.name, skill.canonicalPath,
+      upsert.run(observation.host ?? "unknown", source.machineId, source.sourceId, observation.scope.projectCwd, skill.name, skill.canonicalPath,
         skill.version, observation.observedAt, observation.observedAt);
     }
   }
@@ -794,6 +814,8 @@ function flattenObservation(observation: Observation): FlattenedObservation {
           null,
         ],
       };
+    case "read-attempt":
+    case "skill-invocation":
     case "read-result":
       return {
         values: [
@@ -804,7 +826,7 @@ function flattenObservation(observation: Observation): FlattenedObservation {
           null,
           null,
           observation.evidence.toolCallId,
-          observation.evidence.outcome,
+          observation.evidence.kind === "read-attempt" ? null : observation.evidence.outcome,
           observation.evidence.model?.provider ?? null,
           observation.evidence.model?.id ?? null,
           null,
@@ -911,10 +933,22 @@ function migrate(db: DatabaseSync, busyRetries: number): void {
     CREATE INDEX IF NOT EXISTS observations_source_idx ON observations(source, evidence_kind);
     `);
     }
-    db.exec(`CREATE TABLE registered_sources (
+    if (version < 3) db.exec(`CREATE TABLE registered_sources (
       source_id TEXT PRIMARY KEY, machine_id TEXT NOT NULL, token_digest TEXT NOT NULL UNIQUE
     ) STRICT;
-    PRAGMA user_version = ${SCHEMA_VERSION}; COMMIT;`);
+    `);
+    const schema = requireString(db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'observations'").get()?.sql, "observation schema");
+    db.exec("ALTER TABLE observations RENAME TO observations_previous");
+    db.exec(schema.replace("'read-result',", "'read-result', 'read-attempt', 'skill-invocation',"));
+    db.exec("ALTER TABLE observations ADD COLUMN host TEXT NOT NULL DEFAULT 'unknown'; INSERT INTO observations SELECT *, 'unknown' FROM observations_previous; DROP TABLE observations_previous");
+    db.exec("CREATE UNIQUE INDEX aggregate_sequence_idx ON observations(machine_id, source_id, producer_id, sequence) WHERE digest IS NOT NULL");
+    db.exec(`CREATE INDEX observations_time_idx ON observations(observed_at);
+      CREATE INDEX observations_scope_idx ON observations(host, machine_id, source_id, project_cwd, session_id, segment_id, run_id, observed_at);
+      CREATE INDEX observations_skill_idx ON observations(host, machine_id, source_id, skill_name, skill_path, evidence_kind);
+      CREATE INDEX observations_model_idx ON observations(host, machine_id, model_provider, model_id, evidence_kind);
+      CREATE INDEX observations_source_idx ON observations(source, evidence_kind);`);
+    db.exec("ALTER TABLE catalog_skills RENAME TO catalog_previous");
+    db.exec(`CREATE TABLE catalog_skills (host TEXT NOT NULL, machine_id TEXT NOT NULL, source_id TEXT NOT NULL, project_cwd TEXT NOT NULL, skill_name TEXT NOT NULL, skill_path TEXT NOT NULL, skill_version TEXT, first_observed_at TEXT NOT NULL, last_observed_at TEXT NOT NULL, PRIMARY KEY(host, machine_id, source_id, project_cwd, skill_name, skill_path)) STRICT; INSERT INTO catalog_skills SELECT 'unknown', * FROM catalog_previous; DROP TABLE catalog_previous; CREATE TABLE native_receipts (id TEXT PRIMARY KEY, digest TEXT NOT NULL) STRICT; PRAGMA user_version = ${SCHEMA_VERSION}; COMMIT;`);
   } catch (error) {
     rollbackBestEffort(db);
     throw error;
@@ -923,10 +957,10 @@ function migrate(db: DatabaseSync, busyRetries: number): void {
 
 function assertReadableSchema(db: DatabaseSync): void {
   const version = userVersion(db);
-  if (version === 1) {
-    throw new Error("Hotplate schema v1 requires an upgrade. Open this database with the current Pi collector or openHotplateStore before reading it.");
+  if (version >= 1 && version < SCHEMA_VERSION) {
+    throw new Error("Hotplate database requires an upgrade. Open it with the current capture command or openHotplateStore before reading it.");
   }
-  if (version !== 2 && version !== SCHEMA_VERSION) {
+  if (version !== SCHEMA_VERSION) {
     throw new Error(`Unsupported Hotplate schema version ${version}`);
   }
 }
@@ -970,6 +1004,7 @@ function chainBaseWhere(filter: ChainFilter): { sql: string; params: SqlValue[] 
 }
 
 function addSharedObservationFilters(clauses: string[], params: SqlValue[], filter: DashboardFilter): void {
+  if (filter.host !== undefined) { clauses.push("host = ?"); params.push(filter.host); }
   if (filter.machineId !== undefined) {
     clauses.push("machine_id = ?");
     params.push(filter.machineId);
@@ -1005,6 +1040,7 @@ function addSharedObservationFilters(clauses: string[], params: SqlValue[], filt
 function catalogWhereClause(filter: DashboardFilter): { sql: string; params: SqlValue[] } {
   const clauses: string[] = [];
   const params: SqlValue[] = [];
+  if (filter.host !== undefined) { clauses.push("host = ?"); params.push(filter.host); }
   if (filter.machineId !== undefined) {
     clauses.push("machine_id = ?");
     params.push(filter.machineId);
@@ -1024,10 +1060,10 @@ function catalogWhereClause(filter: DashboardFilter): { sql: string; params: Sql
   return { sql: clauses.length === 0 ? "" : `WHERE ${clauses.join(" AND ")}`, params };
 }
 
-type MutableSkillTableRow = SkillTableRow;
+type MutableSkillTableRow = SkillTableRow & { host: HostId; skillInvocationCount: number; readAttemptCount: number };
 
-function getSkillRow(rows: Map<string, MutableSkillTableRow>, machineId: MachineId, skillName: string, canonicalPath: string | null, version: string | null): MutableSkillTableRow {
-  const key = skillKey(machineId, skillName, canonicalPath);
+function getSkillRow(rows: Map<string, MutableSkillTableRow>, host: HostId, machineId: MachineId, skillName: string, canonicalPath: string | null, version: string | null): MutableSkillTableRow {
+  const key = skillKey(host, machineId, skillName, canonicalPath);
   const existing = rows.get(key);
   if (existing) {
     if (!existing.cataloged && existing.version === null && version !== null) existing.version = version;
@@ -1035,11 +1071,14 @@ function getSkillRow(rows: Map<string, MutableSkillTableRow>, machineId: Machine
   }
 
   const row: MutableSkillTableRow = {
+    host,
     machineId,
     skillName,
     canonicalPath,
     version,
     cataloged: false,
+    skillInvocationCount: 0,
+    readAttemptCount: 0,
     commandIntentCount: 0,
     interactiveCommandIntentCount: 0,
     rpcCommandIntentCount: 0,
@@ -1060,18 +1099,20 @@ function toSkillTableRow(row: MutableSkillTableRow): SkillTableRow {
 }
 
 function addActivation(activations: Set<string>, row: MutableSkillTableRow, source: Record<string, unknown>): void {
+  if (source.run_id === null && source.host !== "unknown" && source.host !== "pi") return;
   activations.add(JSON.stringify([
-    skillKey(row.machineId, row.skillName, row.canonicalPath),
+    skillKey(row.host, row.machineId, row.skillName, row.canonicalPath),
     source.machine_id, source.source_id, source.project_cwd,
     source.session_id, source.segment_id, source.run_id,
   ]));
 }
 
-function skillKey(machineId: MachineId, skillName: string, canonicalPath: string | null): string {
-  return JSON.stringify([machineId, skillName, canonicalPath]);
+function skillKey(host: HostId, machineId: MachineId, skillName: string, canonicalPath: string | null): string {
+  return JSON.stringify([host, machineId, skillName, canonicalPath]);
 }
 
 type MutableChainRun = {
+  host: HostId;
   machineId: MachineId;
   sourceId: SkillChainRun["sourceId"];
   sessionId: string | null;
@@ -1089,12 +1130,13 @@ function getChainRun(runs: Map<string, MutableChainRun>, row: Record<string, unk
   const runId = nullableString(row.run_id);
   const machineId = parseMachineId(row.machine_id);
   const sourceId = row.source_id === LOCAL_SOURCE_ID ? LOCAL_SOURCE_ID : parseSourceId(row.source_id);
-  const key = JSON.stringify([machineId, sourceId, projectCwd, sessionId, segmentId, runId]);
+  const host = parseHostId(row.host);
+  const key = JSON.stringify([host, machineId, sourceId, projectCwd, sessionId, segmentId, runId, runId === null && host !== "unknown" && host !== "pi" ? row.id : null]);
   const existing = runs.get(key);
   if (existing) {
     return existing;
   }
-  const created: MutableChainRun = { machineId, sourceId, projectCwd, sessionId, segmentId, runId, steps: [], filteredGap: 0 };
+  const created: MutableChainRun = { host, machineId, sourceId, projectCwd, sessionId, segmentId, runId, steps: [], filteredGap: 0 };
   runs.set(key, created);
   return created;
 }
@@ -1121,6 +1163,7 @@ function flushFilteredGap(run: MutableChainRun): void {
 
 function toSkillChainRun(run: MutableChainRun): SkillChainRun {
   return {
+    host: run.host,
     machineId: run.machineId,
     sourceId: run.sourceId,
     projectCwd: run.projectCwd,
@@ -1150,7 +1193,7 @@ function chainEvidenceIncluded(evidence: ChainObservation["evidence"], filter: C
       && (filter.modelId === undefined || filter.modelId === null);
   }
 
-  if (filter.includeReadResult === false) return false;
+  if (evidence.kind === "read-attempt" ? filter.includeReadAttempt === false : evidence.kind === "skill-invocation" ? filter.includeSkillInvocation === false : filter.includeReadResult === false) return false;
   if (filter.source !== undefined) return false;
   if (filter.modelProvider !== undefined) {
     if (filter.modelProvider === null && evidence.model !== null) return false;
@@ -1169,6 +1212,8 @@ function evidenceSkillName(evidence: ChainObservation["evidence"]): string {
       return evidence.skillName;
     case "wrapper-observed":
     case "read-result":
+    case "skill-invocation":
+    case "read-attempt":
       return evidence.skill.name;
     default: {
       const _exhaustive: never = evidence;
@@ -1185,6 +1230,8 @@ function evidenceFromRow(row: Record<string, unknown>): ChainObservation["eviden
   if (kind === "wrapper-observed") {
     return { kind, skill: skillFromRow(row), wrapperSource: requireWrapperSource(row.wrapper_source) };
   }
+  if (kind === "read-attempt") { return { kind, skill: skillFromRow(row), toolCallId: requireString(row.tool_call_id, "tool_call_id"), model: modelFromColumns(row.model_provider, row.model_id) }; }
+  if (kind === "skill-invocation") { return { kind, skill: { name: requireString(row.skill_name, "skill_name"), canonicalPath: nullableString(row.skill_path), version: nullableString(row.skill_version) }, toolCallId: requireString(row.tool_call_id, "tool_call_id"), outcome: requireOutcome(row.outcome), model: modelFromColumns(row.model_provider, row.model_id) }; }
   if (kind === "read-result") {
     return {
       kind,

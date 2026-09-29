@@ -248,7 +248,25 @@ test("v2 migration is additive and registry capacity excludes exact retries", as
   await store.ingest({ source: staticSource, observations: [old] });
   await store.close();
   let db = new DatabaseSync(f.configuration.databasePath);
-  db.exec("DROP TABLE registered_sources; PRAGMA user_version = 2");
+  db.exec(`
+    DROP TABLE registered_sources;
+    DROP TABLE native_receipts;
+    DROP INDEX observations_scope_idx;
+    DROP INDEX observations_skill_idx;
+    DROP INDEX observations_model_idx;
+    ALTER TABLE observations DROP COLUMN host;
+    ALTER TABLE catalog_skills RENAME TO catalog_current;
+    CREATE TABLE catalog_skills (
+      machine_id TEXT NOT NULL, source_id TEXT NOT NULL, project_cwd TEXT NOT NULL,
+      skill_name TEXT NOT NULL, skill_path TEXT NOT NULL, skill_version TEXT,
+      first_observed_at TEXT NOT NULL, last_observed_at TEXT NOT NULL,
+      PRIMARY KEY(machine_id, source_id, project_cwd, skill_name, skill_path)
+    ) STRICT;
+    INSERT INTO catalog_skills SELECT machine_id, source_id, project_cwd, skill_name,
+      skill_path, skill_version, first_observed_at, last_observed_at FROM catalog_current;
+    DROP TABLE catalog_current;
+    PRAGMA user_version = 2;
+  `);
   db.close();
   store = openAggregateStore({ databasePath: f.configuration.databasePath, staticRegistrations: [{ source: staticSource, tokenDigest: ingestTokenDigest(f.token) }] });
   assert.deepEqual(store.authenticate(ingestTokenDigest(f.token)), staticSource);

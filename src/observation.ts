@@ -1,4 +1,4 @@
-import type { CaptureEnrollment, CollectorOrigin, Evidence, GapReason, InputSource, MachineId, ModelRef, Observation, SegmentReason, SkillRef, SourceId, SourceIdentity } from "./domain.js";
+import type { HostId, CaptureEnrollment, CollectorOrigin, Evidence, GapReason, InputSource, MachineId, ModelRef, Observation, SegmentReason, SkillRef, SourceId, SourceIdentity } from "./domain.js";
 
 export const LOCAL_MACHINE_ID = parseMachineId("local");
 export const LOCAL_SOURCE_ID = "local";
@@ -59,6 +59,11 @@ function copyEvidence(evidence: Evidence): Evidence {
   switch (evidence.kind) {
     case "command-intent": return { kind: evidence.kind, skillName: evidence.skillName, source: evidence.source };
     case "wrapper-observed": return { kind: evidence.kind, skill: copySkill(evidence.skill), wrapperSource: evidence.wrapperSource };
+    case "read-attempt": return { kind: evidence.kind, skill: copySkill(evidence.skill), toolCallId: evidence.toolCallId, model: evidence.model === null ? null : { provider: evidence.model.provider, id: evidence.model.id } };
+    case "skill-invocation": return {
+      kind: evidence.kind, skill: { name: evidence.skill.name, canonicalPath: evidence.skill.canonicalPath, version: evidence.skill.version },
+      toolCallId: evidence.toolCallId, outcome: evidence.outcome, model: evidence.model === null ? null : { provider: evidence.model.provider, id: evidence.model.id },
+    };
     case "read-result": return {
       kind: evidence.kind, skill: copySkill(evidence.skill), toolCallId: evidence.toolCallId, outcome: evidence.outcome,
       model: evidence.model === null ? null : { provider: evidence.model.provider, id: evidence.model.id },
@@ -79,6 +84,7 @@ function copyObservation(observation: Observation): Observation {
       turnId: scope.turnId, leafId: scope.leafId,
     },
     evidence: copyEvidence(observation.evidence),
+    ...(observation.host === undefined ? {} : { host: observation.host }),
   };
 }
 
@@ -86,6 +92,8 @@ export function isObservation(value: unknown): value is Observation {
   if (!isRecord(value) || !isNonEmptyString(value.id) || !isNonEmptyString(value.producerId)) return false;
   if (typeof value.sequence !== "number" || !Number.isSafeInteger(value.sequence) || value.sequence < 0) return false;
   if (!isNonEmptyString(value.observedAt) || !isRecord(value.scope)) return false;
+  if (value.host !== undefined && !isHostId(value.host)) return false;
+  if (isRecord(value.evidence) && (value.evidence.kind === "skill-invocation" || value.evidence.kind === "read-attempt") && value.host === undefined) return false;
   const scope = value.scope;
   if (!isNonEmptyString(scope.projectCwd) || !isNullableString(scope.sessionId) || !isNullableString(scope.sessionFile)
     || !isNonEmptyString(scope.segmentId) || !isSegmentReason(scope.segmentReason) || !isNullableString(scope.runId)
@@ -98,6 +106,8 @@ function isEvidence(value: unknown): boolean {
   switch (value.kind) {
     case "command-intent": return isNonEmptyString(value.skillName) && isInputSource(value.source);
     case "wrapper-observed": return isSkillRef(value.skill) && (value.wrapperSource === "expanded-prompt" || value.wrapperSource === "unknown-pasted-or-transformed");
+    case "read-attempt": return isSkillRef(value.skill) && isNonEmptyString(value.toolCallId) && isModelRef(value.model);
+    case "skill-invocation": return isRecord(value.skill) && isNonEmptyString(value.skill.name) && isNullableString(value.skill.canonicalPath) && isNullableString(value.skill.version) && isNonEmptyString(value.toolCallId) && (value.outcome === "success" || value.outcome === "error") && isModelRef(value.model);
     case "read-result": return isSkillRef(value.skill) && isNonEmptyString(value.toolCallId) && (value.outcome === "success" || value.outcome === "error") && isModelRef(value.model);
     case "catalog-snapshot": return Array.isArray(value.skills) && Array.prototype.every.call(value.skills, isSkillRef);
     case "capture-gap": return typeof value.dropped === "number" && Number.isSafeInteger(value.dropped) && value.dropped >= 0 && isGapReason(value.reason);
@@ -121,4 +131,34 @@ function isSegmentReason(value: unknown): value is SegmentReason {
 }
 export function isGapReason(value: unknown): value is GapReason {
   return value === "queue-overflow" || value === "db-busy" || value === "db-error" || value === "shutdown-deadline" || value === "invalid-observation";
+}
+
+export function isHostId(value: unknown): value is HostId { return value === "pi" || value === "codex" || value === "claude-code" || value === "opencode-v1" || value === "opencode-v2" || value === "unknown"; }
+export function parseHostId(value: unknown): HostId { if (!isHostId(value)) throw new Error("Invalid agent host"); return value; }
+
+export function validateObservationMetadata(raw: unknown, observation: Observation): void {
+  strictMetadata(raw, observation);
+  if (!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(observation.observedAt)
+    || !Number.isFinite(Date.parse(observation.observedAt)) || new Date(observation.observedAt).toISOString() !== observation.observedAt) {
+    throw new Error("Invalid timestamp");
+  }
+}
+
+function strictMetadata(raw: unknown, canonical: unknown): void {
+  if (typeof canonical === "string") {
+    if (Buffer.byteLength(canonical) > 8192) throw new Error("Metadata string too long");
+    return;
+  }
+  if (Array.isArray(canonical)) {
+    if (!Array.isArray(raw) || canonical.length > 2000) throw new Error("Catalog too large");
+    canonical.forEach((item: unknown, i: number) => strictMetadata(raw[i], item));
+    return;
+  }
+  if (canonical !== null && typeof canonical === "object") {
+    const expected = canonical;
+    if (!isRecord(raw)) throw new Error("Expected metadata object");
+    const input = raw;
+    if (Object.keys(input).length !== Object.keys(expected).length || Object.keys(input).some(key => !Object.keys(expected).includes(key))) throw new Error("Unexpected metadata fields");
+    for (const [key, value] of Object.entries(expected)) strictMetadata(input[key], value);
+  }
 }

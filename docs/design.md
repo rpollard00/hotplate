@@ -1,7 +1,13 @@
 # Hotplate design
 
-Hotplate captures live Pi events into account-local SQLite. An optional account relay delivers new observations to an authenticated aggregate server.
+Hotplate captures live coding-agent events into account-local SQLite. An optional account relay delivers new observations to an authenticated aggregate server.
 Local-only capture and loopback dashboard operation remain the default. No module scans historical transcripts.
+
+Native integrations use a bounded Node capture command. Codex and Claude Code supply command hooks; OpenCode v1 and v2 use separate plugin adapters. See [integration operation and coverage](integrations.md).
+
+Schema version 4 adds host identity, native occurrence receipts, read attempts, and native skill invocations. New host evidence uses protocol version 2. The receiver still accepts version 1 without changing its canonical payload or acknowledgment format. Retained version-1 outbox entries remain byte-for-byte unchanged.
+
+Native receipt checks and observation/outbox writes share one transaction. A retry retains the original timestamp. A changed fact under an existing receipt identity fails capture. Capture does not infer successful reads from unstructured shell output, and unknown native runs do not contribute to run-based metrics.
 
 ## Modules and interfaces
 

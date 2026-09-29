@@ -125,6 +125,7 @@ async function send(args: {
     if (reply.status >= 300 && reply.status < 400) return { kind: "paused", message: "Relay redirects are forbidden. Check the configured origin, then restart." };
     if (reply.status === 409) return { kind: "rejected", reason: "conflict" };
     if (reply.status === 413) return { kind: "rejected", reason: "oversized" };
+    if ((reply.status === 400 || reply.status === 422) && args.observations.some(item => item.host !== undefined)) return { kind: "paused", message: "Receiver refused protocol version 2. Upgrade the receiver before restarting the relay. Pending entries remain retained." };
     if (reply.status === 400 || reply.status === 422) return { kind: "rejected", reason: "invalid" };
     if (reply.status >= 400 && reply.status < 500 && reply.status !== 408 && reply.status !== 429) {
       return { kind: "paused", message: "Relay protocol was refused. Check the server configuration, then restart." };

@@ -1,12 +1,13 @@
 # Hotplate
 
-Hotplate records metadata about skill use in live Pi sessions.
+Hotplate records metadata about skill use in live Pi, Codex, Claude Code, and OpenCode sessions.
 By default, each OS account writes SQLite locally and serves a read-only dashboard on loopback.
 Managed Pi connections automatically relay newly captured observations to an authenticated Docker aggregate server while Pi sessions run. Explicit manual capture and relay configuration remains available.
 There is no transcript import or automatic discovery.
 
 Node.js 24.19.0 or later is required.
 See [LAN aggregation](#lan-aggregation) for explicit network enrollment.
+See [coding-agent integrations](docs/integrations.md) for Codex, Claude Code, and separate OpenCode v1/v2 installation and evidence coverage.
 
 ## Install for local pi use
 
@@ -340,7 +341,7 @@ Back up the capture database, including enrollment and backlog, separately from 
 Protect backups as sensitive metadata. Restore file ownership for the writer account or container UID 1000.
 Do not use `docker compose down -v` unless you intend to delete the aggregate database.
 
-Writer opens migrate version 1/2 databases transactionally to version 3. The version-2 migration creates an empty backlog; version 3 adds the dynamic registry without replacing observations or existing bindings.
+Writer opens migrate version 1/2/3 databases transactionally to version 4. The version-2 migration creates an empty backlog; version 3 adds the dynamic registry. Version 4 adds host identity and native evidence while preserving observations, existing bindings, and retained delivery payloads.
 A read-only version 1 dashboard reports an upgrade error without changing the file.
 Back up first, then open the database with the current local Pi collector or `openHotplateStore` to migrate it.
 Aggregate databases start empty or reopen existing aggregate databases. A populated local database cannot become an aggregate.

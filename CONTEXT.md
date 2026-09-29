@@ -1,14 +1,17 @@
 # Hotplate glossary
 
-Hotplate describes skill-use evidence from live Pi sessions. Local accounts can share that evidence through an explicitly configured aggregate.
+Hotplate describes skill-use evidence from live coding-agent sessions. Local accounts can share that evidence through an explicitly configured aggregate.
 
 ## Language
 
 **Observation**:
-A metadata-only fact from a live Pi session. It contains no raw prompt, full tool output, credential, or error body.
+A metadata-only fact from a live coding-agent session. It contains no raw prompt, full tool output, credential, or error body.
+
+**Host**:
+The coding-agent integration that produced an observation. OpenCode v1 and OpenCode v2 are separate hosts, distinct from machine, account source, and model provider.
 
 **Evidence**:
-The reason for an observation: command intent, observed wrapper, read result, catalog snapshot, or capture gap.
+The reason for an observation: command intent, observed wrapper, read attempt, read result, native skill invocation, catalog snapshot, or capture gap.
 
 **Skill path**:
 The recorded sequence of skill requests, wrappers, and reads within one run. A skill path does not prove a dependency or a causal relationship.
@@ -20,7 +23,7 @@ A skill name, a UTC interval, or both within the selected dashboard scope. It id
 A skill path with at least one recorded successful read in the selected interval. Repeated reads of one skill in that path count as one path when comparing skill shares.
 
 **Skill share**:
-The fraction of recorded read-bearing paths in an interval that contain a successful read of a given skill. It is unavailable without read-bearing paths and is not a fraction of all Pi sessions.
+The fraction of recorded read-bearing paths in an interval that contain a successful read of a given skill. It is unavailable without read-bearing paths and is not a fraction of all coding-agent sessions.
 
 **Model in selection**:
 A model attributed to a successful read that matches the selected skill and UTC interval. Its read count includes repeats; its path count counts each run once. Unknown models remain separate.
@@ -45,8 +48,14 @@ A skill wrapper found after Pi input handling. It can come from slash expansion,
 **Read result**:
 A `SKILL.md` read by a tool call. Successful and failed reads are separate facts.
 
+**Read attempt**:
+A tool call that attempts to read `SKILL.md` without an observable success or failure outcome. It does not contribute to successful-read counts.
+
+**Native skill invocation**:
+A host's native skill tool invocation with its observed outcome. It is distinct from a file read and does not contribute to successful-read counts.
+
 **Catalog snapshot**:
-The skill catalog visible to one live Pi session at a capture point. Catalog membership is not proof of skill use.
+The skill catalog visible to one live coding-agent session at a capture point. Catalog membership is not proof of skill use.
 
 **Capture gap**:
 A known loss of observations, with a count and reason when available.

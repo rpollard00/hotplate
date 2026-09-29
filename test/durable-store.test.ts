@@ -61,7 +61,7 @@ test("observation parser copies only allowed metadata and validates external ide
 test("v1 readers require an upgrade without mutation; writer migration preserves rows and creates no backlog", async () => {
   await withDatabase(async databasePath => {
     createLegacyDatabase(databasePath);
-    assert.throws(() => reader(databasePath), /v1 requires an upgrade.*Pi collector/);
+    assert.throws(() => reader(databasePath), /database requires an upgrade.*current capture command or openHotplateStore/u);
     assert.deepEqual(openRelayStore({ databasePath, enrollment }), { kind: "not-enrolled" });
     let db = new DatabaseSync(databasePath);
     assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 1);
@@ -73,7 +73,7 @@ test("v1 readers require an upgrade without mutation; writer migration preserves
     assert.equal((await store.querySkillTable({})).rows[0]?.machineId, LOCAL_MACHINE_ID);
     await store.close();
     db = new DatabaseSync(databasePath);
-    assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 3);
+    assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 4);
     assert.deepEqual({ ...db.prepare("SELECT machine_id, source_id, digest FROM observations").get() }, { machine_id: LOCAL_MACHINE_ID, source_id: LOCAL_SOURCE_ID, digest: null });
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM delivery_outbox").get()?.n, 0);
     db.close();
