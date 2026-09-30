@@ -1,7 +1,7 @@
+import { readNativeAccountConfiguration } from "./integrations/native-settings.js";
 import { createHash } from "node:crypto";
 import type { CaptureWriteSummary, Evidence, NativeHostId, ObservationScope } from "./domain.js";
 import { parseObservation, validateObservationMetadata } from "./observation.js";
-import { readAccountConfiguration } from "./network-config.js";
 import { openCaptureStore, openHotplateStore, resolveHotplateDatabasePath } from "./store.js";
 
 export type CaptureFact = {
@@ -41,10 +41,9 @@ export async function captureFact(args: { fact: CaptureFact; env?: NodeJS.Proces
   if (env.HOTPLATE_DISABLED === "1" || env.HOTPLATE_DISABLED === "true") return { kind: "disabled" };
   const fact = parseCaptureFact(args.fact);
   const receipt = createHash("sha256").update(JSON.stringify([fact.host, fact.sessionId, fact.actorId, fact.occurrenceId, fact.evidence.kind])).digest("hex");
-  const configuration = env.HOTPLATE_CONFIG;
-  if (configuration !== undefined && !configuration.trim()) throw new Error("Invalid account configuration");
+  const configuration = readNativeAccountConfiguration(env);
   const store = configuration
-    ? openCaptureStore(readAccountConfiguration({ path: configuration, env }))
+    ? openCaptureStore(configuration)
     : openHotplateStore({ databasePath: resolveHotplateDatabasePath({ env }) });
   try {
     return { kind: "recorded", ...await store.record({

@@ -13,7 +13,20 @@ npm ci
 npm run build
 ```
 
-Run the matching command from the project that you want to observe:
+For account-wide installation and continuous relay delivery on Linux with systemd, run:
+
+```sh
+node /absolute/path/to/hotplate/dist/src/cli.js setup --relay http://your-aggregate
+node /absolute/path/to/hotplate/dist/src/cli.js setup --status
+```
+
+`--relay` reuses an existing enrolled account for that origin. For a manually configured account, use `--config /private/account/hotplate.json` instead. Setup installs the available native hosts, saves the account selection and resolved database path, and enables the `hotplate-relay.service` user service. Status reports installation results, the selected endpoint, service state, receiver HTTP reachability, and delivery backlog. A protected dashboard can return HTTP 401 or 403 without indicating an ingest failure. A running service alone does not prove that the receiver accepted data.
+
+For two OpenCode majors, pass `--opencode-v1-config-home /path/to/v1-config-home` and optionally `--opencode-v1-binary /path/to/opencode-v1`. The v1 launcher must use that same `XDG_CONFIG_HOME`. Setup does not rewrite third-party launchers. The selected relay applies to both majors despite their separate configuration directories.
+
+The selection is stored in `~/.config/hotplate/integrations.json`. This account-wide path deliberately does not follow OpenCode's per-version XDG overrides. `HOTPLATE_INTEGRATION_SETTINGS` can select a different settings file for isolated testing.
+
+For individual installation without a relay selection, run the matching command from the project that you want to observe:
 
 ```sh
 node /absolute/path/to/hotplate/dist/src/cli.js integration install codex
@@ -58,15 +71,15 @@ New Pi observations identify their host. Existing untagged data remains `unknown
 
 ## Capture and delivery
 
-`HOTPLATE_DB` selects a local database. `HOTPLATE_DISABLED=1` disables capture. `HOTPLATE_NODE_BIN` selects the Node executable used by OpenCode plugins.
+`HOTPLATE_CONFIG` overrides the saved relay selection. If that variable is unset, a nonempty `HOTPLATE_DB` selects local capture instead. Otherwise native capture uses the account saved by `setup`, or local storage when no selection exists. `HOTPLATE_DISABLED=1` disables capture. `HOTPLATE_NODE_BIN` selects the Node executable used by OpenCode plugins.
 
-Set `HOTPLATE_CONFIG` to a valid explicit account configuration to enroll new observations. An invalid explicit configuration refuses capture. Run the existing relay separately:
+An invalid explicit or saved account configuration refuses capture. Setup supervises the relay through the user service. For manual delivery without the service, run:
 
 ```sh
 node /absolute/path/to/hotplate/dist/src/cli.js relay --config /private/account/hotplate.json
 ```
 
-Native adapters do not use Pi's managed session relay. Capture does not send HTTP requests or read the ingest token. Prompt text, tool output, credentials, and error bodies do not enter observation storage.
+The native relay service runs independently of Pi sessions. Stop it with `systemctl --user stop hotplate-relay.service`; disable automatic startup with `systemctl --user disable hotplate-relay.service`. Pi disconnect does not stop this explicit service. Capture does not send HTTP requests or read the ingest token. Prompt text, tool output, credentials, and error bodies do not enter observation storage.
 
 Repeated native occurrences reuse a durable receipt. A repeated delivery retains the original observation and timestamp. Changed metadata under the same identity produces a capture failure.
 

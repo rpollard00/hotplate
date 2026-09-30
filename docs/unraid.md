@@ -212,6 +212,8 @@ Retirement requires stopped, exited, disconnected containers with `restart=no`. 
 The pipeline never force-removes containers, removes volumes, prunes Docker, or deletes a release.
 Monitor appdata and Docker storage. Review exact ownership before manual retention cleanup.
 
+The image sets `SQLITE_TMPDIR=/data` so SQLite can create temporary files with a read-only container root. The data mount remains the writable location for migrations and large queries.
+
 ## Failure and manual recovery
 
 CAUTION: Do not delete the journal to bypass a refusal. A candidate can already have written new observations.

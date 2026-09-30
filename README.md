@@ -3,6 +3,7 @@
 Hotplate records metadata about skill use in live Pi, Codex, Claude Code, and OpenCode sessions.
 By default, each OS account writes SQLite locally and serves a read-only dashboard on loopback.
 Managed Pi connections automatically relay newly captured observations to an authenticated Docker aggregate server while Pi sessions run. Explicit manual capture and relay configuration remains available.
+For native coding agents, `hotplate setup --relay <enrolled-origin>` installs the available integrations and enables an account relay service. Use `hotplate setup --status` to inspect installations and the delivery backlog. See the [integration guide](docs/integrations.md).
 There is no transcript import or automatic discovery.
 
 Node.js 24.19.0 or later is required.

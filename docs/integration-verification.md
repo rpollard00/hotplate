@@ -46,3 +46,11 @@ node scripts/probe-opencode.mjs 2 /absolute/path/to/opencode-v2
 The installed host executables must be available for the native smoke tests. Rebuild before testing changed source files.
 
 Independent GPT-6-Astra reviewers inspected capture, protocol, migration, adapters, and installation. They reproduced the Codex, Claude Code, and capture smoke tests in a separate build. Dashboard visual inspection was performed by the implementation agent in the shared browser.
+
+## Account-wide relay setup
+
+The follow-up setup implementation passed all 169 repository tests. Coverage includes all-host installation, repeat setup, separate OpenCode configuration, service ownership, receiver reachability, and consistent database selection across capture and relay.
+
+Local acceptance verified all four installations against the existing enrolled aggregate. The systemd user relay was enabled and running. The receiver returned HTTP 200, and the backlog had zero pending or blocked observations. An authenticated retry of an existing observation returned one duplicate and zero new records.
+
+The aggregate required recovery from a failed schema migration. A fresh backup preceded migration and recovery. The permanent image sets `SQLITE_TMPDIR=/data` for its read-only root filesystem. Deployment and dashboard health checks passed after replacement. No database backup was restored.
