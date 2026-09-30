@@ -432,7 +432,8 @@ try {
     const bins = payload.report.activity.bins;
     const recentStart = bins.at(-7).startAt;
     const previousStart = new Date(Date.parse(recentStart) - 7 * 86400000).toISOString();
-    const readBearingPaths = (from, to) => payload.report.routes.filter(route => route.steps.some(step => step.kind === 'observations' && step.items.some(item => item.evidence.kind === 'read-result' && item.evidence.outcome === 'success' && Date.parse(item.observedAt) >= Date.parse(from) && Date.parse(item.observedAt) < Date.parse(to)))).length;
+    const knownRun = route => route.scope.runId !== null || !route.scope.host || route.scope.host === 'unknown' || route.scope.host === 'pi';
+    const readBearingPaths = (from, to) => payload.report.routes.filter(route => knownRun(route) && route.steps.some(step => step.kind === 'observations' && step.items.some(item => item.evidence.kind === 'read-result' && item.evidence.outcome === 'success' && Date.parse(item.observedAt) >= Date.parse(from) && Date.parse(item.observedAt) < Date.parse(to)))).length;
     assert.match(await evaluate('document.getElementById("explore-comparison").textContent'), new RegExp(readBearingPaths(recentStart, bins.at(-1).endAt) + ' paths'));
     assert.match(await evaluate('document.getElementById("explore-comparison").textContent'), new RegExp(readBearingPaths(previousStart, recentStart) + ' paths'));
     await click('#explore-models');
@@ -587,7 +588,7 @@ try {
     assert.ok(selectedRoute.steps.some(step => step.kind === 'observations' && step.items.some(item => payload.report.skills.find(skill => skill.key === item.skillKey).identity.name === selectedSkill)));
     assert.equal(await evaluate('document.querySelectorAll("#chain-view .timeline-step").length'), selectedRoute.steps.length, 'Skill selection keeps other recorded steps');
     await click('#chain-view > details summary');
-    assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#chain-view dl dt"), item => item.textContent)'), ['Machine', 'Account source', 'Project', 'Session ID', 'Segment ID', 'Run ID']);
+    assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#chain-view dl dt"), item => item.textContent)'), [...(selectedRoute.scope.host ? ['Agent host'] : []), 'Machine', 'Account source', 'Project', 'Session ID', 'Segment ID', 'Run ID']);
     assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#chain-view dl dd"), item => item.textContent)'), Object.values(selectedRoute.scope).map(value => value ?? 'Unknown'));
     await noOverflow();
     await screenshot(join(directory, "paths-desktop.png"));

@@ -54,6 +54,15 @@ A tool call that attempts to read `SKILL.md` without an observable success or fa
 **Native skill invocation**:
 A host's native skill tool invocation with its observed outcome. It is distinct from a file read and does not contribute to successful-read counts.
 
+**Skill use**:
+A successful read, a successful native skill invocation, or a read attempt. It is the measure that compares hosts, because each host records different evidence. Read attempts stay separate as unconfirmed uses. Skill use does not change successful-read counts.
+
+**Agent session**:
+One host session in one machine and account source. It is the unit for agent comparisons, because a run means different things in different hosts. A Pi session can contain several runs. A Claude Code subagent shares the session of its parent. An OpenCode subagent has its own session.
+
+**Agent share**:
+The fraction of the agent sessions with skill use in one host that contain a use of a given skill. It is not a fraction of all sessions of that host.
+
 **Catalog snapshot**:
 The skill catalog visible to one live coding-agent session at a capture point. Catalog membership is not proof of skill use.
 
