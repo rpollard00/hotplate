@@ -3,6 +3,7 @@
 The dashboard shows recorded skill activity, model read counts, and paths within sessions. It does not score skill quality.
 
 - Overview shows per-skill trends, ranked skills, read patterns, and an exploration selection.
+- Agents compares skill use across Pi, Claude Code, Codex, OpenCode, and untagged records.
 - Models shows read counts by skill and model. Zero means no matching recorded reads, not a missed opportunity.
 - Session paths shows recorded activity within each run, including requests, wrappers, read groups, and gaps.
 
@@ -20,6 +21,30 @@ The exploration panel lists matching paths and model counts for successful reads
 
 An interval compares with the immediately preceding interval of equal duration. With only a skill selected, the comparison uses the latest available elapsed period of up to seven days. An equal preceding period stays inside the loaded scope. Comparison totals show recorded paths with successful reads and raw read counts. A skill share is the number of read-bearing paths containing that skill divided by all read-bearing paths in the period. Repeated reads count once in the share and every time in the raw read count. If the previous interval is outside the current report scope, Hotplate does not treat it as zero.
 
+## Agents
+
+Hosts record different evidence. Pi, Claude Code, and OpenCode record reads of `SKILL.md` files. Claude Code and OpenCode also record native skill invocations. Codex records read attempts without an outcome. Successful reads alone cannot compare these hosts, so the Agents tab uses skill use.
+
+A skill use is a successful read, a successful native skill invocation, or a read attempt. Read attempts show as unconfirmed. Failed reads and failed invocations are failures, not uses. Requests and wrappers are not uses. Skill use does not change the successful-read counts in other tabs.
+
+The unit of comparison is the agent session: one host session in one machine and account source. A run means different things in different hosts, so the Agents tab does not compare runs. Records without a host show as Unknown host.
+
+Some limits apply to these comparisons:
+
+- Claude Code subagents share the session of their parent. OpenCode subagents run in child sessions, so each OpenCode subagent counts as one more agent session.
+- Skills are grouped by name. A plugin prefix, for example `superpowers:`, is not part of the name.
+- Only reads have model attribution. A model filter removes native invocations and read attempts, so Codex and most Claude Code uses disappear from the Agents tab.
+
+- The summary shows the skill uses, sessions with skill use, distinct skills, failures, and last use for each host.
+- The chart stacks skill uses per UTC interval by host. Move the pointer over the chart, or focus it and press Left or Right, to read the values for one interval. The activity data table gives exact counts.
+- The matrix shows skills by host. Agent share is the number of sessions of a host that used the skill, divided by the sessions of that host with skill use. Select the Skill uses measure to show raw counts. An asterisk marks a cell that has only read attempts.
+
+Select a matrix cell to open the session paths of that host that contain the skill. Select Show only this agent to apply the Agent host filter to all tabs. Select Show all agents to remove it.
+
+Each host keeps one color. Labels and the data table repeat each value, so color is not the only identification.
+
+## Filters
+
 The Filters panel changes the report scope. Exploration selects paths within that scope without altering the overview totals or the Models matrix. Last 7 days is the default. Refresh recalculates relative periods but keeps custom UTC dates fixed. Reset restores Last 7 days and the top five trends. Select All time to recover older records. The filter summary appears only for applied restrictions. Windows up to seven days use UTC hours. Longer windows use daily or adaptive bins without truncation.
 Skill catalog is separate from About this data, a disclosure available on every tab. The disclosure defines counts, grouping, model attribution, paths, gaps, and capture coverage.
 
@@ -33,7 +58,7 @@ npm run dashboard:preview
 
 Open the printed URL, normally `http://127.0.0.1:7346/?preview=1`.
 The preview uses synthetic data in a new temporary database. It does not use `HOTPLATE_DB` or change the default database.
-The fixture contains 21 days of activity, 111 sessions, three projects, three named models, unknown model reads, failures, and capture gaps.
+The fixture contains 21 days of activity, 174 sessions, three projects, three named models, unknown model reads, failures, and capture gaps. Its sessions come from Pi, Claude Code, Codex, OpenCode v2, and untagged records.
 Model counts in this fixture are examples, not measured comparisons.
 
 Press Ctrl+C to stop the server and remove its temporary database.

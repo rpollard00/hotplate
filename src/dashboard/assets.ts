@@ -15,6 +15,7 @@ export const dashboardHtml = `<!doctype html>
   <div class="shell">
     <nav class="workspace-nav" aria-label="Workspaces">
       <button type="button" data-workspace="overview" aria-current="page">Overview</button>
+      <button type="button" data-workspace="agents">Agents</button>
       <button type="button" data-workspace="models">Models</button>
       <button type="button" data-workspace="paths">Session paths</button>
     </nav>
@@ -58,6 +59,12 @@ export const dashboardHtml = `<!doctype html>
           <section class="panel" aria-labelledby="relationships-heading"><div class="section-heading"><div><h2 id="relationships-heading">Read patterns</h2></div><button type="button" id="browse-paths" class="quiet">View session paths</button></div><div id="relationship-view"></div></section>
           <details class="panel" id="catalog-context"><summary>Skill catalog</summary><p class="footnote">The catalog follows machine, project, and date filters only.</p><label class="search-label">Find a catalog skill<input id="catalog-search" type="search" placeholder="Search names…"></label><div id="catalog-list"></div></details>
         </section>
+        <section id="agents-workspace" aria-labelledby="agents-heading" hidden>
+          <div class="page-heading"><div><h1 id="agents-heading">Skill use by agent</h1></div></div>
+          <section class="panel" aria-labelledby="agent-summary-heading"><div class="section-heading"><div><h2 id="agent-summary-heading">Agents</h2></div><div id="agent-summary-actions"></div></div><div id="agent-summary"></div></section>
+          <section id="agent-activity-panel" class="panel" aria-labelledby="agent-activity-heading"><div class="section-heading"><div><h2 id="agent-activity-heading">Skill use over time</h2></div><span class="small muted">UTC</span></div><div id="agent-activity"></div></section>
+          <section id="agent-skills-panel" class="panel" aria-labelledby="agent-skills-heading"><div class="section-heading"><div><h2 id="agent-skills-heading">Skills by agent</h2></div><label class="inline-label">Measure<select id="agent-measure"><option value="share">Agent share</option><option value="uses">Skill uses</option></select></label></div><label class="search-label">Find a skill<input id="agent-search" type="search" placeholder="Search skill names…"></label><div id="agent-matrix" class="table-wrap" tabindex="0" role="region" aria-label="Skills by agent table"></div><p class="matrix-scroll-hint footnote">Scroll horizontally to compare agents.</p><div id="agent-pagination"></div><p id="agent-unconfirmed-note" class="footnote" hidden>* Read attempts only. The outcome is unknown.</p><p class="footnote">Agent share: the sessions of an agent that used the skill, divided by the sessions of that agent with skill use. Skills are grouped by name. A plugin prefix, for example <code>superpowers:</code>, is not part of the name.</p></section>
+        </section>
         <section id="models-workspace" aria-labelledby="models-heading" hidden>
           <div class="page-heading"><div><h1 id="models-heading">Skills by model</h1></div></div>
           <section class="panel"><div class="section-heading"><label class="search-label">Find a skill<input id="model-search" type="search" placeholder="Search skill names…"></label><label class="inline-label">Measure<select id="model-measure"><option value="successfulReads">Successful reads</option><option value="failedReads">Read failures</option></select></label></div><div id="model-matrix" class="table-wrap" tabindex="0" role="region" aria-label="Skill by model counts"></div><p class="matrix-scroll-hint footnote">Scroll horizontally to compare models.</p><div id="model-pagination"></div><p class="footnote">Skills are grouped by name.</p></section>
@@ -73,11 +80,14 @@ export const dashboardHtml = `<!doctype html>
     </main>
     <details class="panel" id="data-help"><summary>About this data</summary><div class="data-definitions">
       <p>A read is a successful tool read of <code>SKILL.md</code>. A request records a skill command. A wrapper records skill text found in input.</p>
+      <p>A skill use is a successful read, a successful native skill invocation, or a read attempt. Failures are not skill uses.</p>
+      <p>A read attempt has no known outcome. The dashboard shows read attempts as unconfirmed.</p>
+      <p>An agent session is one session of one agent. Agent comparisons count sessions, because a run means different things in different agents.</p>
       <p>Skills are grouped by name, even when their file paths or contents differ.</p>
       <p>Only read results have model attribution.</p>
       <p>Each path represents one recorded run. A session can contain multiple runs. Order within a read group is unknown.</p>
       <p>Capture gaps represent lost records. Filtered gaps represent records hidden by filters.</p>
-      <p>Capture requires the Hotplate extension in a live Pi session. Reads through the shell or external agents can be absent.</p>
+      <p>Capture requires a Hotplate integration in each agent. Each agent records different evidence. For example, Codex records only read attempts. Skill use in an agent without an integration is not recorded.</p>
     </div></details>
   </div>
   <script src="/assets/app.js"></script>
@@ -255,6 +265,24 @@ th { font-size: 11px; color: var(--muted); font-weight: 600; }
 .matrix .heat-0 { background: #f5f6f2; color: #737b72; font-weight: 400; }
 .matrix .heat-1 { background: #e5eee6; }.matrix .heat-2 { background: #cadfce; }.matrix .heat-3 { background: #99c2ac; }.matrix .heat-4 { background: #477f6b; color: white; }
 .model-provider { display: block; font-weight: 400; font-size: 10px; }
+.agent-list { list-style: none; margin: 0; padding: 0; }
+.agent-row { display: grid; grid-template-columns: minmax(120px,170px) minmax(160px,1fr) auto minmax(150px,auto); grid-template-areas: "name uses facts action"; align-items: center; gap: 8px 24px; padding: 14px 0; border-top: 1px solid var(--line); font-size: 12px; }
+.agent-row:first-child { border-top: 0; padding-top: 0; }
+.agent-row:last-child { padding-bottom: 0; }
+.agent-name { grid-area: name; display: flex; align-items: center; gap: 9px; min-width: 0; font-size: 13px; overflow-wrap: anywhere; }
+.agent-swatch { display: inline-block; width: 10px; height: 10px; flex-shrink: 0; border-radius: 2px; background: var(--host-color); }
+.agent-uses { grid-area: uses; min-width: 0; }
+.agent-total { display: flex; align-items: baseline; gap: 6px; color: var(--ink); }
+.agent-total strong { font-size: 15px; font-variant-numeric: tabular-nums; }
+.agent-uses .rank-track { margin: 6px 0; }
+.agent-uses .rank-fill { background: var(--host-color); }
+.agent-facts { grid-area: facts; display: grid; grid-template-columns: 7.5em 6.5em 11em; gap: 4px 16px; font-variant-numeric: tabular-nums; }
+.agent-row > button { grid-area: action; justify-self: end; padding: 5px 9px; font-size: 11px; }
+.agent-svg .trend-area { stroke-width: 2; }
+.trend-labels div.trend-label:hover { background: transparent; }
+.matrix th .agent-swatch { margin-right: 6px; }
+.matrix th small { display: block; font-size: 10px; font-weight: 400; }
+.matrix td > span { display: block; min-height: 37px; line-height: 37px; border-radius: 6px; }
 .detail-counts { display: flex; flex-wrap: wrap; gap: 12px 24px; padding: 15px 0; font-size: 12px; }
 .identity-list { display: grid; gap: 10px; margin-top: 12px; }
 .identity-item { padding: 12px; background: #f7f8f4; border-radius: 5px; overflow-wrap: anywhere; }
@@ -305,6 +333,14 @@ dt { color: var(--muted); }dd { margin: 0; overflow-wrap: anywhere; }
   .compare-row { grid-template-columns: minmax(0,1fr) 68px 68px; }
   .shell { width: calc(100% - 28px); }.app-header { padding: 12px 14px; }.identity { gap: 9px; }.identity-note { display: none; }.header-actions { gap: 8px; }.preview { font-size: 9px; }.workspace-nav { gap: 24px; }.scope-bar { align-items: start; flex-direction: column; gap: 10px; }.scope-actions { width: 100%; }.scope-actions .inline-label { margin-right: auto; }.page-heading { align-items: start; gap: 12px; }.page-heading p { font-size: 12px; }.panel { padding: 17px; }.metrics-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }.metric-card { padding: 17px; }.metric-card:nth-child(2) { border-right: 0; }.metric-card:nth-child(-n+2) { border-bottom: 1px solid var(--line); }.metric-value { font-size: 31px; }.overview-grid, .relationship-grid, .path-layout { grid-template-columns: 1fr; }.filter-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }.trend-plot { height: 200px; }.section-heading { align-items: start; flex-wrap: wrap; }.section-heading > button { font-size: 11px; }.path-toolbar { gap: 12px; }.path-toolbar .search-label { max-width: none; flex: 1; min-width: 140px; }.path-toolbar .inline-label { max-width: 100%; }.path-toolbar select { max-width: 160px; }.route-master { margin-bottom: 0; }.route-detail { min-height: 0; }.step-heading { flex-wrap: wrap; gap: 4px; }.relationship-flow { gap: 6px; }.skill-node { font-size: 11px; }
 }
+@media (max-width: 900px) {
+  .agent-row { grid-template-columns: minmax(0,1fr) auto; grid-template-areas: "name action" "uses uses" "facts facts"; }
+  .agent-facts { display: flex; flex-wrap: wrap; }
+}
+@media (max-width: 480px) {
+  .agent-row { grid-template-columns: minmax(0,1fr); grid-template-areas: "name" "uses" "facts" "action"; }
+  .agent-row > button { justify-self: start; }
+}
 @media (max-width: 760px) {
   .matrix th:first-child { width: 150px; }
   .matrix-scroll-hint { display: block; }
@@ -320,7 +356,7 @@ const state = {
   focus: { kind: 'all' }, routeKey: null, skillSelection: null,
   explore: { skillName: null, interval: null },
   trends: { kind: 'top', count: 5 },
-  pages: { activity: 0, skills: 0, models: 0, columns: 0, relationships: 0, routes: 0, steps: 0, catalog: 0, identities: 0, evidence: 0 },
+  pages: { activity: 0, skills: 0, models: 0, columns: 0, relationships: 0, routes: 0, steps: 0, catalog: 0, identities: 0, evidence: 0, agentActivity: 0, agentSkills: 0 },
 };
 let activityView = null;
 const skillColors = new Map();
@@ -331,8 +367,13 @@ const gapLabels = { 'queue-overflow': 'Capture queue full', 'db-busy': 'Database
 const wrapperLabels = { 'expanded-prompt': 'input after expansion', 'unknown-pasted-or-transformed': 'source unknown' };
 const stepLabels = { 'read-attempt': 'Read attempt', 'skill-invocation': 'Native skill invocation', 'read-result': 'Read group', 'command-intent': 'Request', 'wrapper-observed': 'Wrapper' };
 const commandLabels = { interactive: 'Interactive', rpc: 'RPC', extension: 'Extension' };
+const hostOrder = ['pi', 'claude-code', 'codex', 'opencode-v1', 'opencode-v2', 'unknown'];
+const hostLabels = { pi: 'Pi', 'claude-code': 'Claude Code', codex: 'Codex', 'opencode-v1': 'OpenCode v1', 'opencode-v2': 'OpenCode v2', unknown: 'Unknown host' };
+const hostColors = { pi: '#2a78d6', 'claude-code': '#eb6834', codex: '#1baf7a', 'opencode-v1': '#eda100', 'opencode-v2': '#e87ba4', unknown: '#6b716d' };
+const hostLabel = (host) => hostLabels[host] || host;
+const hostColor = (host) => hostColors[host] || hostColors.unknown;
 class DashboardFetchError extends Error {}
-const pageLabels = { models: 'skill rows', columns: 'model columns' };
+const pageLabels = { models: 'skill rows', columns: 'model columns', agentActivity: 'agent activity rows', agentSkills: 'skills by agent' };
 function node(tag, text, className) {
   const element = document.createElement(tag);
   if (text !== undefined && text !== null) element.textContent = String(text);
@@ -397,7 +438,7 @@ function setOptions(select, label, options) {
 }
 function showWorkspace(name, focusHeading = false) {
   state.workspace = name;
-  for (const workspace of ['overview', 'models', 'paths']) $(workspace + '-workspace').hidden = workspace !== name;
+  for (const workspace of ['overview', 'agents', 'models', 'paths']) $(workspace + '-workspace').hidden = workspace !== name;
   document.querySelectorAll('[data-workspace]').forEach((item) => {
     if (item.dataset.workspace === name) item.setAttribute('aria-current', 'page'); else item.removeAttribute('aria-current');
   });
@@ -422,7 +463,7 @@ function resetSelections() {
   state.focus = { kind: 'all' }; state.routeKey = null; state.skillSelection = null;
   state.explore = { skillName: null, interval: null };
   for (const key of Object.keys(state.pages)) state.pages[key] = 0;
-  for (const id of ['skill-search', 'model-search', 'route-search', 'catalog-search', 'route-model']) $(id).value = '';
+  for (const id of ['skill-search', 'model-search', 'agent-search', 'route-search', 'catalog-search', 'route-model']) $(id).value = '';
 }
 function applyTimePreset() {
   const preset = $('time-preset').value;
@@ -459,7 +500,7 @@ async function loadDashboard() {
     if (!payload.report || !Array.isArray(payload.report.skillGroups) || !Array.isArray(payload.report.routes)) throw new Error('The dashboard report is unavailable.');
     state.report = payload.report;
     resetSelections();
-    renderScope(); renderOverview(); renderModels(); renderPaths();
+    renderScope(); renderOverview(); renderAgents(); renderModels(); renderPaths();
     $('message-panel').hidden = true; $('dashboard-content').hidden = false;
     setStatus('ready', 'Ready');
   } catch (error) {
@@ -474,8 +515,9 @@ async function loadDashboard() {
 }
 function renderFilterOptions(options) {
   if (!options) return;
+  const rank = (host) => { const index = hostOrder.indexOf(host); return index === -1 ? hostOrder.length : index; };
+  setOptions($('host-filter'), 'All agent hosts', [...(options.hosts || [])].sort((left, right) => rank(left) - rank(right) || left.localeCompare(right)).map((value) => ({ value, label: hostLabel(value) })));
   for (const [id, label, values] of [
-    ['host-filter', 'All agent hosts', options.hosts || []],
     ['machine-filter', 'All machines', options.machines], ['project-filter', 'All projects', options.projects],
     ['model-provider-filter', 'All providers', options.modelProviders], ['model-id-filter', 'All models', options.modelIds],
   ]) setOptions($(id), label, values.map((value) => ({ value, label: value })));
@@ -485,7 +527,7 @@ function renderScope() {
   const parts = [];
   if (scope.fromObservedAt || scope.toObservedAt) parts.push((scope.fromObservedAt || 'First record') + ' to ' + (scope.toObservedAt || 'Latest record') + ' · UTC');
   if (scope.projectCwd) parts.push('Project: ' + scope.projectCwd);
-  if (scope.host) parts.push('Agent host: ' + scope.host);
+  if (scope.host) parts.push('Agent host: ' + hostLabel(scope.host));
   if (scope.machineId) parts.push('Machine: ' + scope.machineId);
   if (scope.source) parts.push((commandLabels[scope.source] || scope.source) + ' requests');
   if (scope.modelProvider) parts.push('Model provider: ' + scope.modelProvider);
@@ -655,6 +697,36 @@ function skillColor(name) {
   }
   return skillColors.get(name);
 }
+const chartWidth = 600; const chartHeight = 240;
+function chartAxis(activity) {
+  const hourly = activity.binWidthMs < 86400000;
+  const axis = node('div', null, 'chart-axis');
+  axis.append(node('span', date(activity.startAt, hourly)), node('span', date(hourly ? activity.endAt : new Date(Date.parse(activity.endAt) - 1).toISOString(), hourly)));
+  return axis;
+}
+function drawScale(scale, svg, maximum) {
+  const ticks = [...new Set([maximum, Math.floor(maximum / 2), 0])];
+  scale.replaceChildren(...ticks.map(value => {
+    const tick = node('span', number(value));
+    tick.style.top = (1 - value / maximum) * 100 + '%';
+    tick.style.transform = value === maximum ? '' : value === 0 ? 'translateY(-100%)' : 'translateY(-50%)';
+    return tick;
+  }));
+  for (const value of ticks) {
+    const y = chartHeight - value / maximum * chartHeight;
+    svg.append(svgNode('line', { x1: 0, x2: chartWidth, y1: y, y2: y, class: 'gridline' }));
+  }
+}
+function stepPath(activity, lower, upper, maximum) {
+  const start = Date.parse(activity.startAt); const duration = Date.parse(activity.endAt) - start;
+  const x = at => Math.max(0, Math.min(chartWidth, (Date.parse(at) - start) / duration * chartWidth));
+  const y = value => chartHeight - value / maximum * chartHeight;
+  const edge = values => activity.bins.flatMap((bin, index) => [[x(bin.startAt), y(values[index])], [x(bin.endAt), y(values[index])]]);
+  return [...edge(upper), ...edge(lower).reverse()].map((point, index) => (index ? 'L ' : 'M ') + point.join(' ')).join(' ') + ' Z';
+}
+function cursorOffset(activity, bin) {
+  return ((Date.parse(bin.startAt) + Date.parse(bin.endAt)) / 2 - Date.parse(activity.startAt)) / (Date.parse(activity.endAt) - Date.parse(activity.startAt)) * 100 + '%';
+}
 function buildStack(activity, names) {
   const counts = activity.bins.map(bin => new Map(bin.skills.map(skill => [skill.name, skill.successfulReads])));
   let totals = activity.bins.map(() => 0);
@@ -727,9 +799,8 @@ function renderActivity() {
     const svg = svgNode('svg', { role: 'img', 'aria-labelledby': 'activity-title activity-description', class: 'activity-svg', preserveAspectRatio: 'none' });
     const cursor = node('div', null, 'trend-cursor');
     plot.append(svg, cursor);
-    const axis = node('div', null, 'chart-axis'); axis.append(node('span', date(activity.startAt, activity.binWidthMs < 86400000)), node('span', date(activity.binWidthMs < 86400000 ? activity.endAt : new Date(Date.parse(activity.endAt) - 1).toISOString(), activity.binWidthMs < 86400000)));
     const scale = node('div', null, 'trend-scale');
-    layout.append(scale, plot, axis);
+    layout.append(scale, plot, chartAxis(activity));
     const noTrends = empty('Select skills to show their reads.'); target.append(noTrends);
     const readout = node('p', null, 'trend-readout'); const rangeReadout = node('p', null, 'brush-range');
     const announcement = node('p', null, 'sr-only'); announcement.setAttribute('role', 'status'); announcement.setAttribute('aria-live', 'polite');
@@ -740,7 +811,7 @@ function renderActivity() {
     let shown = []; let inspected = activity.bins.length - 1;
     function inspect(index, announce = false) {
       inspected = index; const bin = activity.bins[index];
-      cursor.style.left = ((Date.parse(bin.startAt) + Date.parse(bin.endAt)) / 2 - Date.parse(activity.startAt)) / (Date.parse(activity.endAt) - Date.parse(activity.startAt)) * 100 + '%';
+      cursor.style.left = cursorOffset(activity, bin);
       readout.textContent = intervalLabel(bin.startAt, bin.endAt) + ' · ' + count(shown.reduce((total, name) => total + (binSkills[index].get(name) || 0), 0), 'selected skill read');
       labels.querySelectorAll('.trend-label').forEach((label, row) => {
         const reads = binSkills[index].get(shown[row]) || 0;
@@ -776,32 +847,15 @@ function renderActivity() {
       if (JSON.stringify(names) !== JSON.stringify(shown) || !svg.firstChild) {
         shown = names; labels.replaceChildren(); svg.replaceChildren();
         const stack = buildStack(activity, names);
-        const height = 240; const width = 600;
-        svg.setAttribute('viewBox', '0 0 ' + width + ' ' + height);
+        svg.setAttribute('viewBox', '0 0 ' + chartWidth + ' ' + chartHeight);
         const title = svgNode('title', { id: 'activity-title' }); title.textContent = 'Successful skill reads';
         const description = svgNode('desc', { id: 'activity-description' }); description.textContent = 'Stacked areas show successful reads for selected skills in each UTC interval. Repeated reads count separately. Exact counts follow in the data table.';
         svg.append(title, description);
-        const ticks = [...new Set([stack.maximum, Math.floor(stack.maximum / 2), 0])];
-        scale.replaceChildren(...ticks.map(value => {
-          const tick = node('span', number(value));
-          tick.style.top = (1 - value / stack.maximum) * 100 + '%';
-          tick.style.transform = value === stack.maximum ? '' : value === 0 ? 'translateY(-100%)' : 'translateY(-50%)';
-          return tick;
-        }));
-        for (const value of ticks) {
-          const y = height - value / stack.maximum * height;
-          svg.append(svgNode('line', { x1: 0, x2: width, y1: y, y2: y, class: 'gridline' }));
-        }
-        const start = Date.parse(activity.startAt); const duration = Date.parse(activity.endAt) - start;
-        const x = at => Math.max(0, Math.min(width, (Date.parse(at) - start) / duration * width));
-        const y = value => height - value / stack.maximum * height;
+        drawScale(scale, svg, stack.maximum);
         for (const layer of stack.layers) {
           const color = skillColor(layer.name); const label = button('', () => selectExploreSkill(layer.name), 'trend-label');
           label.dataset.skill = layer.name; label.style.setProperty('--skill-color', color); label.append(node('span', layer.name), node('small')); labels.append(label);
-          const upper = activity.bins.flatMap((bin, index) => [[x(bin.startAt), y(layer.upper[index])], [x(bin.endAt), y(layer.upper[index])]]);
-          const lower = activity.bins.flatMap((bin, index) => [[x(bin.startAt), y(layer.lower[index])], [x(bin.endAt), y(layer.lower[index])]]).reverse();
-          const path = [...upper, ...lower].map((point, index) => (index ? 'L ' : 'M ') + point.join(' ')).join(' ') + ' Z';
-          svg.append(svgNode('path', { d: path, fill: color, class: 'trend-area', 'data-skill': layer.name }));
+          svg.append(svgNode('path', { d: stepPath(activity, layer.lower, layer.upper, stack.maximum), fill: color, class: 'trend-area', 'data-skill': layer.name }));
         }
         if (details.open) renderData();
         else scroll.replaceChildren();
@@ -1120,11 +1174,159 @@ function renderSkillDetail() {
   const variants = group.skillKeys.map((key) => state.report.skills.find((entry) => entry.key === key)).filter(Boolean);
   for (const variant of pageItems(variants, 'identities', 8)) {
     const item = node('div', null, 'identity-item'); item.dataset.machine = variant.identity.machineId;
-    item.append(node('p', 'Agent host: ' + variant.identity.host + ' · Machine: ' + variant.identity.machineId), node('p', variant.identity.kind === 'resolved' ? variant.identity.canonicalPath : 'Skill name not linked to a file'), node('p', countsText(variant.counts)), node('p', variant.cataloged ? 'In recorded catalog' : 'Not in recorded catalog'));
+    item.append(node('p', 'Agent host: ' + hostLabel(variant.identity.host) + ' · Machine: ' + variant.identity.machineId), node('p', variant.identity.kind === 'resolved' ? variant.identity.canonicalPath : 'Skill name not linked to a file'), node('p', countsText(variant.counts)), node('p', variant.cataloged ? 'In recorded catalog' : 'Not in recorded catalog'));
     identities.append(item);
   }
   identities.append(pagination('identities', variants.length, 8, renderSkillDetail));
   target.append(disclosure('Files and requests · ' + count(variants.length, 'entry', 'entries'), identities));
+}
+const useTotal = (uses) => uses.reads + uses.invocations + uses.attempts;
+const isUse = (evidence) => evidence.kind === 'read-attempt' || ((evidence.kind === 'read-result' || evidence.kind === 'skill-invocation') && evidence.outcome === 'success');
+const noUses = { uses: { reads: 0, invocations: 0, attempts: 0, failures: 0 }, sessions: 0 };
+function useParts(uses) {
+  return [[uses.reads, 'read'], [uses.invocations, 'native invocation'], [uses.attempts, 'unconfirmed read attempt']].filter(([value]) => value > 0).map(([value, label]) => count(value, label));
+}
+function hostSwatch(host) {
+  const swatch = node('span', null, 'agent-swatch'); swatch.style.setProperty('--host-color', hostColor(host)); swatch.setAttribute('aria-hidden', 'true');
+  return swatch;
+}
+function showAgent(host) {
+  $('host-filter').value = host;
+  for (const id of ['project-filter', 'model-provider-filter', 'model-id-filter']) $(id).value = '';
+  loadDashboard().then(() => {
+    const target = host ? $('show-all-agents') : $('agent-summary-heading');
+    if (!target || $('agents-workspace').hidden) return;
+    target.tabIndex = host ? 0 : -1; target.focus();
+  });
+}
+function renderAgents() {
+  const present = state.report.agents.hosts.length > 0;
+  $('agent-activity-panel').hidden = !present; $('agent-skills-panel').hidden = !present;
+  renderAgentSummary(); renderAgentActivity(); renderAgentMatrix();
+}
+function renderAgentSummary() {
+  const hosts = state.report.agents.hosts; const filtered = Boolean(state.report.scope.host);
+  $('agent-summary-actions').replaceChildren();
+  if (filtered) { const all = button('Show all agents', () => showAgent('')); all.id = 'show-all-agents'; $('agent-summary-actions').append(all); }
+  const max = Math.max(1, ...hosts.map((entry) => useTotal(entry.uses)));
+  const list = node('ul', null, 'agent-list');
+  for (const entry of hosts) {
+    const total = useTotal(entry.uses);
+    const row = node('li', null, 'agent-row'); row.dataset.host = entry.host; row.style.setProperty('--host-color', hostColor(entry.host));
+    const name = node('div', null, 'agent-name'); name.append(hostSwatch(entry.host), node('strong', hostLabel(entry.host)));
+    const uses = node('div', null, 'agent-uses'); const figure = node('p', null, 'agent-total');
+    figure.append(node('strong', number(total)), node('span', total === 1 ? 'skill use' : 'skill uses'));
+    const track = node('div', null, 'rank-track'); const fill = node('div', null, 'rank-fill'); fill.style.width = total / max * 100 + '%'; track.append(fill);
+    uses.append(figure, track, node('p', [...useParts(entry.uses), ...(entry.uses.failures ? [count(entry.uses.failures, 'failure')] : [])].join(' · '), 'small'));
+    const facts = node('div', null, 'agent-facts');
+    facts.append(node('span', count(entry.sessions, 'session')), node('span', count(entry.skills, 'skill')), node('span', entry.lastUseAt ? 'Last use: ' + date(entry.lastUseAt) : 'No dated skill use'));
+    row.append(name, uses, facts);
+    if (!filtered && hosts.length > 1) {
+      const action = button('Show only this agent', () => showAgent(entry.host)); action.setAttribute('aria-label', 'Show only this agent: ' + hostLabel(entry.host)); row.append(action);
+    }
+    list.append(row);
+  }
+  $('agent-summary').replaceChildren(hosts.length ? list : empty(noResults('skill uses')));
+}
+function renderAgentActivity() {
+  const target = $('agent-activity'); target.replaceChildren();
+  const activity = state.report.activity;
+  const hosts = state.report.agents.hosts.filter((entry) => useTotal(entry.uses) > 0).map((entry) => entry.host);
+  const bins = activity.kind === 'bucketed' ? activity.bins : [];
+  const series = hosts.map((host) => bins.map((bin) => bin.agents.find((entry) => entry.host === host)?.uses || 0));
+  const totals = bins.map((_, index) => series.reduce((sum, values) => sum + values[index], 0));
+  if (!totals.some(Boolean)) { target.append(empty(noResults('dated skill uses'))); return; }
+  const maximum = Math.max(1, ...totals);
+  const layout = node('div', null, 'trend-layout'); const scale = node('div', null, 'trend-scale'); const plot = node('div', null, 'trend-plot');
+  const svg = svgNode('svg', { role: 'img', 'aria-labelledby': 'agent-activity-title agent-activity-description', class: 'activity-svg agent-svg', viewBox: '0 0 ' + chartWidth + ' ' + chartHeight, preserveAspectRatio: 'none' });
+  const title = svgNode('title', { id: 'agent-activity-title' }); title.textContent = 'Skill use over time by agent';
+  const description = svgNode('desc', { id: 'agent-activity-description' }); description.textContent = 'Stacked areas show the skill uses of each agent in each UTC interval. Exact counts follow in the data table.';
+  svg.append(title, description); drawScale(scale, svg, maximum);
+  const labels = node('div', null, 'trend-labels');
+  let lower = bins.map(() => 0);
+  hosts.forEach((host, row) => {
+    const upper = lower.map((value, index) => value + series[row][index]);
+    svg.append(svgNode('path', { d: stepPath(activity, lower, upper, maximum), fill: hostColor(host), class: 'trend-area', 'data-host': host }));
+    const label = node('div', null, 'trend-label'); label.dataset.host = host; label.style.setProperty('--skill-color', hostColor(host));
+    label.append(node('span', hostLabel(host)), node('small')); labels.append(label);
+    lower = upper;
+  });
+  const cursor = node('div', null, 'trend-cursor'); plot.append(svg, cursor); layout.append(scale, plot, chartAxis(activity));
+  plot.tabIndex = 0; plot.setAttribute('role', 'group');
+  plot.setAttribute('aria-label', 'Skill use over time by agent. Use the Left and Right arrow keys to inspect intervals.');
+  const readout = node('p', null, 'trend-readout');
+  const announcement = node('p', null, 'sr-only'); announcement.setAttribute('role', 'status'); announcement.setAttribute('aria-live', 'polite');
+  let inspected = totals.findLastIndex(Boolean);
+  function inspect(index, announce = false) {
+    inspected = index; const bin = bins[index];
+    cursor.style.left = cursorOffset(activity, bin);
+    readout.textContent = intervalLabel(bin.startAt, bin.endAt) + ' · ' + count(totals[index], 'skill use');
+    labels.querySelectorAll('small').forEach((value, row) => { value.textContent = count(series[row][index], 'skill use'); });
+    if (announce) announcement.textContent = readout.textContent + '. ' + hosts.map((host, row) => hostLabel(host) + ': ' + count(series[row][index], 'skill use')).join('. ') + '.';
+  }
+  plot.addEventListener('pointermove', (event) => {
+    const box = plot.getBoundingClientRect(); const start = Date.parse(activity.startAt);
+    const at = start + Math.max(0, Math.min(1, (event.clientX - box.left) / box.width)) * (Date.parse(activity.endAt) - start);
+    inspect(Math.max(0, Math.min(bins.length - 1, Math.floor((at - start) / activity.binWidthMs))));
+  });
+  plot.addEventListener('keydown', (event) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    inspect(event.key === 'Home' ? 0 : event.key === 'End' ? bins.length - 1 : Math.max(0, Math.min(bins.length - 1, inspected + (event.key === 'ArrowLeft' ? -1 : 1))), true);
+  });
+  const scroll = node('div', null, 'table-wrap'); const details = disclosure('View activity data', scroll);
+  function renderData() {
+    const data = table(['UTC interval', ...hosts.map(hostLabel), 'Total'], 'Skill uses by agent in each UTC interval.'); data.className = 'activity-data';
+    pageItems(bins, 'agentActivity', 24).forEach((bin, offset) => {
+      const index = state.pages.agentActivity * 24 + offset;
+      const row = node('tr'); const interval = node('th', intervalLabel(bin.startAt, bin.endAt)); interval.scope = 'row';
+      row.append(interval, ...series.map((values) => node('td', number(values[index]))), node('td', number(totals[index])));
+      data.lastChild.append(row);
+    });
+    scroll.replaceChildren(data, pagination('agentActivity', bins.length, 24, renderData));
+  }
+  details.addEventListener('toggle', () => { if (details.open) renderData(); });
+  target.append(node('p', 'Skill uses per interval · Reads, native invocations, and read attempts', 'small muted'), layout, labels, readout, announcement, details);
+  inspect(inspected);
+}
+function shareText(value) { return value === null ? '—' : value === 0 ? '0%' : value < 0.005 ? '<1%' : value < 1 && value >= 0.995 ? '>99%' : Math.round(value * 100) + '%'; }
+function agentSkillName(name) { return name.slice(name.lastIndexOf(':') + 1) || name; }
+function renderAgentMatrix() {
+  const { hosts, skills } = state.report.agents; const share = $('agent-measure').value === 'share';
+  const query = $('agent-search').value.toLowerCase();
+  const rows = skills.filter((row) => row.name.toLowerCase().includes(query));
+  const cellFor = (row, host) => row.cells.find((cell) => cell.host === host.host) || noUses;
+  const measure = (cell, host) => share ? (host.sessions ? cell.sessions / host.sessions : null) : useTotal(cell.uses);
+  const max = Math.max(0, ...rows.flatMap((row) => hosts.map((host) => measure(cellFor(row, host), host) || 0))) || 1;
+  const matrix = table(['Skill', ...hosts.map((host) => hostLabel(host.host))], share ? 'Agent share by skill' : 'Skill uses by skill and agent'); matrix.className = 'matrix';
+  matrix.querySelectorAll('thead th').forEach((header, index) => {
+    if (index) header.replaceChildren(hostSwatch(hosts[index - 1].host), node('span', hostLabel(hosts[index - 1].host)), node('small', count(hosts[index - 1].sessions, 'session')));
+  });
+  let unconfirmed = false;
+  for (const row of pageItems(rows, 'agentSkills', 12)) {
+    const line = node('tr'); const label = node('th', row.name); label.scope = 'row'; line.append(label);
+    for (const host of hosts) {
+      const cell = cellFor(row, host); const value = measure(cell, host); const item = node('td');
+      const attemptsOnly = cell.uses.attempts > 0 && cell.uses.reads === 0 && cell.uses.invocations === 0; unconfirmed ||= attemptsOnly;
+      const text = (share ? shareText(value) : number(value)) + (attemptsOnly ? '*' : '');
+      const heat = 'heat-' + (value ? Math.max(1, Math.ceil(value / max * 4)) : 0);
+      if (!value) item.append(node('span', text, heat));
+      else {
+        const action = button(text, () => showAgentSkill(host.host, row.name), heat);
+        action.setAttribute('aria-label', row.name + ', ' + hostLabel(host.host) + ': ' + (share ? shareText(value) + ' of agent sessions' : count(value, 'skill use')) + '. ' + useParts(cell.uses).join(', ') + '.');
+        item.append(action);
+      }
+      line.append(item);
+    }
+    matrix.lastChild.append(line);
+  }
+  $('agent-matrix').replaceChildren(rows.length ? matrix : empty(noResults(query ? 'skills' : 'skill uses', query)));
+  $('agent-pagination').replaceChildren(pagination('agentSkills', rows.length, 12, renderAgentMatrix));
+  $('agent-unconfirmed-note').hidden = !unconfirmed;
+}
+function showAgentSkill(host, name) {
+  state.focus = { kind: 'agent-skill', host, name }; state.pages.routes = 0; state.routeKey = null;
+  $('route-search').value = ''; $('route-model').value = ''; renderPaths(); showWorkspace('paths', true);
 }
 function selectRelationship(relationship) {
   state.focus = { kind: 'relationship', relationship, evidenceIndex: 0 }; state.pages.routes = 0; state.pages.evidence = 0;
@@ -1137,11 +1339,14 @@ function matchingRoutes() {
   if (state.focus.kind === 'skill') keys = new Set(report.skillGroups.find((group) => group.name === state.focus.name)?.routeKeys || []);
   if (state.focus.kind === 'relationship') keys = new Set(state.focus.relationship.evidence.map((entry) => entry.routeKey));
   if (state.focus.kind === 'explore') keys = new Set(explorationSnapshot(state.explore.interval, state.explore.skillName).paths.map((entry) => entry.route.key));
+  if (state.focus.kind === 'agent-skill') keys = new Set(report.routes.filter((route) => (route.scope.host ?? 'unknown') === state.focus.host
+    && route.steps.some((step) => step.kind === 'observations' && step.items.some((item) => isUse(item.evidence) && agentSkillName(item.evidence.skill.name) === state.focus.name))).map((route) => route.key));
   const query = $('route-search').value.toLowerCase(); const modelIndex = $('route-model').value; const model = modelIndex === '' ? undefined : report.models[Number(modelIndex)]?.model;
   return report.routes.filter((route) => {
     if (keys && !keys.has(route.key)) return false;
     if (model !== undefined && !route.steps.some((step) => step.kind === 'observations' && step.items.some((item) => item.evidence.kind === 'read-result' && sameModel(item.evidence.model, model)
       && (state.focus.kind !== 'skill' || skillName(item.skillKey) === state.focus.name)
+      && (state.focus.kind !== 'agent-skill' || agentSkillName(skillName(item.skillKey)) === state.focus.name)
       && (state.focus.kind !== 'explore' || (item.evidence.outcome === 'success' && inInterval(item.observedAt, state.explore.interval)
         && (state.explore.skillName === null || item.evidence.skill.name === state.explore.skillName)))))) return false;
     return !query || route.scope.projectCwd.toLowerCase().includes(query) || route.steps.some((step) => step.kind === 'observations' && step.items.some((item) => skillName(item.skillKey).toLowerCase().includes(query)));
@@ -1149,7 +1354,7 @@ function matchingRoutes() {
 }
 function renderPaths() {
   const routes = matchingRoutes();
-  const label = state.focus.kind === 'skill' ? 'Paths containing ' + state.focus.name : state.focus.kind === 'relationship' ? 'Paths with this pattern' : state.focus.kind === 'explore' ? 'Paths in exploration' : 'All session paths';
+  const label = state.focus.kind === 'skill' ? 'Paths containing ' + state.focus.name : state.focus.kind === 'agent-skill' ? 'Paths containing ' + state.focus.name + ' in ' + hostLabel(state.focus.host) : state.focus.kind === 'relationship' ? 'Paths with this pattern' : state.focus.kind === 'explore' ? 'Paths in exploration' : 'All session paths';
   $('path-focus-label').textContent = label;
   $('back-to-explorer').hidden = state.focus.kind !== 'explore';
   $('route-count').textContent = count(routes.length, 'path');
@@ -1191,7 +1396,7 @@ function renderRouteDetail(route) {
   const heading = node('div', null, 'section-heading'); const title = node('div'); title.append(node('h2', project(route.scope.projectCwd))); heading.append(title, node('span', date(route.firstEvidenceAt) + ' UTC', 'small muted')); target.append(heading);
   target.append(node('p', countsText(route.counts), 'small'));
   const scope = node('dl');
-  for (const [label, value] of Object.entries(route.scope)) scope.append(node('dt', sessionLabels[label] || label), node('dd', value ?? 'Unknown'));
+  for (const [label, value] of Object.entries(route.scope)) scope.append(node('dt', sessionLabels[label] || label), node('dd', label === 'host' ? hostLabel(value) : value ?? 'Unknown'));
   target.append(disclosure('Session details', scope));
   let highlighted = [];
   if (state.focus.kind === 'relationship') {
@@ -1247,8 +1452,9 @@ $('time-preset').addEventListener('change', () => {
   loadDashboard();
 });
 for (const id of ['from-filter', 'to-filter']) $(id).addEventListener('change', () => { $('time-preset').value = 'custom'; });
-for (const [id, key, render] of [['skill-search', 'skills', renderRanks], ['model-search', 'models', renderModels], ['catalog-search', 'catalog', renderCatalog], ['route-search', 'routes', renderPaths]]) $(id).addEventListener('input', () => { state.pages[key] = 0; if (state.report) render(); });
+for (const [id, key, render] of [['skill-search', 'skills', renderRanks], ['model-search', 'models', renderModels], ['agent-search', 'agentSkills', renderAgentMatrix], ['catalog-search', 'catalog', renderCatalog], ['route-search', 'routes', renderPaths]]) $(id).addEventListener('input', () => { state.pages[key] = 0; if (state.report) render(); });
 $('model-measure').addEventListener('change', () => { if (state.report) renderModels(); });
+$('agent-measure').addEventListener('change', () => { state.pages.agentSkills = 0; if (state.report) renderAgentMatrix(); });
 $('route-model').addEventListener('change', () => { state.pages.routes = 0; state.routeKey = null; renderPaths(); });
 $('browse-paths').addEventListener('click', () => showWorkspace('paths', true));
 $('view-explorer').addEventListener('click', () => { $('explorer-panel').focus(); $('explorer-panel').scrollIntoView({ block: 'nearest' }); });
