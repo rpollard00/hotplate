@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Observation, SourceId } from "./domain.js";
-import { parseObservation, parseSourceId, serializeObservation, validateObservationMetadata } from "./observation.js";
+import { isResourceEvidence, parseObservation, parseSourceId, serializeObservation, validateObservationMetadata } from "./observation.js";
 
 export const MAX_ENVELOPE_BYTES = 1024 * 1024;
 export const MAX_OBSERVATIONS = 100;
@@ -9,13 +9,14 @@ const ENVELOPE_OVERHEAD_BYTES = 1024;
 export const MAX_PAYLOAD_BYTES = MAX_ENVELOPE_BYTES - ENVELOPE_OVERHEAD_BYTES;
 
 export function encodeEnvelope(sourceId: SourceId, observations: readonly Observation[]): string {
-  return `{"version":${observations.some(item => item.host !== undefined) ? 2 : 1},"sourceId":${JSON.stringify(sourceId)},"observations":[${observations.map(serializeObservation).join(",")}]}`;
+  const version = observations.some(item => isResourceEvidence(item.evidence)) ? 3 : observations.some(item => item.host !== undefined) ? 2 : 1;
+  return `{"version":${version},"sourceId":${JSON.stringify(sourceId)},"observations":[${observations.map(serializeObservation).join(",")}]}`;
 }
 
 export function parseEnvelope(value: unknown): { sourceId: SourceId; observations: readonly Observation[] } {
   const envelope = record(value);
   exactKeys(envelope, ["version", "sourceId", "observations"]);
-  if ((envelope.version !== 1 && envelope.version !== 2) || !Array.isArray(envelope.observations)
+  if ((envelope.version !== 1 && envelope.version !== 2 && envelope.version !== 3) || !Array.isArray(envelope.observations)
     || envelope.observations.length < 1 || envelope.observations.length > MAX_OBSERVATIONS) throw new Error("Invalid envelope");
   const sourceId = parseSourceId(envelope.sourceId);
   const ids = new Set<string>();
@@ -23,6 +24,7 @@ export function parseEnvelope(value: unknown): { sourceId: SourceId; observation
     const parsed = parseObservation(raw);
     validateObservationMetadata(raw, parsed);
     if (envelope.version === 1 && parsed.host !== undefined) throw new Error("Host metadata requires protocol version 2");
+    if (envelope.version !== 3 && isResourceEvidence(parsed.evidence)) throw new Error("Resource metadata requires protocol version 3");
     if (ids.has(parsed.id)) throw new Error("Repeated observation identity");
     ids.add(parsed.id);
     return parsed;

@@ -37,7 +37,7 @@ test("schema v3 upgrade preserves legacy payload bytes and accepts mixed outbox 
     await original.close();
     const old = new DatabaseSync(databasePath);
     const payload = old.prepare("SELECT payload FROM delivery_outbox").get()?.payload;
-    old.exec("DROP INDEX observations_scope_idx; DROP INDEX observations_skill_idx; DROP INDEX observations_model_idx; ALTER TABLE observations DROP COLUMN host");
+    old.exec("DROP TABLE resource_events; DROP TABLE resource_locations; DROP INDEX observations_scope_idx; DROP INDEX observations_skill_idx; DROP INDEX observations_model_idx; ALTER TABLE observations DROP COLUMN host");
     old.exec("ALTER TABLE catalog_skills RENAME TO catalog_new");
     old.exec("CREATE TABLE catalog_skills (machine_id TEXT NOT NULL, source_id TEXT NOT NULL, project_cwd TEXT NOT NULL, skill_name TEXT NOT NULL, skill_path TEXT NOT NULL, skill_version TEXT, first_observed_at TEXT NOT NULL, last_observed_at TEXT NOT NULL, PRIMARY KEY(machine_id, source_id, project_cwd, skill_name, skill_path)) STRICT; DROP TABLE catalog_new; DROP TABLE native_receipts; PRAGMA user_version = 3");
     old.close();

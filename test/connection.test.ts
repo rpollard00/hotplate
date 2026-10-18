@@ -249,6 +249,8 @@ test("v2 migration is additive and registry capacity excludes exact retries", as
   await store.close();
   let db = new DatabaseSync(f.configuration.databasePath);
   db.exec(`
+    DROP TABLE resource_events;
+    DROP TABLE resource_locations;
     DROP TABLE registered_sources;
     DROP TABLE native_receipts;
     DROP INDEX observations_scope_idx;
@@ -294,11 +296,26 @@ test("v2 migration is additive and registry capacity excludes exact retries", as
 
 async function sdkSession(t: TestContext) {
   const sdk = await createFixture();
-  const previous = process.env.HOTPLATE_DB;
-  process.env.HOTPLATE_DB = sdk.databasePath;
+  const isolatedEnv: NodeJS.ProcessEnv = {
+    HOTPLATE_DB: sdk.databasePath,
+    HOME: sdk.rootDir,
+    CODEX_HOME: join(sdk.rootDir, ".codex"),
+    XDG_CONFIG_HOME: join(sdk.rootDir, ".config"),
+    HOTPLATE_RESOURCE_ROOTS: "",
+    HOTPLATE_RESOURCES_CONFIG: undefined,
+    HOTPLATE_PROCESS_REGISTRY: join(sdk.rootDir, "process-registry"),
+  };
+  const previous = Object.fromEntries(Object.keys(isolatedEnv).map(key => [key, process.env[key]]));
+  for (const [key, value] of Object.entries(isolatedEnv)) {
+    if (value === undefined) delete process.env[key]; else process.env[key] = value;
+  }
   let session: Awaited<ReturnType<typeof createSessionFromLocalPackage>>;
   try { session = await createSessionFromLocalPackage(sdk); }
-  finally { if (previous === undefined) delete process.env.HOTPLATE_DB; else process.env.HOTPLATE_DB = previous; }
+  finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
   const notifications: string[] = [];
   const statuses = new Map<string, string>();
   await session.bindExtensions({ uiContext: { ...session.extensionRunner.getUIContext(), notify: text => { notifications.push(text); },
@@ -465,6 +482,11 @@ test("managed authorization pauses, outage backs off, disconnect aborts hanging 
   await sdk.session.prompt(`/hotplate connect ${f.origin}`);
   assert.equal(sdk.statuses.has("hotplate-connection"), false);
   const account = readAccountConfiguration({ path: join(bundlePath(sdk.root, f.origin), "account.json") });
+  await until(() => scalar(account.databasePath, "SELECT COUNT(*) AS value FROM delivery_outbox") === 0);
+  const captured = new DatabaseSync(account.databasePath, { readOnly: true });
+  try {
+    assert.deepEqual(captured.prepare("SELECT canonical_path FROM resource_locations").all().map(row => row.canonical_path), [sdk.skillPath]);
+  } finally { captured.close(); }
   f.setMode("slow-ack");
   const beforeLoad = f.ingestRequests;
   const loadStarted = performance.now();
@@ -472,6 +494,7 @@ test("managed authorization pauses, outage backs off, disconnect aborts hanging 
   const manual = runRelay({ configuration: account, signal: abort.signal });
   t.after(async () => { abort.abort(); await manual; });
   for (let i = 0; i < 250; i++) await sdk.session.extensionRunner.emitInput("/skill:integration-skill", undefined, "interactive");
+  await until(() => scalar(f.configuration.databasePath, "SELECT COUNT(*) AS value FROM observations WHERE evidence_kind = 'command-intent'") === 250);
   await until(() => scalar(account.databasePath, "SELECT COUNT(*) AS value FROM delivery_outbox") === 0);
   assert.equal(scalar(f.configuration.databasePath, "SELECT COUNT(*) AS value FROM observations WHERE evidence_kind = 'command-intent'"), 250);
   assert.ok(f.duplicates > 0, "automatic and manual relays must overlap real deliveries");

@@ -1,3 +1,5 @@
+import type { ResourceEvidence, ResourceView, ResourceCoverageView } from "./resource-domain.js";
+
 export type HostId = "pi" | "codex" | "claude-code" | "opencode-v1" | "opencode-v2" | "unknown";
 export type NativeHostId = Exclude<HostId, "pi" | "unknown">;
 
@@ -33,6 +35,7 @@ export type GapReason =
 export type InvocationSkillRef = { name: string; canonicalPath: string | null; version: string | null };
 
 export type Evidence =
+  | ResourceEvidence
   | { kind: "read-attempt"; skill: SkillRef; toolCallId: string; model: ModelRef }
   | { kind: "skill-invocation"; skill: InvocationSkillRef; toolCallId: string; outcome: "success" | "error"; model: ModelRef }
   | {
@@ -246,6 +249,8 @@ export interface HotplateStore {
   queryModelMatrix(filter: DashboardFilter): Promise<ModelMatrixView>;
   querySkillChain(filter: ChainFilter): Promise<SkillChainView>;
   queryCaptureHealth(filter: DashboardFilter): Promise<CaptureHealthView>;
+  queryResources(filter: DashboardFilter): Promise<ResourceView>;
+  queryResourceCoverage(filter: DashboardFilter): Promise<ResourceCoverageView>;
 
   close(): Promise<void>;
 }

@@ -31,6 +31,11 @@ export type {
 } from "./domain.js";
 
 export { parseMachineId, parseSourceId, parseCollectorOrigin } from "./observation.js";
+export type {
+  ProcessIdentity, ResourceLocation, ResourceEvidence, ResourceAccessEvidence,
+  InventorySnapshotEvidence, ObserverCoverageEvidence, ResourceRow, ResourceView,
+  ResourceCoverageRow, ResourceCoverageView,
+} from "./resource-domain.js";
 
 export {
   openHotplateReadStore,

@@ -9,6 +9,8 @@ import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import { DatabaseSync } from "node:sqlite";
+import { createResourceSchema, recordResourceObservation, queryResources, queryResourceCoverage } from "./resource-store.js";
+import type { ResourceView, ResourceCoverageView } from "./resource-domain.js";
 import type {
   HostId,
   CaptureEnrollment,
@@ -38,7 +40,7 @@ import type {
   SkillTableView,
 } from "./domain.js";
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 export const MAX_DYNAMIC_SOURCES = 10_000;
 export const ENROLLMENTS_PER_MINUTE = 30;
 const DEFAULT_BUSY_TIMEOUT_MS = 25;
@@ -463,6 +465,16 @@ class SqliteHotplateStore implements HotplateStore {
     };
   }
 
+  async queryResources(filter: DashboardFilter): Promise<ResourceView> {
+    assertOpen(this.#closed);
+    return queryResources(this.#db, filter);
+  }
+
+  async queryResourceCoverage(filter: DashboardFilter): Promise<ResourceCoverageView> {
+    assertOpen(this.#closed);
+    return queryResourceCoverage(this.#db, filter);
+  }
+
   async close(): Promise<void> {
     if (this.#closed) {
       return;
@@ -514,6 +526,7 @@ function insertObservation(db: DatabaseSync, source: SourceIdentity | typeof LOC
   ) VALUES (${Array(28).fill("?").join(",")}) ON CONFLICT(machine_id, source_id, id) DO NOTHING`)
     .run(observation.host ?? "unknown", source.machineId, source.sourceId, digest, ...flattenObservation(observation).values);
   if (numberValue(result.changes) === 0) return false;
+  recordResourceObservation(db, source, observation);
   if (observation.evidence.kind === "catalog-snapshot") {
     const upsert = db.prepare(`INSERT INTO catalog_skills (
       host, machine_id, source_id, project_cwd, skill_name, skill_path, skill_version, first_observed_at, last_observed_at
@@ -834,7 +847,13 @@ function flattenObservation(observation: Observation): FlattenedObservation {
         ],
       };
     case "catalog-snapshot":
+    case "inventory-snapshot":
+    case "observer-coverage":
       return { values: [...base, null, null, null, null, null, null, null, null, null, null, null] };
+    case "resource-access":
+      return { values: [...base, null, null, null, null, null, observation.evidence.operationId,
+        observation.evidence.outcome === "unknown" ? null : observation.evidence.outcome,
+        observation.evidence.model?.provider ?? null, observation.evidence.model?.id ?? null, null, null] };
     case "capture-gap":
       return { values: [...base, null, null, null, null, null, null, null, null, null, observation.evidence.dropped, observation.evidence.reason] };
     default: {
@@ -937,18 +956,32 @@ function migrate(db: DatabaseSync, busyRetries: number): void {
       source_id TEXT PRIMARY KEY, machine_id TEXT NOT NULL, token_digest TEXT NOT NULL UNIQUE
     ) STRICT;
     `);
-    const schema = requireString(db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'observations'").get()?.sql, "observation schema");
+    if (version < 4) {
+      const schema = requireString(db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'observations'").get()?.sql, "observation schema");
+      db.exec("ALTER TABLE observations RENAME TO observations_previous");
+      db.exec(schema.replace("'read-result',", "'read-result', 'read-attempt', 'skill-invocation',"));
+      db.exec("ALTER TABLE observations ADD COLUMN host TEXT NOT NULL DEFAULT 'unknown'; INSERT INTO observations SELECT *, 'unknown' FROM observations_previous; DROP TABLE observations_previous");
+      db.exec("CREATE UNIQUE INDEX aggregate_sequence_idx ON observations(machine_id, source_id, producer_id, sequence) WHERE digest IS NOT NULL");
+      db.exec(`CREATE INDEX observations_time_idx ON observations(observed_at);
+        CREATE INDEX observations_scope_idx ON observations(host, machine_id, source_id, project_cwd, session_id, segment_id, run_id, observed_at);
+        CREATE INDEX observations_skill_idx ON observations(host, machine_id, source_id, skill_name, skill_path, evidence_kind);
+        CREATE INDEX observations_model_idx ON observations(host, machine_id, model_provider, model_id, evidence_kind);
+        CREATE INDEX observations_source_idx ON observations(source, evidence_kind);`);
+      db.exec("ALTER TABLE catalog_skills RENAME TO catalog_previous");
+      db.exec(`CREATE TABLE catalog_skills (host TEXT NOT NULL, machine_id TEXT NOT NULL, source_id TEXT NOT NULL, project_cwd TEXT NOT NULL, skill_name TEXT NOT NULL, skill_path TEXT NOT NULL, skill_version TEXT, first_observed_at TEXT NOT NULL, last_observed_at TEXT NOT NULL, PRIMARY KEY(host, machine_id, source_id, project_cwd, skill_name, skill_path)) STRICT; INSERT INTO catalog_skills SELECT 'unknown', * FROM catalog_previous; DROP TABLE catalog_previous; CREATE TABLE native_receipts (id TEXT PRIMARY KEY, digest TEXT NOT NULL) STRICT;`);
+    }
+    const resourceSchema = requireString(db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'observations'").get()?.sql, "observation schema");
     db.exec("ALTER TABLE observations RENAME TO observations_previous");
-    db.exec(schema.replace("'read-result',", "'read-result', 'read-attempt', 'skill-invocation',"));
-    db.exec("ALTER TABLE observations ADD COLUMN host TEXT NOT NULL DEFAULT 'unknown'; INSERT INTO observations SELECT *, 'unknown' FROM observations_previous; DROP TABLE observations_previous");
-    db.exec("CREATE UNIQUE INDEX aggregate_sequence_idx ON observations(machine_id, source_id, producer_id, sequence) WHERE digest IS NOT NULL");
-    db.exec(`CREATE INDEX observations_time_idx ON observations(observed_at);
+    db.exec(resourceSchema.replace("'read-result',", "'read-result', 'resource-access', 'inventory-snapshot', 'observer-coverage',"));
+    db.exec(`INSERT INTO observations SELECT * FROM observations_previous; DROP TABLE observations_previous;
+      CREATE UNIQUE INDEX aggregate_sequence_idx ON observations(machine_id, source_id, producer_id, sequence) WHERE digest IS NOT NULL;
+      CREATE INDEX observations_time_idx ON observations(observed_at);
       CREATE INDEX observations_scope_idx ON observations(host, machine_id, source_id, project_cwd, session_id, segment_id, run_id, observed_at);
       CREATE INDEX observations_skill_idx ON observations(host, machine_id, source_id, skill_name, skill_path, evidence_kind);
       CREATE INDEX observations_model_idx ON observations(host, machine_id, model_provider, model_id, evidence_kind);
       CREATE INDEX observations_source_idx ON observations(source, evidence_kind);`);
-    db.exec("ALTER TABLE catalog_skills RENAME TO catalog_previous");
-    db.exec(`CREATE TABLE catalog_skills (host TEXT NOT NULL, machine_id TEXT NOT NULL, source_id TEXT NOT NULL, project_cwd TEXT NOT NULL, skill_name TEXT NOT NULL, skill_path TEXT NOT NULL, skill_version TEXT, first_observed_at TEXT NOT NULL, last_observed_at TEXT NOT NULL, PRIMARY KEY(host, machine_id, source_id, project_cwd, skill_name, skill_path)) STRICT; INSERT INTO catalog_skills SELECT 'unknown', * FROM catalog_previous; DROP TABLE catalog_previous; CREATE TABLE native_receipts (id TEXT PRIMARY KEY, digest TEXT NOT NULL) STRICT; PRAGMA user_version = ${SCHEMA_VERSION}; COMMIT;`);
+    createResourceSchema(db);
+    db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}; COMMIT;`);
   } catch (error) {
     rollbackBestEffort(db);
     throw error;

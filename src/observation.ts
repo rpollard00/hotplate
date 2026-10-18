@@ -1,4 +1,6 @@
 import type { HostId, CaptureEnrollment, CollectorOrigin, Evidence, GapReason, InputSource, MachineId, ModelRef, Observation, SegmentReason, SkillRef, SourceId, SourceIdentity } from "./domain.js";
+import { posix, win32 } from "node:path";
+import type { ResourceEvidence, ResourceLocation } from "./resource-domain.js";
 
 export const LOCAL_MACHINE_ID = parseMachineId("local");
 export const LOCAL_SOURCE_ID = "local";
@@ -70,8 +72,34 @@ function copyEvidence(evidence: Evidence): Evidence {
     };
     case "catalog-snapshot": return { kind: evidence.kind, skills: Array.from(evidence.skills, copySkill) };
     case "capture-gap": return { kind: evidence.kind, dropped: evidence.dropped, reason: evidence.reason };
+    case "resource-access": return {
+      kind: evidence.kind, resource: copyResource(evidence.resource), operationId: evidence.operationId,
+      mechanism: evidence.mechanism, access: evidence.access, outcome: evidence.outcome,
+      model: evidence.model === null ? null : { provider: evidence.model.provider, id: evidence.model.id },
+      process: evidence.process === null ? null : { bootId: evidence.process.bootId, pid: evidence.process.pid, startTicks: evidence.process.startTicks },
+      attribution: evidence.attribution,
+    };
+    case "inventory-snapshot": {
+      const base = { kind: evidence.kind, scanId: evidence.scanId, filesystemId: evidence.filesystemId, rootPath: evidence.rootPath, origin: evidence.origin, scope: evidence.scope };
+      switch (evidence.phase) {
+        case "started": return { ...base, phase: evidence.phase, resources: [], error: null };
+        case "batch": return { ...base, phase: evidence.phase, resources: Array.from(evidence.resources, copyResource), batchIndex: evidence.batchIndex, error: null };
+        case "complete": return { ...base, phase: evidence.phase, resources: [], batchCount: evidence.batchCount, error: null };
+        case "incomplete": return { ...base, phase: evidence.phase, resources: [], batchCount: evidence.batchCount, error: evidence.error };
+        default: { const exhaustive: never = evidence; return exhaustive; }
+      }
+    }
+    case "observer-coverage": {
+      const base = { kind: evidence.kind, observerId: evidence.observerId, mechanism: evidence.mechanism, filesystemId: evidence.filesystemId, rootPaths: Array.from(evidence.rootPaths), heartbeatMs: evidence.heartbeatMs };
+      return evidence.reason === null ? { ...base, status: evidence.status, reason: null }
+        : { ...base, status: evidence.status, reason: evidence.reason };
+    }
     default: { const exhaustive: never = evidence; return exhaustive; }
   }
+}
+
+function copyResource(resource: ResourceLocation): ResourceLocation {
+  return { filesystemId: resource.filesystemId, canonicalPath: resource.canonicalPath, observedPath: resource.observedPath, rootPath: resource.rootPath, kind: resource.kind, ownerSkillPath: resource.ownerSkillPath };
 }
 
 function copyObservation(observation: Observation): Observation {
@@ -111,8 +139,67 @@ function isEvidence(value: unknown): boolean {
     case "read-result": return isSkillRef(value.skill) && isNonEmptyString(value.toolCallId) && (value.outcome === "success" || value.outcome === "error") && isModelRef(value.model);
     case "catalog-snapshot": return Array.isArray(value.skills) && Array.prototype.every.call(value.skills, isSkillRef);
     case "capture-gap": return typeof value.dropped === "number" && Number.isSafeInteger(value.dropped) && value.dropped >= 0 && isGapReason(value.reason);
+    case "resource-access":
+    case "inventory-snapshot":
+    case "observer-coverage": return isResourceEvidence(value);
     default: return false;
   }
+}
+
+export function isResourceEvidence(value: unknown): value is ResourceEvidence {
+  if (!isRecord(value)) return false;
+  switch (value.kind) {
+    case "resource-access":
+      return isResourceLocation(value.resource) && metadataString(value.operationId)
+        && ((value.mechanism === "fanotify" && (value.access === "open" || value.access === "access") && value.outcome === "unknown")
+          || (value.mechanism === "host-tool" && ((value.access === "attempt" && value.outcome === "unknown")
+            || (value.access === "read" && (value.outcome === "success" || value.outcome === "error")))))
+        && isModelRef(value.model) && (value.process === null || (isRecord(value.process)
+          && metadataString(value.process.bootId) && typeof value.process.pid === "number" && Number.isSafeInteger(value.process.pid) && value.process.pid > 0
+          && typeof value.process.startTicks === "string" && /^\d{1,30}$/.test(value.process.startTicks)))
+        && (value.attribution === "session" || value.attribution === "harness" || value.attribution === "non-agent" || value.attribution === "unknown");
+    case "inventory-snapshot": {
+      if (!metadataString(value.scanId) || !metadataString(value.filesystemId) || !absolutePath(value.rootPath)
+        || (value.origin !== "configured" && value.origin !== "conventional" && value.origin !== "host")
+        || (value.scope !== "account" && value.scope !== "project" && value.scope !== "session" && value.scope !== "unassigned")
+        || !Array.isArray(value.resources) || value.resources.length > 2000) return false;
+      switch (value.phase) {
+        case "started": return value.error === null && value.resources.length === 0;
+        case "batch": return value.error === null && nonnegativeInteger(value.batchIndex)
+          && Array.from(value.resources).every(item => isResourceLocation(item) && item.filesystemId === value.filesystemId && item.rootPath === value.rootPath);
+        case "complete": return value.error === null && value.resources.length === 0 && nonnegativeInteger(value.batchCount);
+        case "incomplete": return value.resources.length === 0 && nonnegativeInteger(value.batchCount)
+          && (value.error === "unreadable" || value.error === "missing" || value.error === "limit" || value.error === "cancelled" || value.error === "io-error");
+        default: return false;
+      }
+    }
+    case "observer-coverage":
+      return metadataString(value.observerId) && metadataString(value.filesystemId)
+        && (value.mechanism === "host-tool" || value.mechanism === "fanotify")
+        && Array.isArray(value.rootPaths) && value.rootPaths.length > 0 && value.rootPaths.length <= 2000 && Array.from(value.rootPaths).every(absolutePath)
+        && typeof value.heartbeatMs === "number" && Number.isSafeInteger(value.heartbeatMs) && value.heartbeatMs >= 100 && value.heartbeatMs <= 300_000
+        && (((value.status === "active" || value.status === "stopped") && value.reason === null)
+          || ((value.status === "unavailable" || value.status === "overflow")
+            && (value.reason === "permission-denied" || value.reason === "unsupported" || value.reason === "helper-unavailable"
+              || value.reason === "queue-overflow" || value.reason === "process-exited" || value.reason === "io-error")));
+    default: return false;
+  }
+}
+
+function isResourceLocation(value: unknown): value is ResourceLocation {
+  return isRecord(value) && metadataString(value.filesystemId) && absolutePath(value.canonicalPath)
+    && absolutePath(value.observedPath) && absolutePath(value.rootPath)
+    && (value.ownerSkillPath === null || absolutePath(value.ownerSkillPath))
+    && (value.kind === "skill" || value.kind === "principle" || value.kind === "reference" || value.kind === "script" || value.kind === "file");
+}
+function metadataString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && Buffer.byteLength(value) <= 8192 && !/[\u0000-\u001f\u007f]/.test(value);
+}
+function absolutePath(value: unknown): value is string {
+  return metadataString(value) && (posix.isAbsolute(value) ? posix.normalize(value) === value : win32.isAbsolute(value) && win32.normalize(value) === value);
+}
+function nonnegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 function isSkillRef(value: unknown): value is SkillRef {
   return isRecord(value) && isNonEmptyString(value.name) && isNonEmptyString(value.canonicalPath) && isNullableString(value.version);
