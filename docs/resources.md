@@ -29,7 +29,21 @@ Scans record filenames and metadata, including incomplete scans. They do not cou
 
 ## Observe filesystem access on Linux
 
-Build the optional native helper with a C compiler:
+From this checkout, activate a watcher for your account:
+
+```sh
+scripts/activate-watcher /absolute/path/to/skills
+```
+
+The script requires Node 24.19 or newer, installed project dependencies, a C compiler, `sudo`, `setcap`, and a systemd user session. Run it as your normal user. Optional root arguments are relative to your current directory and are saved in your resource configuration.
+
+The script builds Hotplate and the helper. Only helper installation and capability assignment use `sudo`. The installed helper is root-owned at `/usr/local/libexec/hotplate/<uid>/hotplate-fanotify`. Node, the database, and `hotplate-resources.service` run under your account. Each activation restarts the service to load the updated helper.
+
+The service retains the current account selection and resource overrides, including `HOTPLATE_CONFIG`, `HOTPLATE_DB`, and `HOTPLATE_INTEGRATION_SETTINGS`. Path overrides must be absolute. The script refuses disabled capture or an unrelated service with the same name. Its final output includes service and coverage state. Active fanotify coverage confirms observation. A running service alone does not.
+
+For service errors, use `journalctl --user -u hotplate-resources.service`. Rerun `hotplate resources status` after the initial inventory finishes. To stop collection, use `systemctl --user disable --now hotplate-resources.service`.
+
+For a foreground watcher, build the optional native helper with a C compiler:
 
 ```sh
 npm run build

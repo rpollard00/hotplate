@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+fail() { printf '%s\n' "$*" >&2; exit 1; }
+if [[ ${1:-} == --help ]]; then
+  printf '%s\n' 'Usage: scripts/activate-watcher [ROOT ...]' 'Build and activate the Linux filesystem watcher for the current account.' 'Optional roots are saved in the existing resource configuration. Run without sudo.'
+  exit 0
+fi
+[[ $(uname -s) == Linux && $(id -u) != 0 ]] || fail 'Run as the capturing Linux user, without sudo.'
+[[ ${HOTPLATE_DISABLED:-} != 1 && ${HOTPLATE_DISABLED:-} != true ]] || fail 'Unset HOTPLATE_DISABLED before activation.'
+for tool in node npm "${CC:-cc}" sudo install setcap getcap systemctl realpath mktemp; do
+  command -v "$tool" >/dev/null || fail "Required command missing: $tool"
+done
+systemctl --user show-environment >/dev/null || fail 'A systemd user manager is required. Start a normal login session and retry.'
+repo=$(dirname -- "$(dirname -- "$(realpath -e -- "${BASH_SOURCE[0]}")")")
+node=$(realpath -e -- "$(command -v node)")
+roots=()
+for root in "$@"; do
+  [[ $root != --* && -d $root && -r $root && -x $root ]] || fail "Root must be a readable directory: $root"
+  roots+=("$(realpath -e -- "$root")")
+done
+service=hotplate-resources.service
+unit=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$service
+marker='# Managed by Hotplate activate-watcher; resources service v1'
+if [[ -e $unit || -L $unit ]]; then
+  [[ -f $unit && ! -L $unit && $(head -n 1 -- "$unit") == "$marker" ]] || fail "An unrelated $service exists. Preserve or rename it before activation."
+fi
+helper_directory=/usr/local/libexec/hotplate/$(id -u)
+helper=$helper_directory/hotplate-fanotify
+body=$("$node" --input-type=module - "$repo" "$helper" "$marker" <<'JS'
+import { isAbsolute } from 'node:path';
+const [repo, helper, marker] = process.argv.slice(2);
+const [major, minor] = process.versions.node.split('.').map(Number);
+if (major < 24 || (major === 24 && minor < 19)) throw new Error('Node 24.19 or newer is required.');
+const paths = ['HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'XDG_CACHE_HOME', 'CODEX_HOME', 'HOTPLATE_CONFIG', 'HOTPLATE_DB', 'HOTPLATE_INTEGRATION_SETTINGS', 'HOTPLATE_RESOURCES_CONFIG', 'HOTPLATE_RESOURCE_REGISTRY', 'HOTPLATE_PROCESS_REGISTRY'];
+for (const name of paths) if (process.env[name] !== undefined && !isAbsolute(process.env[name])) throw new Error(`${name} must be an absolute path. Set an absolute path and retry.`);
+if (process.env.HOTPLATE_RESOURCE_ROOTS?.split(':').some(path => path && !isAbsolute(path))) throw new Error('HOTPLATE_RESOURCE_ROOTS requires absolute paths.');
+const quote = (value, dollars = false) => {
+  if (/[\u0000-\u001f\u007f]/u.test(value)) throw new Error('Service paths and environment values cannot contain control characters.');
+  const escaped = value.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('%', '%%');
+  return '"' + (dollars ? escaped.replaceAll('$', () => '$$') : escaped) + '"';
+};
+const environment = [...paths, 'HOTPLATE_RESOURCE_ROOTS', 'HOTPLATE_FILESYSTEM_ID', 'HOTPLATE_DISABLED'].map(name =>
+  process.env[name] === undefined ? `UnsetEnvironment=${name}` : `Environment=${quote(`${name}=${process.env[name]}`)}`).join('\n');
+process.stdout.write(`${marker}
+[Unit]
+Description=Hotplate resource inventory and filesystem observer
+
+[Service]
+Type=simple
+WorkingDirectory=%h
+ExecStart=${[process.execPath, `${repo}/dist/src/cli.js`, 'resources', 'watch', '--project', process.env.HOME, '--helper', helper].map((value, index) => quote(value, index > 0)).join(' ')}
+${environment}
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target
+`);
+JS
+)
+trap 'printf "%s\n" "Activation stopped. Inspect the error above; use journalctl --user -u $service for service errors." >&2' ERR
+temporary=
+trap '[[ -z $temporary ]] || rm -f -- "$temporary"' EXIT
+cd -- "$repo"
+npm run build
+npm run build:observer
+"$node" "$repo/dist/src/cli.js" resources status >/dev/null
+sudo install -d -o root -g root -m 0755 /usr/local/libexec/hotplate "$helper_directory"
+sudo install -o root -g "$(id -g)" -m 0750 -- "$repo/native/hotplate-fanotify" "$helper"
+sudo setcap cap_sys_admin=ep "$helper"
+getcap "$helper"
+for root in "${roots[@]}"; do "$node" "$repo/dist/src/cli.js" resources add-root "$root"; done
+mkdir -p -- "$(dirname -- "$unit")"
+temporary=$(mktemp "$unit.XXXXXX")
+printf '%s\n' "$body" > "$temporary"
+mv -- "$temporary" "$unit"
+temporary=
+systemctl --user daemon-reload
+systemctl --user enable "$unit"
+systemctl --user restart "$service"
+systemctl --user show "$service" --property=ActiveState,SubState,MainPID,ExecMainStatus --no-pager
+"$node" "$repo/dist/src/cli.js" resources status
+printf '%s\n' 'Service restarted. Inventory can finish before filesystem observation starts.' 'Check resources status for active fanotify coverage. A running service alone does not confirm coverage.' "Inspect service errors with: journalctl --user -u $service"
