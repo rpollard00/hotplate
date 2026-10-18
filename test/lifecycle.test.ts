@@ -37,7 +37,7 @@ function input(collector: HotplateCollector, ctx: ReturnType<typeof context>) {
 
 test("overflow preserves the full loss count through shutdown", async () => {
   await fixture(async (path, ctx) => {
-    const collector = new HotplateCollector({ openStore: () => openHotplateStore({ databasePath: path }) });
+    const collector = new HotplateCollector({ env: { HOME: ctx.cwd }, openStore: () => openHotplateStore({ databasePath: path }) });
     await collector.sessionStart({ type: "session_start", reason: "startup" }, ctx, () => []);
     for (let i = 0; i < 3_500; i++) input(collector, ctx);
     await collector.shutdown("quit", ctx);
@@ -54,7 +54,7 @@ test("an input at flush finalization drains before shutdown", async () => {
     const record = store.record.bind(store);
     let scheduled = false;
     let closed: Promise<void> | undefined;
-    const collector = new HotplateCollector({ openStore: () => store });
+    const collector = new HotplateCollector({ env: { HOME: ctx.cwd }, openStore: () => store });
     store.record = (observations, options) => {
       const result = record(observations, options);
       if (!scheduled) {
@@ -76,7 +76,7 @@ test("an input at flush finalization drains before shutdown", async () => {
 
 test("shutdown awaits the active SQLite retry before closing", async () => {
   await fixture(async (path, ctx) => {
-    const collector = new HotplateCollector({ openStore: () => openHotplateStore({ databasePath: path }) });
+    const collector = new HotplateCollector({ env: { HOME: ctx.cwd }, openStore: () => openHotplateStore({ databasePath: path }) });
     await collector.sessionStart({ type: "session_start", reason: "startup" }, ctx, () => []);
     const lock = new DatabaseSync(path);
     lock.exec("BEGIN IMMEDIATE");
@@ -93,7 +93,7 @@ test("shutdown awaits the active SQLite retry before closing", async () => {
 
 test("default lock contention is bounded and gaps survive a later session", async t => {
   await fixture(async (path, ctx) => {
-    const collector = new HotplateCollector({ openStore: () => openHotplateStore({ databasePath: path }) });
+    const collector = new HotplateCollector({ env: { HOME: ctx.cwd }, openStore: () => openHotplateStore({ databasePath: path }) });
     await collector.sessionStart({ type: "session_start", reason: "startup" }, ctx, () => []);
     const lock = new DatabaseSync(path);
     lock.exec("BEGIN IMMEDIATE");
@@ -130,7 +130,7 @@ test("store writes honor cancellation between lock retries", async () => {
 test("database startup failure is visible and never escapes a pi handler", async () => {
   await fixture(async (path, ctx) => {
     let unavailable = true;
-    const collector = new HotplateCollector({ openStore: () => {
+    const collector = new HotplateCollector({ env: { HOME: ctx.cwd }, openStore: () => {
       if (unavailable) throw new Error("private database failure detail");
       return openHotplateStore({ databasePath: path });
     } });
@@ -147,7 +147,7 @@ test("database startup failure is visible and never escapes a pi handler", async
 
 test("run, branch and session boundaries do not attach later intent to a previous run", async () => {
   await fixture(async (path, ctx) => {
-    const collector = new HotplateCollector({ openStore: () => openHotplateStore({ databasePath: path }) });
+    const collector = new HotplateCollector({ env: { HOME: ctx.cwd }, openStore: () => openHotplateStore({ databasePath: path }) });
     await collector.sessionStart({ type: "session_start", reason: "startup" }, ctx, () => []);
     collector.beforeAgentStart("start", ctx);
     collector.messageEnd({ type: "message_end", message: { role: "user", content: '<skill name="alpha" location="/skills/alpha/SKILL.md">\nx\n</skill>', timestamp: Date.now() } });
@@ -170,7 +170,7 @@ test("run, branch and session boundaries do not attach later intent to a previou
 
 test("model attribution follows each assistant call and repeated reads stay separate", async () => {
   await fixture(async (path, ctx) => {
-    const collector = new HotplateCollector({ openStore: () => openHotplateStore({ databasePath: path }) });
+    const collector = new HotplateCollector({ env: { HOME: ctx.cwd }, openStore: () => openHotplateStore({ databasePath: path }) });
     await collector.sessionStart({ type: "session_start", reason: "startup" }, ctx, () => []);
     collector.beforeAgentStart("run", ctx);
     for (const index of [0, 1]) {

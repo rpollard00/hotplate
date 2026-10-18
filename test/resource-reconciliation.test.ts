@@ -1,0 +1,38 @@
+import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import type { InventorySnapshotEvidence } from "../src/resource-domain.js";
+import { discoverResourceRoots } from "../src/resource-paths.js";
+import { createResourceReconciler } from "../src/resource-reconciliation.js";
+
+test("continuous inventory persists changes and failure transitions without repeating unchanged file lists", async t => {
+  const directory = mkdtempSync(join(tmpdir(), "hotplate-reconcile-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const root = join(directory, "content");
+  mkdirSync(root);
+  writeFileSync(join(root, "one.md"), "one");
+  const roots = discoverResourceRoots({ cwd: directory, roots: [root], env: { HOME: directory } });
+  const events: InventorySnapshotEvidence[] = [];
+  const reconciler = createResourceReconciler(async event => { events.push(event); });
+  const signal = new AbortController().signal;
+  await reconciler.scan(roots, signal);
+  assert.equal(events.filter(event => event.phase === "complete").length, 1);
+  const first = events.length;
+  await reconciler.scan(roots, signal);
+  assert.equal(events.length, first);
+  writeFileSync(join(root, "two.md"), "two");
+  await reconciler.scan(roots, signal);
+  assert.equal(events.filter(event => event.phase === "complete").length, 2);
+  rmSync(root, { recursive: true });
+  await reconciler.scan(roots, signal);
+  assert.equal(events.at(-1)?.phase, "incomplete");
+  const failed = events.length;
+  await reconciler.scan(roots, signal);
+  assert.equal(events.length, failed);
+  mkdirSync(root);
+  writeFileSync(join(root, "two.md"), "two");
+  await reconciler.scan(roots, signal);
+  assert.equal(events.at(-1)?.phase, "complete");
+});

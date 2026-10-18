@@ -1,18 +1,23 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { openHotplateStore } from "../dist/src/store.js";
+import { DatabaseSync } from "node:sqlite";
+import { setTimeout as delay } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 
 const host = process.argv[2];
-if (host !== "codex" && host !== "claude-code") throw new Error("Usage: node scripts/native-host-smoke.mjs codex|claude-code");
+if (host !== "codex" && host !== "claude-code") throw new Error("Usage: node scripts/native-host-smoke.mjs codex|claude-code [build-directory]");
+const build = resolve(process.argv[3] ?? "dist");
+const { openHotplateStore } = await import(pathToFileURL(join(build, "src/store.js")).href);
 const root = await mkdtemp(join(tmpdir(), `hotplate-${host}-smoke-`));
 const project = join(root, "project");
 const config = join(root, "config");
 const databasePath = join(root, "capture.sqlite");
 const skillPath = host === "codex" ? ".agents/skills/hotplate-probe/SKILL.md" : ".claude/skills/hotplate-probe/SKILL.md";
+const referencePath = join(skillPath, "..", "references", "guide.md");
 const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
 let child;
 let requestCount = 0;
@@ -35,9 +40,9 @@ const server = createServer(async (request, response) => {
     const emit = (type, data) => response.write(`event: ${type}\ndata: ${JSON.stringify({ type, sequence_number: sequence++, ...data })}\n\n`);
     if (host === "codex") {
       const names = input.tools?.map(tool => tool.name) ?? [];
-      const item = requestCount <= 2
+      const item = requestCount <= 3
         ? { type: "function_call", id: `fc_${requestCount}`, call_id: `call_${requestCount}`, name: "exec_command",
-          arguments: JSON.stringify({ cmd: `cat ${join(project, requestCount === 1 ? skillPath : "absent/SKILL.md")}`, workdir: project }) }
+          arguments: JSON.stringify({ cmd: `cat ${join(project, requestCount === 1 ? skillPath : requestCount === 2 ? "absent/SKILL.md" : referencePath)}`, workdir: project }) }
         : { type: "message", id: "msg_done", role: "assistant", status: "completed", content: [{ type: "output_text", text: "Probe done.", annotations: [] }] };
       assert.ok(names.includes("exec_command"));
       const result = { id: `resp_${requestCount}`, object: "response", created_at: 1, status: "in_progress", model: "probe", output: [] };
@@ -47,7 +52,7 @@ const server = createServer(async (request, response) => {
       emit("response.completed", { response: { ...result, status: "completed", output: [item], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } });
     } else {
       const tool = requestCount === 1 ? { name: "Skill", input: { skill: "hotplate-probe" } }
-        : requestCount <= 3 ? { name: "Read", input: { file_path: join(project, requestCount === 2 ? skillPath : "absent/SKILL.md") } } : null;
+        : requestCount <= 4 ? { name: "Read", input: { file_path: join(project, requestCount === 2 ? skillPath : requestCount === 3 ? "absent/SKILL.md" : referencePath) } } : null;
       const message = { id: `msg_${requestCount}`, type: "message", role: "assistant", model: "claude-sonnet-4-6", content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } };
       emit("message_start", { message });
       if (tool) {
@@ -70,17 +75,26 @@ const server = createServer(async (request, response) => {
 
 try {
   await mkdir(config);
-  await mkdir(join(project, skillPath, ".."), { recursive: true });
+  await mkdir(join(project, referencePath, ".."), { recursive: true });
   await writeFile(join(project, skillPath), "---\nname: hotplate-probe\ndescription: Synthetic smoke fixture\n---\nHOTPLATE_SMOKE_CONTENT_CANARY\n");
+  await writeFile(join(project, referencePath), "HOTPLATE_SMOKE_REFERENCE_CANARY\n");
+  await writeFile(join(root, "resources.json"), JSON.stringify({ version: 1, roots: [] }));
   await new Promise(done => server.listen(0, "127.0.0.1", done));
   const origin = `http://127.0.0.1:${server.address().port}`;
-  const hook = `${quote(process.execPath)} ${quote(resolve("dist/src/cli.js"))} capture ${host}`;
+  const hook = `${quote(process.execPath)} ${quote(join(build, "src/cli.js"))} capture ${host}`;
   const events = host === "codex" ? ["PostToolUse"] : ["PostToolUse", "PostToolUseFailure"];
   const hooks = Object.fromEntries(events.map(event => [event, [{ hooks: [{ type: "command", command: hook, timeout: 2 }] }]]));
   await writeFile(join(config, host === "codex" ? "hooks.json" : "settings.json"), JSON.stringify({ hooks }));
-  const env = { ...process.env, HOTPLATE_DB: databasePath };
+  const env = { ...process.env, HOME: join(root, "home"), XDG_CONFIG_HOME: join(root, "xdg-config"), XDG_DATA_HOME: join(root, "data"),
+    XDG_CACHE_HOME: join(root, "cache"), XDG_STATE_HOME: join(root, "state"), XDG_RUNTIME_DIR: join(root, "runtime"),
+    CODEX_HOME: join(root, "codex-home"), CLAUDE_CONFIG_DIR: join(root, "claude-home"), HOTPLATE_DB: databasePath,
+    HOTPLATE_RESOURCES_CONFIG: join(root, "resources.json"), HOTPLATE_PROCESS_REGISTRY: join(root, "process-registry") };
+  await mkdir(env.HOME, { mode: 0o700 });
+  await mkdir(env.XDG_RUNTIME_DIR, { mode: 0o700 });
   delete env.HOTPLATE_CONFIG;
   delete env.HOTPLATE_DISABLED;
+  delete env.HOTPLATE_RESOURCE_ROOTS;
+  delete env.HOTPLATE_FILESYSTEM_ID;
   let args;
   if (host === "codex") {
     await writeFile(join(config, "config.toml"), `model='probe'\nmodel_provider='probe'\n[model_providers.probe]\nname='Probe'\nbase_url='${origin}/v1'\nwire_api='responses'\nrequires_openai_auth=false\n`);
@@ -102,6 +116,8 @@ try {
   assert.equal(exit.code, 0, "Native host did not finish the synthetic provider session");
   const store = openHotplateStore({ databasePath });
   let overview;
+  let resources;
+  let completeInventories = 0;
   try {
     overview = await store.queryOverview({ host });
     assert.ok(requestCount > 0, `No inference requests: ${JSON.stringify(requestPaths)}`);
@@ -114,12 +130,42 @@ try {
       assert.equal(overview.successfulReadCount, 1);
       assert.equal(overview.failedReadCount, 1);
     }
+    const deadline = Date.now() + 5000;
+    do {
+      resources = (await store.queryResources({ host })).rows;
+      const db = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        completeInventories = Number(db.prepare("SELECT count(*) AS count FROM resource_events WHERE json_extract(payload, '$.host') = ? AND json_extract(payload, '$.evidence.phase') = 'complete'").get(host)?.count);
+      } finally { db.close(); }
+      if (completeInventories > 0 && resources.some(row => row.resource.canonicalPath === join(project, referencePath) && row.lastInventoriedAt !== null)) break;
+      await delay(25);
+    } while (Date.now() < deadline);
+    const reference = resources.find(row => row.resource.canonicalPath === join(project, referencePath));
+    const skill = resources.find(row => row.resource.canonicalPath === join(project, skillPath));
+    assert.ok(reference, "The reference read did not produce resource evidence");
+    assert.ok(skill, "The skill read did not produce resource evidence");
+    assert.equal(reference.resource.kind, "reference");
+    assert.equal(host === "codex" ? reference.attemptCount : reference.successfulReadCount, 1);
+    assert.equal(host === "codex" ? skill.attemptCount : skill.successfulReadCount, 1);
+    assert.notEqual(reference.lastInventoriedAt, null, "Reference was not inventoried");
+    assert.notEqual(skill.lastInventoriedAt, null, "Skill was not inventoried");
+    assert.ok(completeInventories > 0, "Session inventory did not complete");
+    assert.ok(resources.every(row => row.resource.canonicalPath.startsWith(`${root}/`)), "Smoke captured a resource outside its temporary directory");
   } finally { await store.close(); }
-  assert.equal((await readFile(databasePath)).includes(Buffer.from("HOTPLATE_SMOKE_CONTENT_CANARY")), false);
-  process.stdout.write(`${JSON.stringify({ host, provider: "deterministic-local", requestCount, elapsedMs: Math.round(performance.now() - started), overview })}\n`);
+  const persistedDb = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    const persisted = JSON.stringify([persistedDb.prepare("SELECT * FROM observations").all(), persistedDb.prepare("SELECT * FROM resource_events").all()]);
+    assert.equal(persisted.includes("HOTPLATE_SMOKE_CONTENT_CANARY"), false);
+    assert.equal(persisted.includes("HOTPLATE_SMOKE_REFERENCE_CANARY"), false);
+  } finally { persistedDb.close(); }
+  process.stdout.write(`${JSON.stringify({ host, provider: "deterministic-local", requestCount, elapsedMs: Math.round(performance.now() - started),
+    legacy: { attempts: overview.readAttemptCount, successfulReads: overview.successfulReadCount, failedReads: overview.failedReadCount, invocations: overview.skillInvocationCount },
+    resources: resources.filter(row => [join(project, skillPath), join(project, referencePath)].includes(row.resource.canonicalPath))
+      .map(row => ({ kind: row.resource.kind, attempts: row.attemptCount, successfulReads: row.successfulReadCount, inventoried: row.lastInventoriedAt !== null })),
+    inventoriedResources: resources.filter(row => row.lastInventoriedAt !== null).length, completeInventories, canaryAbsent: true })}\n`);
 } finally {
-  if (child?.exitCode === null) { try { process.kill(-child.pid, "SIGKILL"); } catch {} }
+  if (child?.pid) { try { process.kill(-child.pid, "SIGKILL"); } catch {} }
   server.closeAllConnections();
   await new Promise(done => server.close(done));
-  await rm(root, { recursive: true, force: true });
+  await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }

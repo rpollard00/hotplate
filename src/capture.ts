@@ -6,12 +6,12 @@ import { openCaptureStore, openHotplateStore, resolveHotplateDatabasePath } from
 
 export type CaptureFact = {
   host: NativeHostId;
-  sessionId: string;
+  sessionId: string | null;
   actorId: string;
   occurrenceId: string;
   observedAt: string;
   scope: ObservationScope;
-  evidence: Extract<Evidence, { kind: "command-intent" | "read-attempt" | "read-result" | "skill-invocation" | "catalog-snapshot" }>;
+  evidence: Extract<Evidence, { kind: "command-intent" | "read-attempt" | "read-result" | "skill-invocation" | "catalog-snapshot" | "resource-access" }>;
 };
 
 export function parseCaptureFact(value: unknown): CaptureFact {
@@ -20,14 +20,15 @@ export function parseCaptureFact(value: unknown): CaptureFact {
     || !("scope" in value) || !("evidence" in value)) throw new Error("Invalid capture metadata");
   const host = value.host;
   if (host !== "codex" && host !== "claude-code" && host !== "opencode-v1" && host !== "opencode-v2") throw new Error("Invalid capture host");
-  for (const id of [value.sessionId, value.actorId, value.occurrenceId]) {
+  for (const id of [value.actorId, value.occurrenceId, ...(value.sessionId === null ? [] : [value.sessionId])]) {
     if (typeof id !== "string" || id.length === 0 || Buffer.byteLength(id) > 8192) throw new Error("Invalid capture identity");
   }
-  if (typeof value.sessionId !== "string" || typeof value.actorId !== "string" || typeof value.occurrenceId !== "string") throw new Error("Invalid capture identity");
+  if ((value.sessionId !== null && typeof value.sessionId !== "string") || typeof value.actorId !== "string" || typeof value.occurrenceId !== "string") throw new Error("Invalid capture identity");
   const observation = parseObservation({ id: "validation", producerId: "validation", sequence: 0, host, observedAt: value.observedAt, scope: value.scope, evidence: value.evidence });
   validateObservationMetadata(observation, observation);
   const evidence = observation.evidence;
-  if (evidence.kind !== "read-attempt" && evidence.kind !== "command-intent" && evidence.kind !== "read-result" && evidence.kind !== "skill-invocation" && evidence.kind !== "catalog-snapshot") throw new Error("Invalid native evidence");
+  if (evidence.kind !== "read-attempt" && evidence.kind !== "command-intent" && evidence.kind !== "read-result" && evidence.kind !== "skill-invocation" && evidence.kind !== "catalog-snapshot" && evidence.kind !== "resource-access") throw new Error("Invalid native evidence");
+  if (value.sessionId === null && evidence.kind !== "resource-access") throw new Error("Invalid native session");
   if (observation.scope.sessionId !== value.sessionId) throw new Error("Invalid capture scope");
   const fact: CaptureFact = { host, sessionId: value.sessionId, actorId: value.actorId, occurrenceId: value.occurrenceId, observedAt: observation.observedAt, scope: observation.scope, evidence };
   if (Buffer.byteLength(JSON.stringify(fact)) > 512 * 1024) throw new Error("Capture metadata too large");
@@ -40,7 +41,9 @@ export async function captureFact(args: { fact: CaptureFact; env?: NodeJS.Proces
   const env = args.env ?? process.env;
   if (env.HOTPLATE_DISABLED === "1" || env.HOTPLATE_DISABLED === "true") return { kind: "disabled" };
   const fact = parseCaptureFact(args.fact);
-  const receipt = createHash("sha256").update(JSON.stringify([fact.host, fact.sessionId, fact.actorId, fact.occurrenceId, fact.evidence.kind])).digest("hex");
+  const identity = [fact.host, fact.sessionId, fact.actorId, fact.occurrenceId, fact.evidence.kind];
+  if (fact.evidence.kind === "resource-access") identity.push(fact.evidence.resource.filesystemId, fact.evidence.resource.canonicalPath, fact.evidence.resource.observedPath);
+  const receipt = createHash("sha256").update(JSON.stringify(identity)).digest("hex");
   const configuration = readNativeAccountConfiguration(env);
   const store = configuration
     ? openCaptureStore(configuration)

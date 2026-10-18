@@ -84,7 +84,7 @@ function mutate(value: Record<string, unknown>, host: NativeHostId, install: boo
       });
       if (remaining.length || group.hooks.length === 0) kept.push({ ...group, hooks: remaining });
     }
-    if (install) kept.push({ matcher: host === "codex" ? "^Bash$" : "^(Read|Skill)$", hooks: [{ type: "command", command: owned, timeout: 2 }] });
+    if (install) kept.push({ matcher: ".*", hooks: [{ type: "command", command: owned, timeout: 2 }] });
     next[event] = kept;
   }
   return { value: { ...value, hooks: next }, installed };
@@ -100,7 +100,7 @@ export function integrationStatus(options: Options) {
   return {
     host: options.host, configurationPath: wrapper?.path ?? location.path, installed, version: version(options),
     jsoncPresent: location.jsonc !== null && existsSync(location.jsonc),
-    coverage: options.host === "codex" ? "absolute literal cat read attempts; shell outcome unavailable" : options.host === "claude-code" ? "Read and Skill success and failure; verified with a deterministic local provider" : "native read and skill completion",
+    coverage: options.host === "codex" ? "literal cat and sed resource attempts; shell outcome unavailable; automatic session inventory" : options.host === "claude-code" ? "Read resource and Skill success and failure; automatic session inventory" : "native resource read and skill completion; automatic session inventory",
     trust: options.host === "codex" ? "Review and trust the installed definition with /hooks before capture can run." : null,
     lastSuccessfulCapture: null,
   };

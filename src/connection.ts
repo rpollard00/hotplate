@@ -167,7 +167,7 @@ export class SessionConnection {
   #newCollector(configuration?: AccountConfiguration): HotplateCollector {
     const store = configuration ? openCaptureStore(configuration)
       : openHotplateStore({ databasePath: resolveHotplateDatabasePath({ env: this.#env }) });
-    return new HotplateCollector({ openStore: () => store });
+    return new HotplateCollector({ openStore: () => store, env: this.#env });
   }
 
   #reconcile(event: SessionStartEvent): Promise<void> {

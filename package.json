@@ -19,6 +19,8 @@
     "docs/",
     "examples/",
     "src/",
+    "native/fanotify.c",
+    "scripts/build-observer.mjs",
     "README.md",
     "package.json"
   ],
@@ -29,6 +31,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:observer": "node scripts/build-observer.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test dist/test/**/*.test.js",
     "check": "npm run typecheck && npm test && npm run test:deploy && npm run test:dashboard-preview",

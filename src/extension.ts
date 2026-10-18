@@ -17,7 +17,7 @@ export default function hotplateExtension(pi: ExtensionAPI): void {
       ctx.ui.notify(JSON.stringify(status), status.failure ? "warning" : "info");
     },
   });
-  if (process.env.HOTPLATE_DISABLED === "1") return;
+  if (process.env.HOTPLATE_DISABLED === "1" || process.env.HOTPLATE_DISABLED === "true") return;
   pi.on("session_start", async (event, ctx) => {
     await connection.close();
     connection = new SessionConnection(() => pi.getCommands(), env);

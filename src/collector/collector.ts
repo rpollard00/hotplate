@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { dirname } from "node:path";
 import { setImmediate as nextTick } from "node:timers/promises";
 import type {
   ExtensionContext, InputEvent, MessageEndEvent, SessionStartEvent, SessionTreeEvent,
@@ -7,6 +8,10 @@ import type {
 import type { Evidence, GapReason, HotplateStore, ModelRef, Observation, ObservationScope, SegmentReason } from "../domain.js";
 import { openHotplateStore } from "../store.js";
 import { buildSkillCatalog, commandIntentSkillName, skillFromReadPath, skillWrappersFromPrompt, type SkillCatalog } from "./skills.js";
+import { discoverResourceRoots, qualifyResource, resourceFilesystemId, type ResourceRoot } from "../resource-paths.js";
+import { publishResourceRoots } from "../resource-root-registry.js";
+import { inventoryResources } from "../resource-inventory.js";
+import { registerHarnessProcess, unregisterHarnessProcess, type ProcessRegistration } from "../process-attribution.js";
 
 const MAX_QUEUE = 1_000;
 const SHUTDOWN_DEADLINE_MS = 500;
@@ -21,12 +26,16 @@ export type HotplateCollectorOptions = {
   openStore?: () => HotplateStore;
   producerId?: string;
   now?: () => Date;
+  env?: NodeJS.ProcessEnv;
 };
 
 export class HotplateCollector {
   readonly #openStore: () => HotplateStore;
   readonly #producerId: string;
   readonly #now: () => Date;
+  readonly #env: NodeJS.ProcessEnv;
+  #roots: readonly ResourceRoot[] = [];
+  #registration: ProcessRegistration | null = null;
   #state: CaptureState = { kind: "inactive" };
   #catalog: SkillCatalog = { byPath: new Map(), skills: [] };
   #queue: Observation[] = [];
@@ -47,6 +56,7 @@ export class HotplateCollector {
     this.#openStore = options.openStore ?? openHotplateStore;
     this.#producerId = options.producerId ?? randomUUID();
     this.#now = options.now ?? (() => new Date());
+    this.#env = options.env ?? process.env;
   }
 
   async sessionStart(event: SessionStartEvent, ctx: CollectorContext, commands: () => readonly SlashCommandInfo[]): Promise<void> {
@@ -58,7 +68,23 @@ export class HotplateCollector {
       this.#state = { kind: "active", store: this.#openStore(), abort: new AbortController() };
       this.#catalog = buildSkillCatalog(commands());
       this.#enqueue({ kind: "catalog-snapshot", skills: this.#catalog.skills });
+      this.#roots = discoverResourceRoots({ cwd: ctx.cwd, env: this.#env, advertisedRoots: this.#catalog.skills.map((skill) => dirname(skill.canonicalPath)) });
+      this.#publishRoots();
+      if (this.#scope.sessionId) this.#registration = registerHarnessProcess({ host: "pi", binding: {
+        kind: "dedicated", sessionId: this.#scope.sessionId, actorId: this.#scope.sessionId, projectCwd: ctx.cwd,
+      }, source: "in-process", env: this.#env });
     });
+    const state = this.#state;
+    if (state.kind === "active") {
+      const scope = { ...this.#scope };
+      try {
+        const result = await inventoryResources({ roots: this.#roots, signal: AbortSignal.timeout(2000), record: async (evidence) => {
+          const summary = await state.store.record(this.#fact(evidence, scope));
+          if (summary.dropped) throw new Error("Inventory capture unavailable.");
+        } });
+        this.#roots = result.roots;
+      } catch { this.#reportFailure(); }
+    }
   }
 
   input(event: InputEvent, _ctx: CollectorContext): void {
@@ -70,6 +96,7 @@ export class HotplateCollector {
 
   beforeAgentStart(_prompt: string, ctx: CollectorContext): void {
     this.#safe(() => {
+      this.#publishRoots();
       this.#toolCallModels.clear();
       this.#scope = { ...this.#scope, runId: randomUUID(), turnId: null, leafId: ctx.sessionManager.getLeafId() ?? null };
     });
@@ -116,6 +143,10 @@ export class HotplateCollector {
       if (event.toolName !== "read" || typeof event.input.path !== "string") return;
       const skill = skillFromReadPath(event.input.path, ctx.cwd, this.#catalog);
       if (skill) this.#enqueue({ kind: "read-result", skill, toolCallId: event.toolCallId, outcome: event.isError ? "error" : "success", model });
+      const resource = qualifyResource({ path: event.input.path, cwd: ctx.cwd, roots: this.#roots });
+      if (resource) this.#enqueue({ kind: "resource-access", resource, operationId: event.toolCallId, mechanism: "host-tool",
+        access: "read", outcome: event.isError ? "error" : "success", model, process: this.#registration?.process ?? null,
+        attribution: this.#scope.sessionId === null ? "harness" : "session" });
     });
   }
 
@@ -143,6 +174,11 @@ export class HotplateCollector {
       try { await state.store.close(); } catch { this.#reportFailure(); }
       this.#state = { kind: "inactive" };
       this.#toolCallModels.clear();
+      if (this.#registration) unregisterHarnessProcess(this.#registration, { env: this.#env });
+      this.#registration = null;
+      for (const origin of ["host", "conventional"] as const) publishResourceRoots({ host: "pi", sessionId: this.#scope.sessionId,
+        filesystemId: resourceFilesystemId(this.#env), roots: [], origin, env: this.#env });
+      this.#roots = [];
     }
   }
 
@@ -159,6 +195,14 @@ export class HotplateCollector {
     this.#sequence += 1;
     return { host: "pi", id: `${this.#producerId}:${this.#sequence}`, producerId: this.#producerId,
       sequence: this.#sequence, observedAt: this.#now().toISOString(), scope: { ...scope }, evidence };
+  }
+
+  #publishRoots(): void {
+    if (this.#state.kind !== "active") return;
+    if (!publishResourceRoots({ host: "pi", sessionId: this.#scope.sessionId, filesystemId: resourceFilesystemId(this.#env),
+      roots: this.#catalog.skills.map((skill) => dirname(skill.canonicalPath)), env: this.#env })) this.#reportFailure();
+    if (!publishResourceRoots({ host: "pi", sessionId: this.#scope.sessionId, filesystemId: resourceFilesystemId(this.#env), origin: "conventional",
+      roots: this.#roots.filter((root) => root.origin === "conventional" && root.scope === "project").map((root) => root.path), env: this.#env })) this.#reportFailure();
   }
 
   #enqueue(evidence: Evidence, scope = this.#scope): void {

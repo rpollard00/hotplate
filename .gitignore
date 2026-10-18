@@ -5,3 +5,4 @@ dist/
 *.sqlite
 *.sqlite-*
 coverage/
+native/hotplate-fanotify
