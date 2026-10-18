@@ -152,3 +152,14 @@ test("an explicit in-process registration resolves a real wrapped reader process
   assert.equal(resolveProcessAttribution(readProcessIdentity(raw.reader), { env }).sessionId, "wrapped-live");
   unregisterHarnessProcess(registration, { env });
 });
+
+test("an explicit process registry remains isolated from account registrations", (t) => {
+  const f = fixture(t);
+  f.put(10, 0, "runtime", "/usr/bin/node", "10", "/tmp/custom-runtime.js");
+  const registration = registerHarnessProcess({ ...f, pid: 10, host: "opencode-v1", binding: { kind: "shared" }, source: "in-process" });
+  assert.ok(registration);
+  const identity = readProcessIdentity(10, f);
+  const account = { HOME: f.root, XDG_STATE_HOME: join(f.root, "account-state") };
+  assert.equal(resolveProcessAttribution(identity, { procRoot: f.procRoot, env: account }).kind, "unknown");
+  assert.equal(resolveProcessAttribution(identity, { procRoot: f.procRoot, env: { ...account, ...f.env, XDG_STATE_HOME: join(f.root, "v1-state") } }).host, "opencode-v1");
+});

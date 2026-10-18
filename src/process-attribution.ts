@@ -129,7 +129,7 @@ function processRegistryDirectory(env: NodeJS.ProcessEnv): string {
     if (!configured.trim()) throw new Error("Invalid process registry directory");
     return resolve(configured);
   }
-  return join(env.XDG_STATE_HOME?.trim() || join(homedir(), ".local/state"), "hotplate/processes");
+  return join(env.HOME || homedir(), ".local", "state", "hotplate", "processes");
 }
 
 function privateRegistry(env: NodeJS.ProcessEnv, create: boolean): string | null {

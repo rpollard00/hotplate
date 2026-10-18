@@ -188,7 +188,7 @@ function resourceConfigurationPath(env: NodeJS.ProcessEnv): string {
     if (!validPathText(override) || !isAbsolute(override)) throw new Error("Invalid Hotplate resource configuration path.");
     return resolve(override);
   }
-  return join(env.XDG_CONFIG_HOME || join(env.HOME || homedir(), ".config"), "hotplate", "resources.json");
+  return join(env.HOME || homedir(), ".config", "hotplate", "resources.json");
 }
 
 function parseConfiguredRoots(value: unknown): readonly string[] {

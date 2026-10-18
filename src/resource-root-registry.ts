@@ -99,8 +99,8 @@ export function readRegisteredRoots(options: { filesystemId: string; env?: NodeJ
 
 function registryDirectory(env: NodeJS.ProcessEnv, create: boolean): string | null {
   try {
-    const path = join(env.XDG_STATE_HOME || join(env.HOME || homedir(), ".local", "state"), "hotplate", "advertised-roots");
-    if (!isAbsolute(path)) return null;
+    const path = env.HOTPLATE_RESOURCE_REGISTRY ?? join(env.HOME || homedir(), ".local", "state", "hotplate", "advertised-roots");
+    if (!identifier(path) || !isAbsolute(path)) return null;
     if (create) mkdirSync(path, { recursive: true, mode: 0o700 });
     const metadata = lstatSync(path);
     return metadata.isDirectory() && privateOwner(metadata) ? path : null;

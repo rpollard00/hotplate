@@ -40,9 +40,9 @@ function fixture(t: { after(fn: () => void): void }) {
 test("resource CLI persists roots, inventories hidden files, and reconciles deletion without reading bodies", async t => {
   const f = fixture(t);
   await f.command(["add-root", f.root]);
-  const config = join(f.directory, "config/hotplate/resources.json");
+  const config = join(f.directory, ".config/hotplate/resources.json");
   assert.equal(statSync(config).mode & 0o777, 0o600);
-  const scan = await f.command(["scan"]);
+  const scan = await f.command(["scan"], { XDG_CONFIG_HOME: join(f.directory, "opencode-v1-config") });
   assert.match(scan, /"fileCount":2/u);
   const listed = await f.command(["list"]);
   assert.ok(listed.includes(".hidden/principle.md"));

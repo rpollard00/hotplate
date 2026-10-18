@@ -85,7 +85,7 @@ test("resource configuration is strict, persistent, and private", (t) => {
   const initial = readResourceConfiguration(env);
   assert.deepEqual(initial.roots, []);
   const saved = saveResourceRoots([join(directory, "skills"), join(directory, "skills", ".")], env);
-  assert.equal(saved.path, join(env.XDG_CONFIG_HOME, "hotplate", "resources.json"));
+  assert.equal(saved.path, join(directory, ".config", "hotplate", "resources.json"));
   assert.deepEqual(readResourceConfiguration(env).roots, [join(directory, "skills")]);
   assert.equal(statSync(saved.path).mode & 0o777, 0o600);
   assert.deepEqual(JSON.parse(readFileSync(saved.path, "utf8")), { version: 1, roots: [join(directory, "skills")] });
@@ -93,4 +93,17 @@ test("resource configuration is strict, persistent, and private", (t) => {
   assert.throws(() => readResourceConfiguration({ HOTPLATE_RESOURCES_CONFIG: join(directory, "absent.json") }), /Invalid Hotplate resource configuration/u);
   writeFileSync(saved.path, JSON.stringify({ version: 1, roots: [], explorer: true }));
   assert.throws(() => discoverResourceRoots({ cwd: directory, env }), /Invalid Hotplate resource configuration/u);
+});
+
+test("explicit resource configuration remains isolated from account roots", (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "hotplate-resource-config-isolated-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const account = { HOME: directory, XDG_CONFIG_HOME: join(directory, "account-xdg") };
+  const isolated = { ...account, HOTPLATE_RESOURCES_CONFIG: join(directory, "isolated", "resources.json"), XDG_CONFIG_HOME: join(directory, "harness-xdg") };
+  const sharedRoot = join(directory, "shared-skills");
+  const isolatedRoot = join(directory, "isolated-skills");
+  saveResourceRoots([sharedRoot], account);
+  assert.equal(saveResourceRoots([isolatedRoot], isolated).path, isolated.HOTPLATE_RESOURCES_CONFIG);
+  assert.deepEqual(readResourceConfiguration(account).roots, [sharedRoot]);
+  assert.deepEqual(readResourceConfiguration(isolated).roots, [isolatedRoot]);
 });

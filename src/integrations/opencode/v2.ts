@@ -70,8 +70,8 @@ export default {
         }
         const advertisedRoots = catalogRoots(skills ?? []);
         if (!publishResourceRoots({ host: "opencode-v2", sessionId: input.sessionID, filesystemId: resourceFilesystemId(), roots: advertisedRoots })) reportOpenCodeUnavailable();
-        const projectRoots = discoverResourceRoots({ cwd: location.directory, advertisedRoots }).filter((root) => root.origin === "conventional" && root.scope === "project");
-        if (!publishResourceRoots({ host: "opencode-v2", sessionId: input.sessionID, filesystemId: resourceFilesystemId(), origin: "conventional", roots: projectRoots.map((root) => root.path) })) reportOpenCodeUnavailable();
+        const conventionalRoots = discoverResourceRoots({ cwd: location.directory, advertisedRoots }).filter((root) => root.origin === "conventional" && (root.scope === "account" || root.scope === "project"));
+        if (!publishResourceRoots({ host: "opencode-v2", sessionId: input.sessionID, filesystemId: resourceFilesystemId(), origin: "conventional", roots: conventionalRoots.map((root) => root.path) })) reportOpenCodeUnavailable();
         const facts = extractOpenCodeV2Facts(event, { projectCwd: location.directory, skills: skills ?? [] });
         await sendOpenCodeFacts(facts, { host: "opencode-v2", sessionId: input.sessionID, cwd: location.directory, advertisedRoots });
       } catch { reportOpenCodeUnavailable(); }

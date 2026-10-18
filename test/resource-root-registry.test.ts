@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { readProcessIdentity } from "../src/process-attribution.js";
-import { discoverResourceRoots } from "../src/resource-paths.js";
+import { parseProcessIdentity, readProcessIdentity, resolveProcessAttribution } from "../src/process-attribution.js";
+import { discoverResourceRoots, saveResourceRoots } from "../src/resource-paths.js";
 import { publishResourceRoots, readRegisteredRoots } from "../src/resource-root-registry.js";
 import { runSessionInventory } from "../src/resource-session.js";
 import { inventoryResources } from "../src/resource-inventory.js";
@@ -16,7 +18,7 @@ import { captureFact } from "../src/capture.js";
 function fixture() {
   const directory = mkdtempSync(join(tmpdir(), "hotplate-root-registry-"));
   const env = { HOME: directory, XDG_STATE_HOME: join(directory, "state"), HOTPLATE_FILESYSTEM_ID: "fixture-namespace", HOTPLATE_DB: join(directory, "capture.sqlite") };
-  const registry = join(env.XDG_STATE_HOME, "hotplate", "advertised-roots");
+  const registry = join(directory, ".local", "state", "hotplate", "advertised-roots");
   const roots = [join(directory, "custom-catalog")];
   for (const path of roots) mkdirSync(path);
   return { directory, env, registry, roots };
@@ -150,4 +152,87 @@ test("disabled capture publishes no catalog or project root state", async (t) =>
   await runSessionInventory({ host: "codex", sessionId: "disabled", cwd: data.directory, advertisedRoots: data.roots }, env);
   assert.equal(existsSync(data.registry), false);
   assert.equal(existsSync(data.env.HOTPLATE_DB), false);
+});
+
+test("an isolated OpenCode v1 environment shares account roots and process identity with the watcher", { skip: process.platform !== "linux", timeout: 10000 }, async (t) => {
+  const data = fixture();
+  const watcherEnv = { ...data.env, XDG_CONFIG_HOME: join(data.directory, "account-config") };
+  const configuredRoot = join(data.directory, "configured-skills");
+  mkdirSync(configuredRoot);
+  saveResourceRoots([configuredRoot], watcherEnv);
+  const publisherEnv = { ...watcherEnv, XDG_CONFIG_HOME: join(data.directory, "opencode-v1-config"), XDG_STATE_HOME: join(data.directory, "opencode-v1-state") };
+  const script = `import { registerHarnessProcess, readProcessIdentity } from ${JSON.stringify(new URL("../src/process-attribution.js", import.meta.url).href)};
+    import { readResourceConfiguration } from ${JSON.stringify(new URL("../src/resource-paths.js", import.meta.url).href)};
+    import { publishResourceRoots } from ${JSON.stringify(new URL("../src/resource-root-registry.js", import.meta.url).href)};
+    import { integrationSettingsPath } from ${JSON.stringify(new URL("../src/integrations/native-settings.js", import.meta.url).href)};
+    const identity = readProcessIdentity(process.pid);
+    const registration = registerHarnessProcess({ host: "opencode-v1", binding: { kind: "shared" }, source: "in-process" });
+    const published = publishResourceRoots({ host: "opencode-v1", sessionId: "v1-session", filesystemId: process.env.HOTPLATE_FILESYSTEM_ID, roots: JSON.parse(process.argv[1]) });
+    process.stdout.write(JSON.stringify({ identity, registration, published, configuration: readResourceConfiguration(), settings: integrationSettingsPath() }) + "\\n");
+    process.stdin.resume();`;
+  const child = spawn(process.execPath, ["--input-type=module", "-e", script, JSON.stringify(data.roots)], { env: publisherEnv, stdio: ["pipe", "pipe", "pipe"] });
+  const closed = once(child, "close");
+  t.after(async () => { child.kill(); await closed; rmSync(data.directory, { recursive: true, force: true }); });
+  const output = await once(child.stdout, "data");
+  const result: unknown = JSON.parse(String(output[0]));
+  assert.ok(result && typeof result === "object" && "identity" in result && "registration" in result && "published" in result && "configuration" in result && "settings" in result);
+  assert.equal(result.published, true);
+  assert.ok(result.registration);
+  const identity = parseProcessIdentity(result.identity);
+  assert.ok(identity);
+  assert.deepEqual(result.configuration, { path: join(data.directory, ".config", "hotplate", "resources.json"), roots: [configuredRoot] });
+  assert.equal(result.settings, join(data.directory, ".config", "hotplate", "integrations.json"));
+  const advertisements = readRegisteredRoots({ filesystemId: data.env.HOTPLATE_FILESYSTEM_ID, env: watcherEnv });
+  assert.equal(advertisements[0]?.host, "opencode-v1");
+  assert.deepEqual(advertisements[0]?.process, identity);
+  assert.deepEqual(advertisements[0]?.roots, data.roots);
+  assert.deepEqual(resolveProcessAttribution(identity, { env: watcherEnv }), { kind: "harness", host: "opencode-v1", sessionId: null, actorId: null, projectCwd: null });
+  const discovered = discoverResourceRoots({ cwd: data.directory, env: watcherEnv });
+  assert.equal(discovered.find(root => root.path === configuredRoot)?.origin, "configured");
+  assert.equal(discovered.find(root => root.path === data.roots[0])?.origin, "host");
+  assert.equal(existsSync(join(publisherEnv.XDG_STATE_HOME, "hotplate")), false);
+  assert.equal(existsSync(join(publisherEnv.XDG_CONFIG_HOME, "hotplate")), false);
+});
+
+test("an explicit advertised-root registry remains isolated across harness environments", (t) => {
+  const data = fixture();
+  t.after(() => rmSync(data.directory, { recursive: true, force: true }));
+  const isolated = { ...data.env, HOTPLATE_RESOURCE_REGISTRY: join(data.directory, "isolated-registry") };
+  assert.equal(publishResourceRoots({ host: "opencode-v1", sessionId: "isolated", filesystemId: data.env.HOTPLATE_FILESYSTEM_ID, roots: data.roots, env: isolated }), true);
+  assert.deepEqual(readRegisteredRoots({ filesystemId: data.env.HOTPLATE_FILESYSTEM_ID, env: data.env }), []);
+  assert.equal(readRegisteredRoots({ filesystemId: data.env.HOTPLATE_FILESYSTEM_ID, env: { ...isolated, XDG_STATE_HOME: join(data.directory, "another-xdg") } }).length, 1);
+  assert.equal(statSync(isolated.HOTPLATE_RESOURCE_REGISTRY).mode & 0o777, 0o700);
+  for (const override of ["", "relative-registry"]) {
+    const env = { ...data.env, HOTPLATE_RESOURCE_REGISTRY: override };
+    assert.equal(publishResourceRoots({ host: "opencode-v1", sessionId: "invalid", filesystemId: data.env.HOTPLATE_FILESYSTEM_ID, roots: data.roots, env }), false);
+    assert.deepEqual(readRegisteredRoots({ filesystemId: data.env.HOTPLATE_FILESYSTEM_ID, env }), []);
+  }
+});
+
+test("native inventory advertises harness-specific account roots without renewing imported roots", async (t) => {
+  const data = fixture();
+  t.after(() => rmSync(data.directory, { recursive: true, force: true }));
+  const project = join(data.directory, "v1-project");
+  const projectRoot = join(project, ".opencode", "skills");
+  const watcherProject = join(data.directory, "watcher-project");
+  const accountRoot = join(data.directory, "opencode-v1-config", "opencode", "skills");
+  const importedRoot = join(data.directory, "another-project", ".agents", "skills");
+  for (const root of [projectRoot, accountRoot, importedRoot]) {
+    mkdirSync(join(root, "example"), { recursive: true });
+    writeFileSync(join(root, "example", "SKILL.md"), "fixture");
+  }
+  mkdirSync(watcherProject);
+  assert.equal(publishResourceRoots({ host: "codex", sessionId: "other-session", origin: "conventional",
+    filesystemId: data.env.HOTPLATE_FILESYSTEM_ID, roots: [importedRoot], env: data.env }), true);
+  const publisherEnv = { ...data.env, XDG_CONFIG_HOME: join(data.directory, "opencode-v1-config"), XDG_STATE_HOME: join(data.directory, "opencode-v1-state") };
+  await runSessionInventory({ host: "opencode-v1", sessionId: "v1-session", cwd: project, harnessProcess: readProcessIdentity(process.pid) }, publisherEnv);
+  const advertisement = readRegisteredRoots({ filesystemId: data.env.HOTPLATE_FILESYSTEM_ID, env: data.env })
+    .find(entry => entry.host === "opencode-v1" && entry.origin === "conventional");
+  assert.deepEqual(advertisement?.roots, [accountRoot, projectRoot].sort());
+  const discovered = discoverResourceRoots({ cwd: watcherProject, env: data.env });
+  for (const path of [accountRoot, projectRoot]) {
+    const root = discovered.find(entry => entry.path === path);
+    assert.equal(root?.origin, "conventional");
+    assert.equal(root?.scope, "unassigned");
+  }
 });

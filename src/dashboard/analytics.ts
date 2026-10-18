@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type {
   HostId, ChainObservation, DashboardFilter, ModelRef, SkillChainRun, SkillChainView, SkillTableView,
 } from "../domain.js";
+import { buildAgentComparison, compareAgentHosts, isSkillUse, skillUseKind, type AgentComparison } from "./agents.js";
 
 type SkillKey = string & { readonly __brand: "DashboardSkillKey" };
 type RouteKey = string & { readonly __brand: "DashboardRouteKey" };
@@ -48,6 +49,7 @@ type Activity =
         counts: Counts;
         readRuns: number;
         skills: readonly Readonly<{ name: string; readRuns: number; successfulReads: number }>[];
+        agents: readonly Readonly<{ host: HostId; uses: number }>[];
       }>[];
     }>;
 type ModelCell = Readonly<{ skillKey: SkillKey; successfulReads: number; failedReads: number }>;
@@ -81,6 +83,7 @@ export type DashboardReport = Readonly<{
   models: readonly ModelColumn[];
   relationships: readonly Relationship[];
   routes: readonly Route[];
+  agents: AgentComparison;
   coverage: Readonly<{
     captureGaps: number;
     droppedObservations: number;
@@ -204,7 +207,7 @@ export function buildDashboardReport({ filter, skills, chains }: ReportInput): D
     skills: summaries, skillGroups, activity: buildActivity(filter, timespan, routes),
     models: [...modelIndex.entries()].sort(([left], [right]) => left.localeCompare(right))
       .map(([, model]) => ({ ...model, cells: [...model.cells.values()].sort((left, right) => left.skillKey.localeCompare(right.skillKey)) })),
-    relationships: [...sameGroups.values(), ...nextGroups.values()], routes, coverage,
+    relationships: [...sameGroups.values(), ...nextGroups.values()], routes, agents: buildAgentComparison(chains), coverage,
   };
 }
 
@@ -330,12 +333,12 @@ function buildActivity(filter: DashboardFilter, timespan: { first: number | unde
   const binWidthMs = stepMs === HOUR_MS ? HOUR_MS : Math.ceil((end - start) / DAY_MS / 90) * DAY_MS;
   const bins: {
     startAt: string; endAt: string; counts: Mutable<Counts>;
-    runs: Set<RouteKey>; skills: Map<string, { runs: Set<RouteKey>; successfulReads: number }>;
+    runs: Set<RouteKey>; skills: Map<string, { runs: Set<RouteKey>; successfulReads: number }>; agents: Map<HostId, number>;
   }[] = [];
   for (let cursor = start; cursor < end; cursor += binWidthMs) {
     bins.push({
       startAt: new Date(cursor).toISOString(), endAt: new Date(Math.min(cursor + binWidthMs, end)).toISOString(),
-      counts: emptyCounts(), runs: new Set(), skills: new Map(),
+      counts: emptyCounts(), runs: new Set(), skills: new Map(), agents: new Map(),
     });
   }
   for (const route of routes) for (const step of route.steps) {
@@ -346,6 +349,10 @@ function buildActivity(filter: DashboardFilter, timespan: { first: number | unde
       const bin = bins[Math.floor((time - start) / binWidthMs)];
       if (!bin) continue;
       bin.counts[evidenceCountKind(item.evidence)] += 1;
+      if (isSkillUse(skillUseKind(item.evidence))) {
+        const host = route.scope.host ?? "unknown";
+        bin.agents.set(host, (bin.agents.get(host) ?? 0) + 1);
+      }
       if (item.evidence.kind !== "read-result" || item.evidence.outcome !== "success") continue;
       const knownRun = route.scope.runId !== null || route.scope.host === undefined || route.scope.host === "unknown" || route.scope.host === "pi";
       if (knownRun) bin.runs.add(route.key);
@@ -356,9 +363,10 @@ function buildActivity(filter: DashboardFilter, timespan: { first: number | unde
   }
   return {
     kind: "bucketed", timezone: "UTC", binWidthMs, startAt: new Date(start).toISOString(), endAt: new Date(end).toISOString(),
-    bins: bins.map(({ runs, skills, ...bin }) => ({
+    bins: bins.map(({ runs, skills, agents, ...bin }) => ({
       ...bin, readRuns: runs.size,
       skills: [...skills].sort(([left], [right]) => left.localeCompare(right)).map(([name, skill]) => ({ name, readRuns: skill.runs.size, successfulReads: skill.successfulReads })),
+      agents: [...agents].sort(([left], [right]) => compareAgentHosts(left, right)).map(([host, uses]) => ({ host, uses })),
     })),
   };
 }

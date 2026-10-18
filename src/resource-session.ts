@@ -160,5 +160,5 @@ function publishSessionRoots(request: SessionInventoryRequest, env: NodeJS.Proce
   if (request.advertisedRoots) publishResourceRoots({ host: request.host, sessionId: request.sessionId,
     filesystemId: resourceFilesystemId(env), roots: request.advertisedRoots, process: request.harnessProcess ?? null, env });
   publishResourceRoots({ host: request.host, sessionId: request.sessionId, filesystemId: resourceFilesystemId(env), origin: "conventional",
-    roots: roots.filter((root) => root.origin === "conventional" && root.scope === "project").map((root) => root.path), process: request.harnessProcess ?? null, env });
+    roots: roots.filter((root) => root.origin === "conventional" && (root.scope === "account" || root.scope === "project")).map((root) => root.path), process: request.harnessProcess ?? null, env });
 }

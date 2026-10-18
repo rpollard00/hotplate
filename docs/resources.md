@@ -6,7 +6,7 @@ Hotplate can inventory and observe files in skill directories without Skills Exp
 
 Hotplate discovers conventional account and project skill directories, including hidden directories in project ancestors. Host-advertised skill directories add session scope when an integration supplies them. Conventional directory discovery is an inference about availability, not proof that a harness advertised every file.
 
-Integrations publish their project and advertised roots to a private account registry. The watcher discovers these roots even when it starts in another project. Registrations include the filesystem namespace and harness process identity, expire, and reject stale processes. Pi and OpenCode v2 supply advertised roots; native hooks publish conventional project roots. OpenCode v1 relies on conventional and configured roots.
+Integrations publish their project and advertised roots to a private account registry. The watcher discovers these roots even when it starts in another project. Registrations include the filesystem namespace and harness process identity, expire, and reject stale processes. Pi and OpenCode v2 supply advertised roots. Native hooks and OpenCode v2 also publish locally discovered conventional account and project roots, including OpenCode skill directories under a harness-specific configuration directory. They do not republish roots learned only from another session. OpenCode v1 relies on conventional and configured roots.
 
 Roots learned from another session remain unassigned in inventory. They can establish global file presence and qualify actual reads, but do not establish availability or zero access for a different project or session. Each harness's own inventory supplies its scoped availability.
 
@@ -19,7 +19,9 @@ hotplate resources list
 hotplate resources status
 ```
 
-Saved roots live in `$XDG_CONFIG_HOME/hotplate/resources.json`, defaulting to `~/.config/hotplate/resources.json`. `HOTPLATE_RESOURCES_CONFIG` selects another configuration file. `HOTPLATE_RESOURCE_ROOTS` adds paths separated by the platform path delimiter. `resources remove-root <directory>` removes a saved root without deleting historical evidence.
+Saved roots live in `~/.config/hotplate/resources.json`. Like native account selection, this path stays shared when a harness changes `XDG_CONFIG_HOME`. `HOTPLATE_RESOURCES_CONFIG` selects another configuration file. `HOTPLATE_RESOURCE_ROOTS` adds paths separated by the platform path delimiter. `resources remove-root <directory>` removes a saved root without deleting historical evidence.
+
+Root advertisements live in `~/.local/state/hotplate/advertised-roots`; process registrations live in `~/.local/state/hotplate/processes`. These account paths do not follow harness-specific `XDG_STATE_HOME` values. `HOTPLATE_RESOURCE_REGISTRY` and `HOTPLATE_PROCESS_REGISTRY` select separate registry directories when isolation is needed. Use the same overrides for the integrations and watcher that should share evidence.
 
 Use `--root <directory>` for a command-specific root, `--project <directory>` for project discovery, and `--db <path>` for an explicit local database. Without `--db`, capture uses the account configuration selected by setup, including its existing relay. Explicit `HOTPLATE_CONFIG` takes precedence.
 

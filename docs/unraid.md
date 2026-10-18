@@ -94,7 +94,7 @@ npm run deploy:unraid -- --config /absolute/path/deploy.json
 An invalid override stops deployment. The command does not fall back to the default configuration.
 
 This command runs `build`, `plan`, `apply`, and `status` in order. It passes the exact new release path between steps automatically.
-The build includes `npm run check`. All existing deployment checks, backups, and application probes remain in effect.
+Run `npm run check` before deployment. The release build compiles TypeScript; deployment checks, backups, and application probes remain in effect.
 The command stops at the first failure and exits nonzero. It does not retry, restore the database, or remove retained releases.
 If deployment fails, run the separate `status` command and review the recovery instructions.
 
@@ -104,11 +104,12 @@ For a separate plan review before apply, use the manual commands in the next sec
 ## Manual build, plan, apply, status
 
 ```sh
+npm run check
 scripts/deploy-unraid build --config "$HOTPLATE_PRIVATE/deploy.json"
 ```
 
 Expected output ends with `Built /absolute/path/releases/<UUID>/release.json`.
-`build` first runs `npm run check`. Then Docker builds `linux/amd64` with the existing Dockerfile and its locked `npm ci`.
+`build` first runs `npm run build`. Then Docker builds `linux/amd64` with the existing Dockerfile and its locked `npm ci`.
 It does not reinstall dependencies in the checkout.
 
 Set `RELEASE` to that exact path. Do not select a mutable tag or copy a manifest without its sibling `image.tar`.
