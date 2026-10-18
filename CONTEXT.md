@@ -5,13 +5,31 @@ Hotplate describes skill-use evidence from live coding-agent sessions. Local acc
 ## Language
 
 **Observation**:
-A metadata-only fact from a live coding-agent session. It contains no raw prompt, full tool output, credential, or error body.
+A metadata-only fact from a live coding-agent session, filesystem observer, or inventory scan. It contains no raw prompt, full tool output, credential, or error body.
 
 **Host**:
 The coding-agent integration that produced an observation. OpenCode v1 and OpenCode v2 are separate hosts, distinct from machine, account source, and model provider.
 
 **Evidence**:
-The reason for an observation: command intent, observed wrapper, read attempt, read result, native skill invocation, catalog snapshot, or capture gap.
+The reason for an observation: command intent, observed wrapper, read attempt, read result, native skill invocation, catalog snapshot, capture gap, resource access, inventory snapshot, or observer coverage.
+
+**Resource**:
+A file location within a discovered or configured content root. Its identity includes the account source, filesystem namespace, and canonical path. Files do not need an Explorer entry or a skill owner.
+
+**Resource access**:
+Evidence that a host tool attempted or completed a read, or that the filesystem reported an open or access. These evidence kinds remain separate. An access does not prove that a model received or followed the contents.
+
+**Inventory snapshot**:
+A metadata-only enumeration of files available in a root. A completed scan can establish presence or absence. An incomplete scan cannot establish absence. Session scope comes from host-advertised roots when available; conventional roots provide inferred scope. Roots learned from other sessions remain unassigned and establish global presence only.
+
+**Observer coverage**:
+The recorded operating state of an observation mechanism for a root and filesystem namespace. Heartbeats bound observed intervals. Missing or stale coverage is unknown, not zero use.
+
+**Process binding**:
+An association between a harness and a process identified by boot identity, PID, and start time. Descendant readers can inherit that association through wrappers. A shared process does not identify one conversation.
+
+**No observed access**:
+An inventoried file with no attributed access during a confirmed observation interval. It is not proof that a skill was ignored or never entered a model's context.
 
 **Skill path**:
 The recorded sequence of skill requests, wrappers, and reads within one run. A skill path does not prove a dependency or a causal relationship.

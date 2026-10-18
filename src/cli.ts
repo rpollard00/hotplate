@@ -25,6 +25,11 @@ type NetworkArgs = { command: "relay"; configPath: string; status: boolean } | {
 type CliArgs = ServeArgs | DemoArgs | NetworkArgs | { command: "help" };
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {
+  if (argv[0] === "resources") {
+    const { runResourcesCommand } = await import("./resources-command.js");
+    await runResourcesCommand(argv.slice(1));
+    return;
+  }
   if (argv[0] === "setup") {
     const { runSetupCommand } = await import("./integrations/setup.js");
     await runSetupCommand(argv.slice(1));
@@ -306,7 +311,7 @@ function parsePort(value: string): number {
 }
 
 function helpText(): string {
-  return `Hotplate dashboard\n\nUsage:\n  hotplate serve [--db path] [--host 127.0.0.1] [--port 7345]\n  hotplate demo --db path [--force]\n  hotplate relay --config path [--status]\n  hotplate aggregate --config path\n  hotplate setup (--relay URL | --config path) [--opencode-v1-config-home path] [--opencode-v1-binary path]\n  hotplate setup --status\n  hotplate integration install|remove|status [codex|claude-code|opencode-v1|opencode-v2] [--global] [--binary path]\n  hotplate capture <host> < native-hook.json\n\nRelay status reports enrollment, pending count/bytes/oldest time, and blocked count without delivery.\nNetwork commands require explicit configuration. Native capture uses the account selected by setup. HOTPLATE_CONFIG overrides setup; HOTPLATE_DB selects local capture when HOTPLATE_CONFIG is unset. Without setup, native capture stays local.\nThe serve command opens a loopback-only, read-only dashboard.\nThe demo command writes only to the explicit --db path.\n`;
+  return `Hotplate dashboard\n\nUsage:\n  hotplate serve [--db path] [--host 127.0.0.1] [--port 7345]\n  hotplate demo --db path [--force]\n  hotplate relay --config path [--status]\n  hotplate aggregate --config path\n  hotplate setup (--relay URL | --config path) [--opencode-v1-config-home path] [--opencode-v1-binary path]\n  hotplate setup --status\n  hotplate integration install|remove|status [codex|claude-code|opencode-v1|opencode-v2] [--global] [--binary path]\n  hotplate capture <host> < native-hook.json\n  hotplate resources add-root|remove-root <directory>\n  hotplate resources scan|watch|list|status [--root path] [--project path] [--db path]\n  hotplate resources watch [--helper path] [--interval-ms 30000]\n\nRelay status reports enrollment, pending count/bytes/oldest time, and blocked count without delivery.\nNetwork commands require explicit configuration. Native capture uses the account selected by setup. HOTPLATE_CONFIG overrides setup; HOTPLATE_DB selects local capture when HOTPLATE_CONFIG is unset. Without setup, native capture stays local.\nThe serve command opens a loopback-only, read-only dashboard.\nThe demo command writes only to the explicit --db path.\n`;
 }
 
 if (isCliEntrypoint()) {

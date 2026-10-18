@@ -17,6 +17,7 @@ export const dashboardHtml = `<!doctype html>
       <button type="button" data-workspace="overview" aria-current="page">Overview</button>
       <button type="button" data-workspace="models">Models</button>
       <button type="button" data-workspace="paths">Session paths</button>
+      <button type="button" data-workspace="resources">Resources</button>
     </nav>
     <div class="scope-bar">
       <p id="scope-summary" hidden></p>
@@ -58,6 +59,21 @@ export const dashboardHtml = `<!doctype html>
           <section class="panel" aria-labelledby="relationships-heading"><div class="section-heading"><div><h2 id="relationships-heading">Read patterns</h2></div><button type="button" id="browse-paths" class="quiet">View session paths</button></div><div id="relationship-view"></div></section>
           <details class="panel" id="catalog-context"><summary>Skill catalog</summary><p class="footnote">The catalog follows machine, project, and date filters only.</p><label class="search-label">Find a catalog skill<input id="catalog-search" type="search" placeholder="Search names…"></label><div id="catalog-list"></div></details>
         </section>
+        <section id="resources-workspace" aria-labelledby="resources-heading" hidden>
+          <div class="page-heading"><div><h1 id="resources-heading">Resources</h1><p id="resource-summary"></p></div></div>
+          <details id="resource-coverage" class="panel"><summary id="resource-coverage-summary">Observation coverage</summary><div id="resource-coverage-content"></div></details>
+          <section class="panel" aria-label="Resource inventory and access">
+            <div id="resource-controls" class="resource-controls">
+              <label class="search-label">Find a file<input id="resource-search" type="search" placeholder="Search paths or owner skills…"></label>
+              <label>Type<select id="resource-kind"><option value="">All files</option><option value="skill">Skills</option><option value="principle">Principles</option><option value="reference">References</option><option value="script">Scripts</option><option value="file">Other files</option></select></label>
+              <label>Observation<select id="resource-observation"><option value="">All observations</option><option value="observed">Observed agent activity</option><option value="not-observed">No observed agent access</option><option value="unknown">Unknown</option></select></label>
+            </div>
+            <p id="resource-scroll-hint" class="resource-scroll-hint footnote">Scroll horizontally for access counts and attribution.</p>
+            <div id="resource-table" class="table-wrap" tabindex="0" role="region" aria-label="Resource access evidence"></div>
+            <div id="resource-pagination"></div>
+            <p id="resource-evidence-note" class="footnote">Reads, failures, and attempts come from agent tools. Opens and accesses come from filesystem observation.</p>
+          </section>
+        </section>
         <section id="models-workspace" aria-labelledby="models-heading" hidden>
           <div class="page-heading"><div><h1 id="models-heading">Skills by model</h1></div></div>
           <section class="panel"><div class="section-heading"><label class="search-label">Find a skill<input id="model-search" type="search" placeholder="Search skill names…"></label><label class="inline-label">Measure<select id="model-measure"><option value="successfulReads">Successful reads</option><option value="failedReads">Read failures</option></select></label></div><div id="model-matrix" class="table-wrap" tabindex="0" role="region" aria-label="Skill by model counts"></div><p class="matrix-scroll-hint footnote">Scroll horizontally to compare models.</p><div id="model-pagination"></div><p class="footnote">Skills are grouped by name.</p></section>
@@ -72,12 +88,14 @@ export const dashboardHtml = `<!doctype html>
       </div>
     </main>
     <details class="panel" id="data-help"><summary>About this data</summary><div class="data-definitions">
-      <p>A read is a successful tool read of <code>SKILL.md</code>. A request records a skill command. A wrapper records skill text found in input.</p>
+      <p>A skill read is a successful tool read of <code>SKILL.md</code>. A request records a skill command. A wrapper records skill text found in input.</p>
       <p>Skills are grouped by name, even when their file paths or contents differ.</p>
-      <p>Only read results have model attribution.</p>
+      <p>Model identity appears when the capture source supplies it.</p>
       <p>Each path represents one recorded run. A session can contain multiple runs. Order within a read group is unknown.</p>
       <p>Capture gaps represent lost records. Filtered gaps represent records hidden by filters.</p>
-      <p>Capture requires the Hotplate extension in a live Pi session. Reads through the shell or external agents can be absent.</p>
+      <p>Capture comes from enabled agent integrations and filesystem observers.</p>
+      <p>Resource inventory records files found in skill directories. No observed agent access applies only to the covered dates shown for that file.</p>
+      <p>Unknown and non-agent access remain separate from activity attributed to an agent.</p>
     </div></details>
   </div>
   <script src="/assets/app.js"></script>
@@ -243,6 +261,28 @@ details[open] > summary { margin-bottom: 15px; }
 .flow-arrow { color: var(--teal); flex-shrink: 0; }
 .relationship button { font-size: 11px; }
 .table-wrap { overflow-x: auto; max-width: 100%; }
+.resource-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 16px; margin-bottom: 20px; }
+.resource-controls .search-label { flex: 1; min-width: 220px; max-width: none; margin-bottom: 0; }
+.resource-controls > label { display: grid; gap: 7px; font-size: 12px; font-weight: 600; }
+.resource-controls input, .resource-controls select { height: 38px; }
+.resource-table { min-width: 1100px; table-layout: fixed; }
+.resource-table th:first-child { width: 310px; }
+.resource-table th:nth-child(2) { width: 165px; }
+.resource-table th:nth-child(8), .resource-table th:nth-child(9) { width: 125px; }
+.resource-table td { vertical-align: top; }
+.resource-table td:nth-child(n+3):nth-child(-n+7) { font-variant-numeric: tabular-nums; text-align: right; }
+.resource-path { font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+.resource-meta { display: block; font-size: 11px; line-height: 1.65; color: var(--muted); margin-top: 5px; }
+.resource-state { display: inline-block; align-self: start; padding: 3px 7px; border-radius: 4px; background: #f0f2ee; font-size: 11px; font-weight: 600; }
+.resource-state[data-state="observed"], .resource-state[data-state="active"] { color: var(--teal); background: #e5eee6; }
+.resource-state[data-state="not-observed"] { color: #38544b; background: #f0f2ee; }
+.resource-state[data-state="unavailable"], .resource-state[data-state="overflow"], .resource-state[data-state="stale"] { color: #824220; background: #f8ebd9; }
+.resource-coverage-row { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px 20px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+.resource-coverage-row:last-child { border-bottom: 0; padding-bottom: 0; }
+.resource-coverage-row p { margin: 4px 0 0; overflow-wrap: anywhere; }
+.resource-table details { margin-top: 8px; font-size: 11px; }
+.resource-table details p { margin: 6px 0; overflow-wrap: anywhere; }
+.resource-scroll-hint { display: none; }
 table { border-collapse: collapse; width: 100%; font-size: 12px; }
 caption { text-align: left; color: var(--muted); padding-bottom: 12px; }
 th, td { padding: 12px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; overflow-wrap: anywhere; }
@@ -308,6 +348,7 @@ dt { color: var(--muted); }dd { margin: 0; overflow-wrap: anywhere; }
 @media (max-width: 760px) {
   .matrix th:first-child { width: 150px; }
   .matrix-scroll-hint { display: block; }
+  .resource-scroll-hint { display: block; margin-bottom: 12px; }
   #route-list { max-height: 320px; overflow-y: auto; }
 }
 @media (prefers-reduced-motion: no-preference) { button { transition: background-color .12s; } }
@@ -316,11 +357,11 @@ dt { color: var(--muted); }dd { margin: 0; overflow-wrap: anywhere; }
 export const dashboardJs = String.raw`'use strict';
 const $ = (id) => document.getElementById(id);
 const state = {
-  requestId: 0, controller: null, report: null, workspace: 'overview',
+  requestId: 0, controller: null, report: null, resources: [], resourceCoverage: [], workspace: 'overview',
   focus: { kind: 'all' }, routeKey: null, skillSelection: null,
   explore: { skillName: null, interval: null },
   trends: { kind: 'top', count: 5 },
-  pages: { activity: 0, skills: 0, models: 0, columns: 0, relationships: 0, routes: 0, steps: 0, catalog: 0, identities: 0, evidence: 0 },
+  pages: { activity: 0, skills: 0, models: 0, columns: 0, relationships: 0, routes: 0, steps: 0, catalog: 0, identities: 0, evidence: 0, resources: 0 },
 };
 let activityView = null;
 const skillColors = new Map();
@@ -397,7 +438,7 @@ function setOptions(select, label, options) {
 }
 function showWorkspace(name, focusHeading = false) {
   state.workspace = name;
-  for (const workspace of ['overview', 'models', 'paths']) $(workspace + '-workspace').hidden = workspace !== name;
+  for (const workspace of ['overview', 'models', 'paths', 'resources']) $(workspace + '-workspace').hidden = workspace !== name;
   document.querySelectorAll('[data-workspace]').forEach((item) => {
     if (item.dataset.workspace === name) item.setAttribute('aria-current', 'page'); else item.removeAttribute('aria-current');
   });
@@ -422,7 +463,7 @@ function resetSelections() {
   state.focus = { kind: 'all' }; state.routeKey = null; state.skillSelection = null;
   state.explore = { skillName: null, interval: null };
   for (const key of Object.keys(state.pages)) state.pages[key] = 0;
-  for (const id of ['skill-search', 'model-search', 'route-search', 'catalog-search', 'route-model']) $(id).value = '';
+  for (const id of ['skill-search', 'model-search', 'route-search', 'catalog-search', 'route-model', 'resource-search', 'resource-kind', 'resource-observation']) $(id).value = '';
 }
 function applyTimePreset() {
   const preset = $('time-preset').value;
@@ -458,8 +499,10 @@ async function loadDashboard() {
     if (payload.kind === 'error') throw new Error(payload.message);
     if (!payload.report || !Array.isArray(payload.report.skillGroups) || !Array.isArray(payload.report.routes)) throw new Error('The dashboard report is unavailable.');
     state.report = payload.report;
+    state.resources = Array.isArray(payload.resources?.rows) ? payload.resources.rows : [];
+    state.resourceCoverage = Array.isArray(payload.resourceCoverage?.rows) ? payload.resourceCoverage.rows : [];
     resetSelections();
-    renderScope(); renderOverview(); renderModels(); renderPaths();
+    renderScope(); renderOverview(); renderModels(); renderPaths(); renderResources();
     $('message-panel').hidden = true; $('dashboard-content').hidden = false;
     setStatus('ready', 'Ready');
   } catch (error) {
@@ -1083,6 +1126,77 @@ function matchingModelGroups() {
   const query = $('model-search').value.toLowerCase();
   return state.report.skillGroups.filter((group) => group.counts.successfulReads + group.counts.failedReads > 0 && group.name.toLowerCase().includes(query));
 }
+const resourceObservationLabels = { observed: 'Observed', 'not-observed': 'No observed agent access', unknown: 'Unknown' };
+const resourceKindLabels = { skill: 'Skill', principle: 'Principle', reference: 'Reference', script: 'Script', file: 'File' };
+function resourceBadge(label, status) {
+  const badge = node('span', label, 'resource-state'); badge.dataset.state = status; return badge;
+}
+function renderResourceCoverage() {
+  const rows = state.resourceCoverage;
+  const target = $('resource-coverage-content'); target.replaceChildren();
+  const states = new Map();
+  for (const row of rows) states.set(row.status, (states.get(row.status) || 0) + 1);
+  $('resource-coverage-summary').textContent = 'Observation coverage' + (rows.length ? ' · ' + [...states].map(([status, value]) => number(value) + ' ' + status).join(' · ') : ' · unknown');
+  if (!rows.length) {
+    target.append(empty('No observer has reported coverage in this scope. Files without access records remain unknown.'));
+    return;
+  }
+  const reasons = { 'permission-denied': 'Permission denied', unsupported: 'Unavailable on this system', 'helper-unavailable': 'Observer helper unavailable', 'queue-overflow': 'Events were dropped', 'process-exited': 'Observer process exited', 'io-error': 'Observation failed' };
+  for (const row of rows) {
+    const item = node('div', null, 'resource-coverage-row');
+    const details = node('div'); details.append(node('strong', row.rootPath, 'resource-path'));
+    details.append(node('p', (row.mechanism === 'fanotify' ? 'Filesystem' : 'Agent tools') + ' · ' + row.machineId + ' · Last report ' + date(row.lastObservedAt, true) + ' UTC', 'resource-meta'));
+    if (row.reason || row.status === 'stale') details.append(node('p', row.status === 'stale' ? 'No recent heartbeat. Current coverage is unknown.' : reasons[row.reason], 'resource-meta'));
+    item.append(details, resourceBadge(row.status[0].toUpperCase() + row.status.slice(1), row.status)); target.append(item);
+  }
+}
+function renderResources() {
+  const all = state.resources;
+  const observed = all.filter(row => row.observation === 'observed').length;
+  const untouched = all.filter(row => row.observation === 'not-observed').length;
+  $('resource-summary').textContent = count(all.length, 'file') + ' · ' + number(observed) + ' observed · ' + number(untouched) + ' with no observed agent access · ' + number(all.length - observed - untouched) + ' unknown';
+  renderResourceCoverage();
+  const query = $('resource-search').value.trim().toLowerCase();
+  const kind = $('resource-kind').value;
+  const observation = $('resource-observation').value;
+  const rows = all.filter(row => (!kind || row.resource.kind === kind) && (!observation || row.observation === observation)
+    && (!query || [row.resource.canonicalPath, row.resource.observedPath, row.resource.ownerSkillPath || '', row.machineId].some(value => value.toLowerCase().includes(query))));
+  const target = $('resource-table'); target.replaceChildren();
+  $('resource-controls').hidden = all.length === 0;
+  $('resource-evidence-note').hidden = rows.length === 0;
+  $('resource-scroll-hint').hidden = rows.length === 0;
+  if (!rows.length) {
+    target.append(empty(all.length ? 'No files match these resource filters.' : 'No resource inventory or access has been recorded in this scope.'));
+    if (all.length) target.append(button('Clear resource filters', () => { for (const id of ['resource-search', 'resource-kind', 'resource-observation']) $(id).value = ''; state.pages.resources = 0; renderResources(); }));
+    $('resource-pagination').replaceChildren();
+    return;
+  }
+  const listing = table(['File', 'Observation', 'Reads', 'Failures', 'Attempts', 'Opens', 'Accesses', 'Attribution', 'Last access'], 'Inventory and access evidence');
+  listing.className = 'resource-table';
+  for (const row of pageItems(rows, 'resources', 25)) {
+    const item = node('tr'); item.dataset.resourceId = row.resourceId; item.dataset.observation = row.observation;
+    const file = node('td'); file.append(node('div', row.resource.canonicalPath, 'resource-path'));
+    file.append(node('span', resourceKindLabels[row.resource.kind] + ' · ' + (row.presence === 'present' ? 'Present in inventory' : row.presence === 'absent' ? 'Absent in latest complete inventory' : 'Presence unknown'), 'resource-meta'));
+    if (row.resource.ownerSkillPath) file.append(node('span', 'Owner: ' + row.resource.ownerSkillPath, 'resource-meta'));
+    const audit = node('div');
+    audit.append(node('p', 'Machine: ' + row.machineId), node('p', 'Source: ' + row.sourceId), node('p', 'Observed path: ' + row.resource.observedPath), node('p', 'Roots: ' + row.rootPaths.join(', ')));
+    audit.append(node('p', row.firstInventoriedAt ? 'First inventoried: ' + date(row.firstInventoriedAt, true) + ' UTC' : 'No inventory record'), node('p', row.lastInventoriedAt ? 'Last seen in inventory: ' + date(row.lastInventoriedAt, true) + ' UTC' : ''));
+    file.append(disclosure('File details', audit)); item.append(file);
+    const status = node('td'); status.append(resourceBadge(resourceObservationLabels[row.observation], row.observation));
+    if (row.observation === 'not-observed') status.append(node('span', 'Covered ' + date(row.coverageFrom, true) + ' to ' + date(row.coverageTo, true) + ' UTC', 'resource-meta'));
+    else if (row.observation === 'unknown') status.append(node('span', row.unattributedAccessCount ? 'Access could not be assigned to this scope.' : 'Availability or observation coverage is incomplete.', 'resource-meta'));
+    item.append(status);
+    for (const value of [row.successfulReadCount, row.failedReadCount, row.attemptCount, row.openCount, row.accessCount]) item.append(node('td', number(value)));
+    const attribution = node('td');
+    for (const [label, value] of [['Agent', row.attributedAccessCount], ['Unknown', row.unattributedAccessCount], ['Non-agent', row.nonAgentAccessCount]]) attribution.append(node('span', label + ': ' + number(value), 'resource-meta'));
+    const lastAccess = node('td'); lastAccess.append(node('span', row.lastAccessAt ? date(row.lastAccessAt, true) + ' UTC' : 'None observed', 'resource-meta'));
+    item.append(attribution, lastAccess);
+    listing.tBodies[0].append(item);
+  }
+  target.append(listing);
+  $('resource-pagination').replaceChildren(pagination('resources', rows.length, 25, renderResources));
+}
+
 function renderModels() {
   const report = state.report; const measure = $('model-measure').value;
   const groups = matchingModelGroups();
@@ -1247,7 +1361,8 @@ $('time-preset').addEventListener('change', () => {
   loadDashboard();
 });
 for (const id of ['from-filter', 'to-filter']) $(id).addEventListener('change', () => { $('time-preset').value = 'custom'; });
-for (const [id, key, render] of [['skill-search', 'skills', renderRanks], ['model-search', 'models', renderModels], ['catalog-search', 'catalog', renderCatalog], ['route-search', 'routes', renderPaths]]) $(id).addEventListener('input', () => { state.pages[key] = 0; if (state.report) render(); });
+for (const [id, key, render] of [['skill-search', 'skills', renderRanks], ['model-search', 'models', renderModels], ['catalog-search', 'catalog', renderCatalog], ['route-search', 'routes', renderPaths], ['resource-search', 'resources', renderResources]]) $(id).addEventListener('input', () => { state.pages[key] = 0; if (state.report) render(); });
+for (const id of ['resource-kind', 'resource-observation']) $(id).addEventListener('change', () => { state.pages.resources = 0; if (state.report) renderResources(); });
 $('model-measure').addEventListener('change', () => { if (state.report) renderModels(); });
 $('route-model').addEventListener('change', () => { state.pages.routes = 0; state.routeKey = null; renderPaths(); });
 $('browse-paths').addEventListener('click', () => showWorkspace('paths', true));

@@ -51,6 +51,8 @@ type DashboardPayload =
       matrix: Awaited<ReturnType<HotplateReadonlyStore["queryModelMatrix"]>>;
       chains: SkillChainView;
       health: Awaited<ReturnType<HotplateReadonlyStore["queryCaptureHealth"]>>;
+      resources: Awaited<ReturnType<HotplateReadonlyStore["queryResources"]>>;
+      resourceCoverage: Awaited<ReturnType<HotplateReadonlyStore["queryResourceCoverage"]>>;
       sourceSplit: readonly SourceSplitRow[];
       filterOptions: FilterOptions;
       chainSkillName: string | null;
@@ -169,6 +171,8 @@ async function readDashboardPayload(databasePath: string, params: URLSearchParam
     const skills = await open.store.querySkillTable(parsed.filter);
     const matrix = await open.store.queryModelMatrix(parsed.filter);
     const health = await open.store.queryCaptureHealth(parsed.filter);
+    const resources = await open.store.queryResources(parsed.filter);
+    const resourceCoverage = await open.store.queryResourceCoverage(parsed.filter);
     const allChains = await open.store.querySkillChain(parsed.filter);
     const chainFilter = chainFilterFor(parsed.filter, parsed.chainSkillName);
     const chains = parsed.chainSkillName === null ? allChains : await open.store.querySkillChain(chainFilter);
@@ -181,6 +185,8 @@ async function readDashboardPayload(databasePath: string, params: URLSearchParam
       matrix,
       chains,
       health,
+      resources,
+      resourceCoverage,
       sourceSplit: deriveSourceSplit(skills, allChains),
       filterOptions,
       chainSkillName: parsed.chainSkillName,

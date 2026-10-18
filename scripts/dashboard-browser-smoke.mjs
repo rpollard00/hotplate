@@ -189,12 +189,12 @@ try {
 
     }
     async function helpFromEveryTab() {
-      for (const workspace of ['overview', 'models', 'paths']) {
+      for (const workspace of ['overview', 'models', 'paths', 'resources']) {
         await click('[data-workspace=' + workspace + ']');
         assert.equal(await evaluate('document.querySelectorAll("#data-help").length'), 1);
         const helpText = await evaluate('document.getElementById("data-help").textContent');
         assert.doesNotMatch(helpText, /mako|prove|causal|dependencies|missed opportunit|queued|crash|followed the instructions/i);
-        for (const definition of ['SKILL.md', 'request', 'wrapper', 'grouped by name', 'model attribution', 'recorded run', 'Order within a read group', 'lost records', 'hidden by filters', 'extension']) assert.ok(helpText.includes(definition), 'Retained definition: ' + definition);
+        for (const definition of ['SKILL.md', 'request', 'wrapper', 'grouped by name', 'capture source', 'recorded run', 'Order within a read group', 'lost records', 'hidden by filters', 'agent integrations', 'Resource inventory', 'covered dates']) assert.ok(helpText.includes(definition), 'Retained definition: ' + definition);
         await evaluate('document.querySelector("#data-help summary").focus()');
         await enter();
         assert.equal(await evaluate('document.getElementById("data-help").open'), true, 'Keyboard help access from ' + workspace);
@@ -587,7 +587,7 @@ try {
     assert.ok(selectedRoute.steps.some(step => step.kind === 'observations' && step.items.some(item => payload.report.skills.find(skill => skill.key === item.skillKey).identity.name === selectedSkill)));
     assert.equal(await evaluate('document.querySelectorAll("#chain-view .timeline-step").length'), selectedRoute.steps.length, 'Skill selection keeps other recorded steps');
     await click('#chain-view > details summary');
-    assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#chain-view dl dt"), item => item.textContent)'), ['Machine', 'Account source', 'Project', 'Session ID', 'Segment ID', 'Run ID']);
+    assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#chain-view dl dt"), item => item.textContent)'), ['Agent host', 'Machine', 'Account source', 'Project', 'Session ID', 'Segment ID', 'Run ID']);
     assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#chain-view dl dd"), item => item.textContent)'), Object.values(selectedRoute.scope).map(value => value ?? 'Unknown'));
     await noOverflow();
     await screenshot(join(directory, "paths-desktop.png"));

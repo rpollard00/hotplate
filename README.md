@@ -113,7 +113,7 @@ Run `/reload` after a package change.
 ## What Hotplate records
 
 Hotplate records observations.
-An observation is a metadata-only fact from a live pi session.
+An observation is a metadata-only fact from a live agent, resource inventory, or filesystem observer.
 
 Hotplate records these facts:
 
@@ -122,6 +122,7 @@ Hotplate records these facts:
 - A `SKILL.md` read result from the model tool call.
 - A catalog snapshot from pi skill commands.
 - A capture gap when Hotplate knows that it dropped observations.
+- Resource read attempts and results, filesystem opens and accesses, inventory snapshots, and observer coverage.
 
 Hotplate does not persist raw prompts, full tool outputs, credentials, or error bodies.
 
@@ -139,9 +140,9 @@ Repeated reads and unique activations have separate counts.
 
 ## Limitations
 
-Hotplate captures live pi sessions only.
+Hotplate captures supported live Pi, Codex, Claude Code, and OpenCode integrations.
 It does not import old transcripts.
-It does not observe bash reads, custom tool reads, unloaded external agents, or child processes without the extension.
+The optional Linux filesystem observer can capture shell and loader access within registered roots. It requires a privileged helper and cannot observe cached content or every memory-mapped read.
 A process crash can lose queued observations.
 
 Chains split by machine, account source, session, segment, and run.
@@ -155,6 +156,12 @@ A status message and a metadata-only stderr diagnostic report capture failures.
 Gap counts are best effort, not proof of complete coverage.
 SQLite waits at most 25 ms per attempt, with three retries and asynchronous delays between write attempts.
 Shutdown cancels retries after a 500 ms drain budget. A synchronous SQLite call can finish after that deadline.
+
+## References, principles, and other skill files
+
+Resource tracking works without Skills Explorer or a prebuilt index. Register custom roots with `hotplate resources add-root <directory>`, inventory them with `hotplate resources scan`, and inspect them with `hotplate resources list`. `hotplate resources watch` runs inventory reconciliation and the optional Linux access observer.
+
+See [resource capture and inventory](docs/resources.md) for setup, T3 process attribution, coverage semantics, and the required aggregate upgrade.
 
 ## LAN aggregation
 
