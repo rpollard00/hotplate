@@ -368,7 +368,7 @@ dt { color: var(--muted); }dd { margin: 0; overflow-wrap: anywhere; }
 export const dashboardJs = 'const projectMetrics = ' + projectMetrics.toString() + ';\n' + String.raw`'use strict';
 const $ = (id) => document.getElementById(id);
 const state = {
-  requestId: 0, controller: null, report: null, pathModels: [], resources: [], resourceCoverage: [], workspace: 'metrics', metricView: null,
+  requestId: 0, controller: null, filterQuery: '', report: null, pathModels: [], resources: { kind: 'unrequested' }, workspace: 'metrics', metricView: null,
   focus: { kind: 'all' }, routeKey: null, skillSelection: null,
   explore: { skillName: null, interval: null },
   trends: { kind: 'top', count: 5 },
@@ -460,6 +460,10 @@ function showWorkspace(name, focusHeading = false) {
     if (item.dataset.workspace === name) item.setAttribute('aria-current', 'page'); else item.removeAttribute('aria-current');
   });
   if (focusHeading) { const heading = $(name === 'paths' ? 'paths-heading' : name + '-heading'); heading.tabIndex = -1; heading.focus(); }
+  if (state.report) {
+    if (name === 'resources' && state.resources.kind === 'unrequested') void loadResources();
+    else showWorkspaceStatus();
+  }
 }
 function setStatus(kind, text) { $('status-text').dataset.kind = kind; $('status-text').textContent = text; }
 function showMessage(title, text, retry = false) {
@@ -467,6 +471,48 @@ function showMessage(title, text, retry = false) {
   $('message-panel').replaceChildren(node('h2', title));
   if (text) $('message-panel').append(node('p', text));
   if (retry) $('message-panel').append(button('Retry', loadDashboard));
+}
+function showMissingDatabase(databasePath) {
+  $('dashboard-content').hidden = true; $('scope-summary').hidden = true;
+  setStatus('missing', 'No database'); showMessage('No Hotplate database found', 'Check the database location and capture or collector configuration. Then refresh the dashboard.', true);
+  $('message-panel').append(disclosure('Database location', node('p', databasePath)));
+}
+function showDashboardError(error) {
+  $('dashboard-content').hidden = true; $('scope-summary').hidden = true;
+  setStatus('error', 'Error'); showMessage('Cannot load dashboard', error instanceof DashboardFetchError ? 'Could not reach the dashboard server.' : undefined, true);
+  $('message-panel').append(disclosure('Error details', node('p', error instanceof Error ? error.message : String(error))));
+}
+function showWorkspaceStatus() {
+  if (state.workspace !== 'resources' || state.resources.kind === 'ready') {
+    renderScope(); $('message-panel').hidden = true; $('dashboard-content').hidden = false;
+    $('workspace').setAttribute('aria-busy', 'false'); setStatus('ready', 'Ready');
+    return;
+  }
+  const resources = state.resources;
+  $('workspace').setAttribute('aria-busy', String(resources.kind === 'loading'));
+  if (resources.kind === 'missing') showMissingDatabase(resources.databasePath);
+  else if (resources.kind === 'error') showDashboardError(resources.error);
+  else {
+    $('dashboard-content').hidden = true; $('scope-summary').hidden = true;
+    setStatus('loading', 'Loading'); showMessage('Loading resources…');
+  }
+}
+async function fetchDashboard(scope, query, signal) {
+  const params = new URLSearchParams(query); params.set('scope', scope);
+  const response = await fetch('/api/dashboard?' + params, { signal, headers: { Accept: 'application/json' } }).catch((error) => {
+    if (error instanceof TypeError && ['Failed to fetch', 'NetworkError when attempting to fetch resource.', 'Load failed'].includes(error.message)) throw new DashboardFetchError(error.message);
+    throw error;
+  });
+  if (!response.ok) throw new Error('Dashboard request failed (HTTP ' + response.status + ').');
+  const payload = await response.json();
+  if (!payload || !['ready', 'missing', 'error'].includes(payload.kind)) throw new Error('Unexpected dashboard response.');
+  if (payload.kind === 'ready') {
+    if ('scope' in payload && payload.scope !== scope) throw new Error('Unexpected dashboard response scope.');
+    if (!payload.filterOptions || !['hosts', 'machines', 'projects'].every(key => Array.isArray(payload.filterOptions[key]))) throw new Error('The dashboard filters are unavailable.');
+    if (scope === 'skills' && (!payload.report || !Array.isArray(payload.report.skillGroups) || !Array.isArray(payload.report.routes))) throw new Error('The dashboard report is unavailable.');
+    if (scope === 'resources' && (!Array.isArray(payload.resources?.rows) || !Array.isArray(payload.resourceCoverage?.rows))) throw new Error('The resource report is unavailable.');
+  }
+  return payload;
 }
 function filterParams() {
   const params = new URLSearchParams();
@@ -494,45 +540,59 @@ async function loadDashboard() {
   applyTimePreset();
   const requestId = ++state.requestId;
   state.controller?.abort(); state.controller = new AbortController();
+  if (state.resources.kind === 'loading') state.resources.controller.abort();
+  state.resources = { kind: 'unrequested' };
+  state.filterQuery = filterParams().toString();
   state.report = null;
   $('scope-summary').hidden = true; $('scope-summary').textContent = '';
   $('dashboard-content').hidden = true; $('workspace').setAttribute('aria-busy', 'true');
   setStatus('loading', 'Loading');
   showMessage('Loading activity…');
   try {
-    const response = await fetch('/api/dashboard?' + filterParams(), { signal: state.controller.signal, headers: { Accept: 'application/json' } }).catch((error) => {
-      if (error instanceof TypeError && ['Failed to fetch', 'NetworkError when attempting to fetch resource.', 'Load failed'].includes(error.message)) throw new DashboardFetchError(error.message);
-      throw error;
-    });
-    if (!response.ok) throw new Error('Dashboard request failed (HTTP ' + response.status + ').');
-    const payload = await response.json();
+    const payload = await fetchDashboard('skills', state.filterQuery, state.controller.signal);
     if (requestId !== state.requestId) return;
-    if (!['ready', 'missing', 'error'].includes(payload.kind)) throw new Error('Unexpected dashboard response.');
     renderFilterOptions(payload.filterOptions);
     if (payload.kind === 'missing') {
-      setStatus('missing', 'No database'); showMessage('No Hotplate database found', 'Check the database location and capture or collector configuration. Then refresh the dashboard.', true);
-      $('message-panel').append(disclosure('Database location', node('p', payload.databasePath))); return;
+      showMissingDatabase(payload.databasePath); return;
     }
     if (payload.kind === 'error') throw new Error(payload.message);
-    if (!payload.report || !Array.isArray(payload.report.skillGroups) || !Array.isArray(payload.report.routes)) throw new Error('The dashboard report is unavailable.');
     state.report = payload.report;
-    state.resources = Array.isArray(payload.resources?.rows) ? payload.resources.rows : [];
-    state.resourceCoverage = Array.isArray(payload.resourceCoverage?.rows) ? payload.resourceCoverage.rows : [];
     const models = [...state.report.models];
     for (const measure of ['uses', 'invocationFailures']) for (const series of projectMetrics(state.report, { measure, split: 'model', display: 'count' }).series) { if (series.attribution !== 'none' && !models.some(column => sameModel(column.model, series.model))) models.push({ model: series.model }); }
     state.pathModels = models;
     resetSelections();
-    renderScope(); renderMetrics(); renderPaths(); renderResources();
-    $('message-panel').hidden = true; $('dashboard-content').hidden = false;
-    setStatus('ready', 'Ready');
+    renderMetrics(); renderPaths();
+    if (state.workspace === 'resources') void loadResources();
   } catch (error) {
     if (requestId !== state.requestId) return;
-    state.report = null; $('dashboard-content').hidden = true;
-    $('scope-summary').hidden = true;
-    setStatus('error', 'Error'); showMessage('Cannot load dashboard', error instanceof DashboardFetchError ? 'Could not reach the dashboard server.' : undefined, true);
-    $('message-panel').append(disclosure('Error details', node('p', error instanceof Error ? error.message : String(error))));
+    state.report = null; showDashboardError(error);
   } finally {
-    if (requestId === state.requestId) $('workspace').setAttribute('aria-busy', 'false');
+    if (requestId === state.requestId) {
+      if (state.report) showWorkspaceStatus();
+      else $('workspace').setAttribute('aria-busy', 'false');
+    }
+  }
+}
+async function loadResources() {
+  if (!state.report || state.resources.kind !== 'unrequested') return;
+  const requestId = state.requestId;
+  const controller = new AbortController();
+  state.resources = { kind: 'loading', controller };
+  showWorkspaceStatus();
+  try {
+    const payload = await fetchDashboard('resources', state.filterQuery, controller.signal);
+    if (requestId !== state.requestId) return;
+    if (payload.kind === 'missing') state.resources = { kind: 'missing', databasePath: payload.databasePath };
+    else {
+      if (payload.kind === 'error') throw new Error(payload.message);
+      state.resources = { kind: 'ready', rows: payload.resources.rows, coverage: payload.resourceCoverage.rows };
+      renderResources();
+    }
+  } catch (error) {
+    if (requestId !== state.requestId) return;
+    state.resources = { kind: 'error', error };
+  } finally {
+    if (requestId === state.requestId && state.workspace === 'resources') showWorkspaceStatus();
   }
 }
 function renderFilterOptions(options) {
@@ -1219,7 +1279,7 @@ function resourceBadge(label, status) {
   const badge = node('span', label, 'resource-state'); badge.dataset.state = status; return badge;
 }
 function renderResourceCoverage() {
-  const rows = state.resourceCoverage;
+  const rows = state.resources.coverage;
   const target = $('resource-coverage-content'); target.replaceChildren();
   const states = new Map();
   for (const row of rows) states.set(row.status, (states.get(row.status) || 0) + 1);
@@ -1238,7 +1298,8 @@ function renderResourceCoverage() {
   }
 }
 function renderResources() {
-  const all = state.resources;
+  if (state.resources.kind !== 'ready') return;
+  const all = state.resources.rows;
   const observed = all.filter(row => row.observation === 'observed').length;
   const untouched = all.filter(row => row.observation === 'not-observed').length;
   $('resource-summary').textContent = count(all.length, 'file') + ' · ' + number(observed) + ' observed · ' + number(untouched) + ' with no observed agent access · ' + number(all.length - observed - untouched) + ' unknown';
@@ -1435,8 +1496,8 @@ $('time-preset').addEventListener('change', () => {
   loadDashboard();
 });
 for (const id of ['from-filter', 'to-filter']) $(id).addEventListener('change', () => { $('time-preset').value = 'custom'; });
-for (const [id, key, render] of [['skill-search', 'skills', renderSkillComparison], ['catalog-search', 'catalog', renderCatalog], ['route-search', 'routes', renderPaths], ['resource-search', 'resources', renderResources]]) $(id).addEventListener('input', () => { state.pages[key] = 0; if (state.report) render(); });
-for (const id of ['resource-kind', 'resource-observation']) $(id).addEventListener('change', () => { state.pages.resources = 0; if (state.report) renderResources(); });
+for (const [id, key, render] of [['skill-search', 'skills', renderSkillComparison], ['catalog-search', 'catalog', renderCatalog], ['route-search', 'routes', renderPaths], ['resource-search', 'resources', renderResources]]) $(id).addEventListener('input', () => { state.pages[key] = 0; if (key === 'resources' ? state.resources.kind === 'ready' : state.report) render(); });
+for (const id of ['resource-kind', 'resource-observation']) $(id).addEventListener('change', () => { state.pages.resources = 0; if (state.resources.kind === 'ready') renderResources(); });
 for (const id of ['metric-measure', 'metric-split', 'metric-display']) $(id).addEventListener('change', () => { if (!state.report) return; state.pages.skills = 0; state.pages.columns = 0; updateMetricProjection(); renderActivity(); renderExplore(); });
 $('route-model').addEventListener('change', () => { state.pages.routes = 0; state.routeKey = null; renderPaths(); });
 $('browse-paths').addEventListener('click', () => showWorkspace('paths', true));
