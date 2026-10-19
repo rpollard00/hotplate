@@ -19,6 +19,7 @@ export const dashboardHtml = `<!doctype html>
       <button type="button" data-workspace="metrics" aria-current="page">Metrics</button>
       <button type="button" data-workspace="paths">Session paths</button>
       <button type="button" data-workspace="resources">Resources</button>
+      <span class="workspace-indicator" aria-hidden="true" hidden></span>
     </nav>
     <div class="scope-bar">
       <p id="scope-summary" hidden></p>
@@ -78,7 +79,7 @@ export const dashboardHtml = `<!doctype html>
           <div class="page-heading"><div><h1 id="paths-heading">Session paths</h1><p>Recorded activity by session and available run.</p></div></div>
           <div class="path-toolbar panel"><div><strong id="path-focus-label">All session paths</strong><p class="small">These controls filter paths only.</p><button id="back-to-explorer" type="button" class="link" hidden>Back to exploration</button></div><label class="search-label"><span class="sr-only">Search session paths</span><input id="route-search" type="search" placeholder="Find project or skill…"></label><label class="inline-label">Model<select id="route-model"><option value="">All models</option></select></label><button type="button" id="clear-path-focus" class="quiet">Reset path filters</button></div>
           <div id="relationship-detail" class="panel" hidden></div>
-          <div class="path-layout"><section class="panel route-master" aria-label="Recent session paths"><div class="section-heading"><h2>Recent paths</h2><span class="small muted" id="route-count"></span></div><div id="route-list"></div><div id="route-pagination"></div></section><section id="chain-view" class="panel route-detail" aria-label="Selected session path" tabindex="-1"></section></div>
+          <div class="path-layout"><section class="panel route-master" aria-label="Recent session paths"><div class="section-heading"><h2>Recent paths</h2><span class="small muted" id="route-count"></span></div><span class="route-indicator" aria-hidden="true" hidden></span><div id="route-list"></div><div id="route-pagination"></div></section><section id="chain-view" class="panel route-detail" aria-label="Selected session path" tabindex="-1"></section></div>
         </section>
       </div>
     </main>
@@ -179,9 +180,12 @@ p { color: var(--muted); }
 #status-text[data-kind=ready]::before { background: var(--teal); }
 #status-text[data-kind=error]::before { background: var(--bad); }
 .shell { width: min(1440px, 93.6%); margin: auto; }
-.workspace-nav { display: flex; gap: 26px; padding-top: 4px; border-bottom: 1px solid var(--line); }
+.workspace-nav { position: relative; display: flex; gap: 26px; padding-top: 4px; border-bottom: 1px solid var(--line); }
 .workspace-nav button { min-height: 40px; padding: 11px 1px; border: 0; border-bottom: 1px solid transparent; border-radius: 0; background: transparent; color: var(--quiet); font-size: 11px; }
-.workspace-nav button[aria-current] { border-bottom-color: var(--teal); color: var(--ink); }
+.workspace-nav button[aria-current] { color: var(--ink); }
+.workspace-indicator, .route-indicator { position: absolute; z-index: 1; background: var(--teal); pointer-events: none; transform-origin: 0 0; }
+.workspace-indicator { height: 1px; bottom: -1px; }
+.route-indicator { width: 2px; border-radius: 1px; }
 .scope-bar { flex-wrap: wrap; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; font-size: 11px; }
 .scope-actions { flex-wrap: wrap; max-width: 100%; display: flex; align-items: center; gap: 8px; min-width: 0; margin-left: auto; }
 .inline-label { display: flex; align-items: center; gap: 8px; }
@@ -354,7 +358,7 @@ th { font-size: 11px; color: var(--muted); font-weight: 600; }
 .path-toolbar .search-label { margin-bottom: 0; max-width: 210px; }
 .path-toolbar select { max-width: 210px; }
 .path-layout { display: grid; grid-template-columns: 310px minmax(0,1fr); gap: 18px; align-items: start; }
-.route-master { padding: 18px 14px; }
+.route-master { position: relative; padding: 18px 14px; }
 .route-choice { display: block; text-align: left; width: 100%; background: transparent; border: 1px solid transparent; border-radius: 3px; color: var(--ink); padding: 12px 10px; margin-bottom: 4px; font-weight: 400; }
 .route-choice[aria-pressed=true] { background: var(--selection); border-color: var(--selection-line); }
 .route-choice strong { font-size: 13px; display: block; }
@@ -364,9 +368,13 @@ th { font-size: 11px; color: var(--muted); font-weight: 600; }
 .route-scope { overflow-wrap: anywhere; }
 dl { display: grid; grid-template-columns: 100px minmax(0,1fr); gap: 5px 14px; font-size: 12px; }
 dt { color: var(--muted); }dd { margin: 0; overflow-wrap: anywhere; }
-.timeline { list-style: none; padding: 0; margin: 24px 0 0; }
+.timeline { position: relative; list-style: none; padding: 0; margin: 24px 0 0; }
+.timeline-trace { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.timeline-connector { stroke: var(--teal); stroke-width: 1.5; }
+.timeline-tip { fill: var(--teal-bright); opacity: 0; }
+.timeline-arrival { fill: none; stroke: var(--teal-bright); stroke-width: 1.25; opacity: 0; transform-box: fill-box; transform-origin: center; }
 .timeline-step { position: relative; padding: 0 0 22px 28px; margin-left: 8px; border-left: 1px solid var(--faint); }
-.timeline-step:last-child { border-left-color: transparent; }
+.timeline-step:last-of-type { border-left-color: transparent; }
 .timeline-step::before { content: ''; position: absolute; width: 9px; height: 9px; background: var(--faint); border: 3px solid var(--bg); box-sizing: content-box; border-radius: 50%; left: -8px; top: 2px; }
 .step-heading { display: flex; gap: 12px; justify-content: space-between; font-size: 11px; color: var(--muted); margin-bottom: 9px; }
 .step-group { display: flex; flex-wrap: wrap; gap: 7px; }
@@ -408,7 +416,8 @@ body:has(#status-text[data-kind=error]) .message { border-left-color: var(--bad)
   .resource-scroll-hint { display: block; margin-bottom: 12px; }
   #route-list { max-height: 320px; overflow-y: auto; }
 }
-@media (prefers-reduced-motion: no-preference) { button { transition: background-color .12s; } }
+@media (prefers-reduced-motion: no-preference) { button, input, select, summary { transition: background-color .12s linear, border-color .12s linear, color .12s linear; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
 `;
 
 export const dashboardJs = 'const projectMetrics = ' + projectMetrics.toString() + ';\n' + String.raw`'use strict';
@@ -436,6 +445,149 @@ const hostLabel = (host) => hostLabels[host] || host;
 const hostColor = (host) => hostColors[host] || hostColors.unknown;
 class DashboardFetchError extends Error {}
 const pageLabels = { skills: 'skill rows', columns: 'comparison columns' };
+const motion = (() => {
+  const preference = matchMedia('(prefers-reduced-motion: reduce)');
+  const scopes = new Map(); const remembered = new WeakMap();
+  const growEase = 'cubic-bezier(.25,.5,.6,1)';
+  const visible = element => element.isConnected && element.getClientRects().length > 0 && element.getBoundingClientRect().height > 0;
+  const damping = 30 / (2 * .7); const frequency = Math.sqrt(520 / .7 - damping * damping);
+  const spring = Array.from({ length: 31 }, (_, index) => {
+    const offset = index / 30; const time = offset * .45;
+    const progress = index === 30 ? 1 : 1 - Math.exp(-damping * time) * (Math.cos(frequency * time) + damping / frequency * Math.sin(frequency * time));
+    return { offset, progress };
+  });
+  function stop(scope) {
+    const transaction = scopes.get(scope);
+    if (!transaction) return;
+    scopes.delete(scope);
+    for (const animation of transaction.animations) { animation.onfinish = null; animation.oncancel = null; animation.cancel(); }
+    for (const cleanup of transaction.cleanups) cleanup();
+  }
+  function cancel(scope) {
+    for (const owner of [...scopes.keys()]) if (owner === scope || scope.contains(owner)) stop(owner);
+  }
+  function complete(scope, transaction) {
+    if (scopes.get(scope) !== transaction || transaction.animations.size) return;
+    scopes.delete(scope);
+    for (const cleanup of transaction.cleanups) cleanup();
+  }
+  function play(scope, transaction, element, frames, options) {
+    const animation = element.animate(frames, options);
+    transaction.animations.add(animation);
+    const release = () => { transaction.animations.delete(animation); complete(scope, transaction); };
+    animation.onfinish = release; animation.oncancel = release;
+  }
+  function run(scope, build) {
+    stop(scope);
+    if (preference.matches || !scope.animate || !visible(scope)) return;
+    const transaction = { animations: new Set(), cleanups: [] };
+    scopes.set(scope, transaction);
+    build((element, frames, options) => play(scope, transaction, element, frames, options), transaction.cleanups);
+    complete(scope, transaction);
+  }
+  function changed(scope, signature) {
+    if (!visible(scope)) return false;
+    if (remembered.get(scope) === signature) return false;
+    remembered.set(scope, signature); return true;
+  }
+  function capture(scope) {
+    const items = new Map();
+    for (const element of scope.querySelectorAll('[data-motion-key]')) {
+      if (!visible(element)) continue;
+      const fill = element.querySelector('.rank-fill');
+      items.set(element.dataset.motionKey, { rect: element.getBoundingClientRect(), fill: fill?.getBoundingClientRect().width });
+    }
+    cancel(scope); return items;
+  }
+  function reflow(scope, before) {
+    run(scope, animate => {
+      for (const element of scope.querySelectorAll('[data-motion-key]')) {
+        const previous = before.get(element.dataset.motionKey);
+        if (!previous || !visible(element)) continue;
+        const next = element.getBoundingClientRect(); const dx = previous.rect.left - next.left; const dy = previous.rect.top - next.top;
+        if (Math.abs(dx) + Math.abs(dy) > .5) animate(element, [{ transform: 'translate(' + dx + 'px,' + dy + 'px)' }, { transform: 'translate(0,0)' }], { duration: 400, easing: 'cubic-bezier(.22,1,.36,1)' });
+        const fill = element.querySelector('.rank-fill'); const width = fill?.getBoundingClientRect().width;
+        if (fill && previous.fill !== undefined && Math.abs(previous.fill - width) > .5) animate(fill, [{ width: previous.fill + 'px' }, { width: width + 'px' }], { duration: 400, easing: growEase });
+      }
+    });
+  }
+  function marker(element, bounds, travel = true) {
+    const signature = JSON.stringify(bounds);
+    if (travel && !element.hidden && remembered.get(element) === signature) return;
+    remembered.set(element, signature);
+    const parent = element.parentElement; const parentRect = parent.getBoundingClientRect();
+    const before = element.hidden ? null : element.getBoundingClientRect();
+    cancel(element);
+    element.hidden = bounds === null;
+    if (!bounds) return;
+    Object.assign(element.style, { left: bounds.left + 'px', top: bounds.top + 'px', width: bounds.width + 'px', height: bounds.height + 'px' });
+    if (!travel || !before || !before.width || !before.height || !bounds.width || !bounds.height) return;
+    const dx = before.left - parentRect.left - parent.clientLeft - bounds.left; const dy = before.top - parentRect.top - parent.clientTop - bounds.top;
+    const sx = before.width / bounds.width; const sy = before.height / bounds.height;
+    if (Math.abs(dx) + Math.abs(dy) + Math.abs(before.width - bounds.width) + Math.abs(before.height - bounds.height) < .5) return;
+    run(element, animate => animate(element, spring.map(({ offset, progress }) => ({ offset, transform: 'translate(' + dx * (1 - progress) + 'px,' + dy * (1 - progress) + 'px) scale(' + (sx + (1 - sx) * progress) + ',' + (sy + (1 - sy) * progress) + ')' })), { duration: 450, easing: 'linear' }));
+  }
+  function chart(scope) {
+    const paths = [...scope.querySelectorAll('.trend-area')];
+    const signature = JSON.stringify([presentation(), paths.map(path => [path.dataset.skill, path.getAttribute('d'), path.getAttribute('fill')])]);
+    if (!changed(scope, signature)) return;
+    run(scope, animate => paths.forEach((path, index) => animate(path, [{ clipPath: 'inset(0 100% 0 0)' }, { clipPath: 'inset(0 0% 0 0)' }], { duration: Math.min(550, 260 + path.getBoundingClientRect().width / 2.4), delay: Math.min(index * 12, 120), easing: growEase, fill: 'backwards' })));
+  }
+  function expand(element, before) {
+    stop(element);
+    const height = visible(element) ? element.getBoundingClientRect().height : 0;
+    run(element, animate => {
+      if (Math.abs(height - before) < 1) return;
+      animate(element, [{ height: before + 'px', overflow: 'clip' }, { height: height + 'px', overflow: 'clip' }], { duration: 260, easing: growEase });
+    });
+  }
+  function trace(scope) {
+    const timeline = scope.querySelector('.timeline');
+    if (!timeline || !changed(scope, scope.dataset.traceSignature)) return;
+    run(scope, (animate, cleanups) => {
+      const bounds = timeline.getBoundingClientRect(); const steps = [...timeline.querySelectorAll('.timeline-step')].slice(0, 6);
+      if (!steps.length) return;
+      const points = steps.map(step => { const box = step.getBoundingClientRect(); return { x: box.left - bounds.left + .5, y: box.top - bounds.top + 9.5 }; });
+      const overlay = svgNode('svg', { class: 'timeline-trace', viewBox: '0 0 ' + bounds.width + ' ' + bounds.height, 'aria-hidden': 'true', focusable: 'false' });
+      timeline.append(overlay); cleanups.push(() => overlay.remove());
+      for (const [index, step] of steps.entries()) {
+        if (step.classList.contains('gap')) continue;
+        const point = points[index]; const previous = points[index - 1];
+        const connected = index > 0 && !steps[index - 1].classList.contains('gap');
+        const delay = index <= 1 ? 0 : 450 + (index - 2) * 150; const duration = index === 1 ? 450 : 420;
+        const arrival = connected ? delay + duration : index === 0 ? 0 : 450 + (index - 1) * 150;
+        if (connected) {
+          const length = point.y - previous.y;
+          const connector = svgNode('line', { class: 'timeline-connector', x1: previous.x, x2: point.x, y1: previous.y, y2: point.y, 'stroke-dasharray': length });
+          const tip = svgNode('circle', { class: 'timeline-tip', r: 2.6, cx: previous.x, cy: previous.y });
+          overlay.append(connector, tip);
+          animate(connector, [{ strokeDashoffset: length }, { strokeDashoffset: 0 }], { duration, delay, easing: 'linear', fill: 'backwards' });
+          animate(tip, [{ transform: 'translateY(0px)', opacity: 0, offset: 0 }, { opacity: 1, offset: .01 }, { opacity: 1, offset: .99 }, { transform: 'translateY(' + length + 'px)', opacity: 0, offset: 1 }], { duration, delay, easing: 'linear', fill: 'backwards' });
+        }
+        const ring = svgNode('circle', { class: 'timeline-arrival', r: 7, cx: point.x, cy: point.y }); overlay.append(ring);
+        animate(ring, [{ transform: 'scale(1)', opacity: 1 }, { transform: 'scale(2.6)', opacity: 0 }], { duration: 550, delay: arrival, easing: 'ease-out' });
+        const group = step.querySelector('.step-group');
+        if (group) animate(group, [{ filter: 'brightness(1)' }, { filter: 'brightness(1.35)', offset: .25 }, { filter: 'brightness(1)' }], { duration: 300, delay: arrival, easing: 'ease-out' });
+      }
+    });
+  }
+  function cancelAll() { for (const scope of [...scopes.keys()]) cancel(scope); }
+  preference.addEventListener('change', event => { if (event.matches) cancelAll(); });
+  window.addEventListener('resize', () => { cancelAll(); updateWorkspaceMarker(false); updateRouteMarker(false); });
+  document.addEventListener('focusin', event => {
+    for (const scope of [...scopes.keys()]) if (scope !== event.target && scope.contains(event.target) && (scope.matches('details, #scope-panel, #explorer-panel'))) cancel(scope);
+  });
+  document.addEventListener('toggle', event => {
+    if (!(event.target instanceof HTMLDetailsElement)) return;
+    const details = event.target;
+    const route = details.closest('#chain-view'); if (route) cancel(route);
+    if (!details.open) { cancel(details); return; }
+    const style = getComputedStyle(details); const summary = details.querySelector('summary');
+    const closedHeight = summary.getBoundingClientRect().height + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) + parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
+    queueMicrotask(() => { if (details.open && details.isConnected && (!details.contains(document.activeElement) || document.activeElement === summary)) expand(details, closedHeight); });
+  }, true);
+  return { capture, reflow, marker, chart, expand, trace, cancel, cancelAll };
+})();
 function node(tag, text, className) {
   const element = document.createElement(tag);
   if (text !== undefined && text !== null) element.textContent = String(text);
@@ -499,12 +651,29 @@ function setOptions(select, label, options) {
   if (current && !options.some((option) => option.value === current)) { const retained = node('option', currentLabel + ' · unavailable'); retained.value = current; retained.disabled = true; select.append(retained); }
   select.value = current;
 }
+function updateWorkspaceMarker(travel = true) {
+  const nav = document.querySelector('.workspace-nav'); const active = nav.querySelector('[aria-current]');
+  const bounds = nav.getBoundingClientRect(); const destination = active.getBoundingClientRect();
+  motion.marker(nav.querySelector('.workspace-indicator'), { left: destination.left - bounds.left - nav.clientLeft, top: destination.bottom - bounds.top - nav.clientTop - 1, width: destination.width, height: 1 }, travel);
+}
+function updateRouteMarker(travel = true) {
+  const list = $('route-list'); const parent = list.parentElement; const marker = parent.querySelector('.route-indicator');
+  const selected = list.querySelector('.route-choice[aria-pressed="true"]'); const bounds = list.getBoundingClientRect(); const destination = selected?.getBoundingClientRect();
+  if (!destination || bounds.height === 0 || destination.bottom <= bounds.top || destination.top >= bounds.bottom) { motion.marker(marker, null); return; }
+  const box = parent.getBoundingClientRect();
+  const top = Math.max(destination.top + 8, bounds.top); const bottom = Math.min(destination.bottom - 8, bounds.bottom);
+  motion.marker(marker, { left: destination.left - box.left - parent.clientLeft + 1, top: top - box.top - parent.clientTop, width: 2, height: Math.max(0, bottom - top) }, travel);
+}
 function showWorkspace(name, focusHeading = false) {
+  const changed = state.workspace !== name;
   state.workspace = name;
-  for (const workspace of ['metrics', 'paths', 'resources']) $(workspace + '-workspace').hidden = workspace !== name;
+  for (const workspace of ['metrics', 'paths', 'resources']) { const element = $(workspace + '-workspace'); if (workspace !== name) motion.cancel(element); element.hidden = workspace !== name; }
   document.querySelectorAll('[data-workspace]').forEach((item) => {
     if (item.dataset.workspace === name) item.setAttribute('aria-current', 'page'); else item.removeAttribute('aria-current');
   });
+  if (changed) updateWorkspaceMarker();
+  if (name === 'paths') { updateRouteMarker(); motion.trace($('chain-view')); }
+  if (name === 'metrics') motion.chart($('activity-chart'));
   if (focusHeading) { const heading = $(name === 'paths' ? 'paths-heading' : name + '-heading'); heading.tabIndex = -1; heading.focus(); }
 }
 function setStatus(kind, text) { $('status-text').dataset.kind = kind; $('status-text').textContent = text; }
@@ -538,6 +707,7 @@ function applyTimePreset() {
 }
 async function loadDashboard() {
   applyTimePreset();
+  motion.cancel($('dashboard-content'));
   const requestId = ++state.requestId;
   state.controller?.abort(); state.controller = new AbortController();
   state.report = null;
@@ -570,6 +740,9 @@ async function loadDashboard() {
     resetSelections();
     renderScope(); renderMetrics(); renderPaths(); renderResources();
     $('message-panel').hidden = true; $('dashboard-content').hidden = false;
+    updateRouteMarker(false);
+    if (state.workspace === 'metrics') motion.chart($('activity-chart'));
+    if (state.workspace === 'paths') motion.trace($('chain-view'));
     setStatus('ready', 'Ready');
   } catch (error) {
     if (requestId !== state.requestId) return;
@@ -695,6 +868,7 @@ function mountTimeBrush(plot, activity, readout, onChange, onInspect) {
   }
   plot.addEventListener('pointerdown', (event) => {
     if (!event.isPrimary || event.button !== 0 || gesture !== null) return;
+    motion.cancel($('activity-chart'));
     const anchor = position(event); let mode = event.target.dataset.mode || 'create';
     if (selected && (mode === 'start' || mode === 'end')) mode = Math.abs(anchor - selected[0]) < Math.abs(anchor - selected[1]) ? 'start' : 'end';
     gesture = { mode, anchor, range: selected, pointer: event.pointerId };
@@ -724,6 +898,7 @@ function mountTimeBrush(plot, activity, readout, onChange, onInspect) {
   plot.addEventListener('pointercancel', cancel); plot.addEventListener('lostpointercapture', cancel);
   plot.addEventListener('blur', () => { delete plot.dataset.pointer; });
   plot.addEventListener('keydown', (event) => {
+    motion.cancel($('activity-chart'));
     delete plot.dataset.pointer;
     if (event.key === 'Escape') {
       event.preventDefault();
@@ -885,7 +1060,7 @@ function mountTrendControls(target) {
 function metricEmptyText() { return 'No ' + measureLabels[presentation().measure].toLowerCase() + (hasFilters() ? ' match these filters.' : ' recorded yet.'); }
 function appendModelRecovery(target) { if (state.report.scope.modelSelection && ['requests', 'wrappers'].includes(presentation().measure)) { target.append(node('p', measureLabels[presentation().measure] + ' have no model attribution.', 'footnote'), button('Show all models', () => { $('model-filter').value = ''; loadDashboard(); })); } }
 function renderActivity() {
-  const target = $('activity-chart'); target.replaceChildren(); activityView = null;
+  const target = $('activity-chart'); motion.cancel(target); target.replaceChildren(); activityView = null;
   const report = state.report; const activity = metricActivity();
   const updateControls = $('metric-split').value === 'skill' ? mountTrendControls(target) : () => {}; updateControls();
   if (activity.kind !== 'empty' && !state.metricView.series.length && presentation().split !== 'skill') { activityView = updateControls; target.append(empty(metricEmptyText())); appendModelRecovery(target); return; }
@@ -959,6 +1134,7 @@ function renderActivity() {
           label.dataset.skill = layer.name; label.style.setProperty('--skill-color', color); label.append(node('span', trendName(layer.name)), node('small')); labels.append(label);
           svg.append(svgNode('path', { d: stepPath(activity, layer.lower, layer.upper, stack.maximum), fill: color, class: 'trend-area', 'data-skill': layer.name }));
         }
+        motion.chart(target);
         if (details.open) renderData();
         else scroll.replaceChildren();
       }
@@ -1064,7 +1240,7 @@ function explorePaths(routeKey = null, model = undefined) {
   if (routeKey !== null) { $('chain-view').focus(); $('chain-view').scrollIntoView({ block: 'nearest' }); }
 }
 function renderComparison() {
-  const target = $('explore-comparison'); target.replaceChildren();
+  const target = $('explore-comparison'); const before = motion.capture(target); target.replaceChildren();
   const activity = state.report.activity;
   let interval = state.explore.interval;
   const recent = interval === null;
@@ -1113,6 +1289,7 @@ function renderComparison() {
   const labels = node('div', null, 'compare-row'); labels.append(node('span', 'Skill'), node('span', recent ? 'Recent' : 'Selected'), node('span', 'Previous')); target.append(labels);
   for (const name of ranked.slice(0, 5)) {
     const row = node('div', null, 'compare-row' + (name === state.explore.skillName ? ' selected' : ''));
+    row.dataset.motionKey = name;
     const action = button(name, () => selectExploreSkill(name), 'link'); action.setAttribute('aria-pressed', String(name === state.explore.skillName)); row.append(action);
     for (const snapshot of [current, previous]) {
       const paths = snapshot.bySkill.get(name) || 0;
@@ -1122,10 +1299,11 @@ function renderComparison() {
     target.append(row);
   }
   target.append(node('p', 'Each percent uses the recorded read-bearing paths in that period. Select a skill to inspect its paths.', 'footnote'));
+  motion.reflow(target, before);
 }
 function renderExplore() {
   const selection = state.explore; const active = selection.skillName !== null || selection.interval !== null;
-  const panel = $('explorer-panel'); panel.hidden = !active;
+  const panel = $('explorer-panel'); const before = panel.hidden ? 0 : panel.getBoundingClientRect().height; motion.cancel(panel); panel.hidden = !active;
   state.pages.skills = 0; renderSkillComparison(); updateActivitySelection();
   $('explore-models').hidden = selection.skillName === null;
   if (state.focus.kind === 'explore') {
@@ -1176,6 +1354,7 @@ function renderExplore() {
   if (!rankedModels.length) models.append(empty('No models match this selection.'));
   renderComparison();
   $('explore-announcement').textContent = count(snapshot.paths.length, 'matching path') + ' in the exploration.';
+  motion.expand(panel, before);
 }
 function comparisonView() {
   if (!state.explore.interval && !state.explore.skillName) return state.metricView;
@@ -1194,13 +1373,13 @@ function renderSkillComparison() {
   const rows = view.skills.filter(row => (share ? row.sessions > 0 : row.count > 0) && row.name.toLowerCase().includes(query));
   $('skills-heading').textContent = 'Compare skills';
   $('comparison-note').textContent = share ? 'Sessions with this skill use / sessions with any skill use in each cohort. Models use their own session denominator. A session can appear under several models. Exact recorded skill names retain plugin prefixes.' : 'Exact recorded skill names. Select a count for matching records and paths.';
-  const target = $('skill-table'); target.replaceChildren();
+  const target = $('skill-table'); const before = motion.capture(target); target.replaceChildren();
   const pager = $('comparison-pagination'); pager.replaceChildren();
   if (!rows.length) { $('comparison-scroll-hint').hidden = true; target.append(empty(query ? noResults('skills', query) : metricEmptyText())); appendModelRecovery(target); if (state.report.skillGroups.some(group => group.cataloged)) target.append(button('View skill catalog', () => { $('catalog-context').open = true; $('catalog-context').querySelector('summary').focus(); }, 'link')); return; }
   if (p.split === 'skill') {
     const max = Math.max(1, ...rows.map(row => share ? row.share || 0 : row.count));
     for (const [index, row] of pageItems(rows, 'skills', 8).entries()) {
-      const line = node('div', null, 'rank-row' + (state.explore.skillName === row.name ? ' selected' : '')); line.append(node('span', String(state.pages.skills * 8 + index + 1).padStart(2, '0'), 'rank-number'));
+      const line = node('div', null, 'rank-row' + (state.explore.skillName === row.name ? ' selected' : '')); line.dataset.motionKey = row.name; line.append(node('span', String(state.pages.skills * 8 + index + 1).padStart(2, '0'), 'rank-number'));
       const name = node('div'); const action = button(row.name, () => p.measure === 'successfulReads' && !share ? selectExploreSkill(row.name) : selectMetricSkill(row, row, null), 'link'); action.setAttribute('aria-pressed', String(state.explore.skillName === row.name)); name.append(action);
       const track = node('div', null, 'rank-track'); const fill = node('div', null, 'rank-fill'); fill.style.width = (share ? row.share || 0 : row.count) / max * 100 + '%'; track.append(fill); name.append(track);
       const value = node('strong'); value.append(button(share ? shareText(row.share) : number(row.count), () => selectMetricSkill(row, row, null), 'link')); line.append(name, value); target.append(line);
@@ -1210,7 +1389,7 @@ function renderSkillComparison() {
     const matrix = table(['Skill', ...columns.map(column => trendName(column.key))], (share ? 'Session share' : measureLabels[p.measure]) + ' by skill and ' + p.split.replace('-', ' + ')); matrix.className = 'matrix';
     const max = Math.max(1, ...rows.flatMap(row => row.cells.map(cell => share ? cell.share || 0 : cell.count)));
     for (const row of pageItems(rows, 'skills', 12)) {
-      const line = node('tr'); const heading = node('th'); heading.scope = 'row'; heading.append(button(row.name, () => selectMetricSkill(row, row, null), 'link')); line.append(heading);
+      const line = node('tr'); line.dataset.motionKey = row.name; const heading = node('th'); heading.scope = 'row'; heading.append(button(row.name, () => selectMetricSkill(row, row, null), 'link')); line.append(heading);
       for (const column of columns) {
         const cell = row.cells.find(cell => cell.key === column.key) || { count: 0, sessions: 0, eligibleSessions: column.eligibleSessions, share: column.eligibleSessions ? 0 : null, routeKeys: [] };
         const value = share ? cell.share : cell.count; const text = share ? shareText(value) : number(value);
@@ -1224,6 +1403,7 @@ function renderSkillComparison() {
     if (view.series.length > 6) pager.append(pagination('columns', view.series.length, 6, renderSkillComparison));
   }
   pager.append(pagination('skills', rows.length, p.split === 'skill' ? 8 : 12, renderSkillComparison));
+  motion.reflow(target, before);
 }
 function renderCatalog() {
   const groups = state.report.skillGroups.filter((group) => group.cataloged && group.name.toLowerCase().includes($('catalog-search').value.toLowerCase()));
@@ -1388,16 +1568,17 @@ function renderPaths() {
   $('back-to-explorer').hidden = state.focus.kind !== 'explore';
   $('route-count').textContent = count(routes.length, 'path');
   if (!routes.some((route) => route.key === state.routeKey)) { state.routeKey = routes[0]?.key || null; state.pages.steps = 0; }
-  const target = $('route-list'); target.replaceChildren();
+  const target = $('route-list'); const before = motion.capture(target); target.replaceChildren();
   for (const route of pageItems(routes, 'routes', 8)) {
     const choice = button('', () => { state.routeKey = route.key; state.pages.steps = 0; renderPaths(); $('chain-view').focus(); }, 'route-choice');
-    choice.dataset.routeKey = route.key; choice.setAttribute('aria-pressed', String(route.key === state.routeKey));
+    choice.dataset.routeKey = route.key; choice.dataset.motionKey = route.key; choice.setAttribute('aria-pressed', String(route.key === state.routeKey));
     choice.append(node('strong', project(route.scope.projectCwd)), node('p', date(route.lastEvidenceAt, true) + ' UTC'), node('p', count(route.counts.successfulReads, 'read') + ' · ' + count(route.steps.length, 'step')));
     const names = [...new Set(route.steps.flatMap((step) => step.kind === 'observations' ? step.items.map((item) => skillName(item.skillKey)) : []))];
     choice.append(node('p', names.slice(0, 4).join(' · ') + (names.length > 4 ? ' …' : ''), 'route-preview')); target.append(choice);
   }
   if (!routes.length) target.append(empty($('route-search').value ? 'No paths match this search.' : state.focus.kind !== 'all' || $('route-model').value ? 'No paths match these filters.' : noResults('paths')));
   $('route-pagination').replaceChildren(pagination('routes', routes.length, 8, renderPaths));
+  updateRouteMarker(); motion.reflow(target, before);
   renderRelationshipDetail(routes); renderRouteDetail(routes.find((route) => route.key === state.routeKey));
 }
 function renderRelationshipDetail(routes) {
@@ -1417,8 +1598,8 @@ function renderRelationshipDetail(routes) {
   target.append(links, pagination('evidence', occurrences.length, 8, renderPaths));
 }
 function renderRouteDetail(route) {
-  const target = $('chain-view'); target.replaceChildren();
-  delete target.dataset.routeKey; delete target.dataset.machine;
+  const target = $('chain-view'); motion.cancel(target); target.replaceChildren();
+  delete target.dataset.routeKey; delete target.dataset.machine; delete target.dataset.traceSignature;
   target.hidden = !route;
   if (!route) return;
   target.dataset.routeKey = route.key; target.dataset.machine = route.scope.machineId;
@@ -1466,19 +1647,24 @@ function renderRouteDetail(route) {
     timeline.append(item);
   }
   target.append(timeline, pagination('steps', route.steps.length, 30, () => renderRouteDetail(route)));
+  target.dataset.traceSignature = JSON.stringify([route.key, route.lastEvidenceAt, state.pages.steps, highlighted, modelIndex, state.focus.kind === 'explore' ? state.explore : null]);
+  motion.trace(target);
 }
 
 $('preview-label').hidden = new URLSearchParams(location.search).get('preview') !== '1';
 document.querySelectorAll('[data-workspace]').forEach((item) => item.addEventListener('click', () => showWorkspace(item.dataset.workspace)));
+$('route-list').addEventListener('scroll', () => updateRouteMarker(false), { passive: true });
+updateWorkspaceMarker(false);
+document.fonts.ready.then(() => { updateWorkspaceMarker(false); updateRouteMarker(false); });
 $('filter-form').addEventListener('submit', (event) => { event.preventDefault(); loadDashboard(); });
 $('refresh-data').addEventListener('click', loadDashboard);
 $('reset-filters').addEventListener('click', () => { $('filter-form').reset(); $('time-preset').value = '7'; $('metric-measure').value = 'successfulReads'; $('metric-split').value = 'skill'; $('metric-display').value = 'count'; state.trends = { kind: 'top', count: 5 }; resetSelections(); loadDashboard(); });
 for (const id of ['host-filter', 'model-filter']) $(id).addEventListener('change', () => loadDashboard());
 $('machine-filter').addEventListener('change', () => loadDashboard());
-$('toggle-filters').addEventListener('click', () => { $('scope-panel').hidden = !$('scope-panel').hidden; $('toggle-filters').setAttribute('aria-expanded', String(!$('scope-panel').hidden)); });
+$('toggle-filters').addEventListener('click', () => { const panel = $('scope-panel'); const before = panel.hidden ? 0 : panel.getBoundingClientRect().height; motion.cancel(panel); panel.hidden = !panel.hidden; $('toggle-filters').setAttribute('aria-expanded', String(!panel.hidden)); motion.expand(panel, before); });
 $('time-preset').addEventListener('change', () => {
   const preset = $('time-preset').value;
-  if (preset === 'custom') { $('scope-panel').hidden = false; $('toggle-filters').setAttribute('aria-expanded', 'true'); $('from-filter').focus(); return; }
+  if (preset === 'custom') { const panel = $('scope-panel'); const before = panel.hidden ? 0 : panel.getBoundingClientRect().height; panel.hidden = false; $('toggle-filters').setAttribute('aria-expanded', 'true'); motion.expand(panel, before); $('from-filter').focus(); return; }
   loadDashboard();
 });
 for (const id of ['from-filter', 'to-filter']) $(id).addEventListener('change', () => { $('time-preset').value = 'custom'; });
