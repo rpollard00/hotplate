@@ -379,6 +379,71 @@ try {
       await evaluate("scrollTo(0, 0)");
       await capture(`motion-settled-${width}.png`);
     }
+
+    await command("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1100, deviceScaleFactor: 1, mobile: false });
+    await media("no-preference");
+    await command("Page.navigate", { url: preview.url });
+    await until(ready);
+    await change("time-preset", "all");
+    await until(ready);
+    await settle();
+    await evaluate(`window.resourceRequestCount = 0;
+      const originalFetch = window.fetch;
+      window.fetch = (input, init) => {
+        const url = new URL(String(input), location.href);
+        if (url.pathname !== '/api/dashboard' || url.searchParams.get('scope') !== 'resources') return originalFetch(input, init);
+        window.resourceRequestCount += 1;
+        return originalFetch(input, init).then(response => new Promise(resolve => {
+          window.releaseResourceResponse = () => resolve(response);
+        }));
+      };`);
+    await click("[data-workspace=resources]");
+    await until('typeof window.releaseResourceResponse === "function"');
+    assert.equal(await evaluate('document.getElementById("dashboard-content").hidden'), true, "Pending Resources hides the shared content container");
+    assert.equal(await evaluate('document.getElementById("status-text").textContent'), "Loading");
+    const lazyReturn = await probe(`
+      document.querySelector('[data-workspace=paths]').click();
+      const chain = document.getElementById('chain-view');
+      const overlay = chain.querySelector('.timeline-trace');
+      const animations = document.getAnimations().filter(animation => chain.contains(animation.effect?.target));
+      const initialEffects = effects('#chain-view');
+      const routeMarker = document.querySelector('.route-indicator');
+      const before = { contentVisible: !document.getElementById('dashboard-content').hidden,
+        pathsVisible: !document.getElementById('paths-workspace').hidden,
+        status: document.getElementById('status-text').textContent,
+        busy: document.getElementById('workspace').getAttribute('aria-busy'),
+        markerVisible: !routeMarker.hidden && routeMarker.getBoundingClientRect().height > 0 };
+      window.releaseResourceResponse();
+      for (let index = 0; index < 20 && !document.getElementById('resource-summary').textContent; index += 1) await frame();
+      const remaining = document.getAnimations().filter(animation => chain.contains(animation.effect?.target));
+      return { before, initialEffects,
+        resourcesRendered: Boolean(document.getElementById('resource-summary').textContent),
+        sameOverlay: overlay !== null && chain.querySelector('.timeline-trace') === overlay,
+        preservedAnimations: remaining.length > 0 && remaining.every(animation => animations.includes(animation)) && animations.every(animation => animation.playState !== 'idle'),
+        workspace: document.querySelector('[data-workspace][aria-current=page]').dataset.workspace,
+        contentVisible: !document.getElementById('dashboard-content').hidden,
+        status: document.getElementById('status-text').textContent,
+        requestCount: window.resourceRequestCount };
+    `);
+    assert.deepEqual(lazyReturn.before, { contentVisible: true, pathsVisible: true, status: "Ready", busy: "false", markerVisible: true }, "Paths restores visible content and its marker before presentation");
+    finite(lazyReturn.initialEffects, "The first Paths trace starts after returning from pending Resources");
+    assert.equal(lazyReturn.resourcesRendered, true, "The inactive Resources response still completes");
+    assert.equal(lazyReturn.sameOverlay, true, "Inactive Resources completion preserves the active trace overlay");
+    assert.equal(lazyReturn.preservedAnimations, true, "Inactive Resources completion neither cancels nor replays active trace effects");
+    assert.equal(lazyReturn.workspace, "paths");
+    assert.equal(lazyReturn.contentVisible, true);
+    assert.equal(lazyReturn.status, "Ready");
+    assert.equal(lazyReturn.requestCount, 1);
+    await capture("motion-lazy-return-intermediate-desktop.png");
+    await settle();
+    await markerAligned();
+    await click("[data-workspace=resources]");
+    await until(ready);
+    await click("[data-workspace=paths]");
+    assert.equal(await evaluate("window.resourceRequestCount"), 1, "Returning to cached Resources does not fetch again");
+    assert.equal((await currentEffects("#chain-view")).length, 0, "Returning from cached Resources does not replay the completed trace");
+    await settle();
+    summary.observations.lazyResourceReturn = lazyReturn;
     assert.deepEqual(errors, [], "No browser runtime or CSP errors");
     summary.observations.browserErrors = errors;
     summary.observations.finalEffects = await evaluate("document.getAnimations().length");

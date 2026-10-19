@@ -42,7 +42,7 @@ type SourceSplitRow = {
   count: number;
 };
 
-type DashboardPayload =
+type FullDashboardPayload =
   | {
       kind: "ready";
       databasePath: string;
@@ -60,6 +60,12 @@ type DashboardPayload =
     }
   | { kind: "missing"; databasePath: string; filterOptions: FilterOptions }
   | { kind: "error"; databasePath: string; message: string; filterOptions: FilterOptions };
+
+type FullDashboardReady = Extract<FullDashboardPayload, { kind: "ready" }>;
+type DashboardPayload =
+  | FullDashboardPayload
+  | (Pick<FullDashboardReady, "kind" | "databasePath" | "filterOptions" | "report"> & { scope: "skills" })
+  | (Pick<FullDashboardReady, "kind" | "databasePath" | "filterOptions" | "resources" | "resourceCoverage"> & { scope: "resources" });
 
 export async function startDashboardServer(options: DashboardServerOptions = {}): Promise<RunningDashboardServer> {
   const host = options.host ?? DEFAULT_DASHBOARD_HOST;
@@ -180,6 +186,17 @@ async function readDashboardPayload(databasePath: string, params: URLSearchParam
     reader = open.store;
     const parsed = parseDashboardParams(params);
     filterOptions = await reader.queryFilterOptions(parsed.filter);
+    if (parsed.scope === "skills") {
+      const skills = await reader.querySkillTable(parsed.filter);
+      const chains = await reader.querySkillChain(parsed.filter);
+      return { kind: "ready", scope: "skills", databasePath: open.databasePath, filterOptions,
+        report: buildDashboardReport({ filter: parsed.filter, skills, chains }) };
+    }
+    if (parsed.scope === "resources") {
+      const resources = await reader.queryResources(parsed.filter);
+      const resourceCoverage = await reader.queryResourceCoverage(parsed.filter);
+      return { kind: "ready", scope: "resources", databasePath: open.databasePath, filterOptions, resources, resourceCoverage };
+    }
     const overview = await open.store.queryOverview(parsed.filter);
     const skills = await open.store.querySkillTable(parsed.filter);
     const matrix = await open.store.queryModelMatrix(parsed.filter);
@@ -216,7 +233,9 @@ async function readDashboardPayload(databasePath: string, params: URLSearchParam
   }
 }
 
-function parseDashboardParams(params: URLSearchParams): { filter: DashboardFilter; chainSkillName: string | null } {
+function parseDashboardParams(params: URLSearchParams): { scope: "full" | "skills" | "resources"; filter: DashboardFilter; chainSkillName: string | null } {
+  const scope = params.get("scope") ?? "full";
+  if (scope !== "full" && scope !== "skills" && scope !== "resources") throw new Error("scope must be full, skills, or resources");
   const filter: DashboardFilter = {};
   const host = nonEmptyParam(params, "host");
   if (host !== null) filter.host = parseHostId(host);
@@ -240,7 +259,7 @@ function parseDashboardParams(params: URLSearchParams): { filter: DashboardFilte
     && Date.parse(filter.fromObservedAt) > Date.parse(filter.toObservedAt)) {
     throw new Error("fromObservedAt must not be after toObservedAt");
   }
-  return { filter, chainSkillName: nonEmptyParam(params, "chainSkill") };
+  return { scope, filter, chainSkillName: nonEmptyParam(params, "chainSkill") };
 }
 
 function parseModelSelection(value: string): NonNullable<DashboardFilter["modelSelection"]> {

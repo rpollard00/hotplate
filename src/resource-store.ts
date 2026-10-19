@@ -222,9 +222,12 @@ function* readEvents(db: DatabaseSync, filter: DashboardFilter, selection: "excl
   for (const row of db.prepare(query).iterate(...values)) {
     if (typeof row.payload !== "string") throw new Error("Invalid stored resource event");
     const observation = parseObservation(JSON.parse(row.payload));
-    if (!isResourceEvidence(observation.evidence)) throw new Error("Invalid stored resource evidence");
+    const evidence = observation.evidence;
+    if (evidence.kind !== "resource-access" && evidence.kind !== "inventory-snapshot" && evidence.kind !== "observer-coverage") {
+      throw new Error("Invalid stored resource evidence");
+    }
     yield { source: { machineId: parseMachineId(row.machine_id), sourceId: row.source_id === "local" ? "local" : parseSourceId(row.source_id) },
-      observation: { ...observation, evidence: observation.evidence } };
+      observation: { ...observation, evidence } };
   }
 }
 

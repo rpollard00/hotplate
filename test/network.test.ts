@@ -158,7 +158,7 @@ test("aggregate authenticates before body parsing, separates roles, and binds so
   for (const authorization of ["", basic, `Bearer ${password}`]) {
     assert.equal((await post(f.origin, "not json", { authorization })).status, 401);
   }
-  for (const path of ["/", "/health", "/assets/app.js", "/assets/fonts/archivo-latin.woff2", "/assets/fonts/jetbrains-mono-latin.woff2", "/assets/fonts/LICENSE.txt", "/api/dashboard", "/not-found"]) {
+  for (const path of ["/", "/health", "/assets/app.js", "/assets/fonts/archivo-latin.woff2", "/assets/fonts/jetbrains-mono-latin.woff2", "/assets/fonts/LICENSE.txt", "/api/dashboard", "/api/dashboard?scope=skills", "/api/dashboard?scope=resources", "/not-found"]) {
     for (const authorization of ["", bearer]) assert.equal((await http({ url: `${f.origin}${path}`, headers: { authorization } })).status, 401);
   }
   const dashboard = await http({ url: `${f.origin}/api/dashboard`, headers: { authorization: basic } });
@@ -177,12 +177,18 @@ test("aggregate authenticates before body parsing, separates roles, and binds so
   assert.equal(await count(f.aggregate.databasePath), 2);
   const data = JSON.parse((await http({ url: `${f.origin}/api/dashboard`, headers: { authorization: basic } })).body);
   assert.deepEqual(data.filterOptions.machines, ["machine-a", "machine-b"]);
+  for (const scope of ["skills", "resources"]) {
+    const scoped = await http({ url: `${f.origin}/api/dashboard?scope=${scope}`, headers: { authorization: basic } });
+    assert.equal(scoped.status, 200);
+    assert.equal(JSON.parse(scoped.body).scope, scope);
+    assert.deepEqual(JSON.parse(scoped.body).filterOptions, data.filterOptions);
+  }
 });
 
 test("aggregate public dashboard remains read-only and preserves ingest identity and origin guards", async t => {
   const f = await fixture(t, false, { kind: "public" });
   assert.deepEqual(readAggregationCredentials(f.aggregate.credentialsFile).dashboard, { kind: "public" });
-  for (const path of ["/", "/health", "/assets/app.js", "/assets/fonts/archivo-latin.woff2", "/assets/fonts/jetbrains-mono-latin.woff2", "/assets/fonts/LICENSE.txt", "/api/dashboard"]) {
+  for (const path of ["/", "/health", "/assets/app.js", "/assets/fonts/archivo-latin.woff2", "/assets/fonts/jetbrains-mono-latin.woff2", "/assets/fonts/LICENSE.txt", "/api/dashboard", "/api/dashboard?scope=skills", "/api/dashboard?scope=resources"]) {
     const response = await http({ url: `${f.origin}${path}` });
     assert.equal(response.status, 200);
     assert.equal(response.headers["www-authenticate"], undefined);
