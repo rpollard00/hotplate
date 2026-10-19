@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { dirname } from "node:path";
 import { setImmediate as nextTick } from "node:timers/promises";
 import type {
   ExtensionContext, InputEvent, MessageEndEvent, SessionStartEvent, SessionTreeEvent,
@@ -7,8 +6,8 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { Evidence, GapReason, HotplateStore, ModelRef, Observation, ObservationScope, SegmentReason } from "../domain.js";
 import { openHotplateStore } from "../store.js";
-import { buildSkillCatalog, commandIntentSkillName, skillFromReadPath, skillWrappersFromPrompt, type SkillCatalog } from "./skills.js";
-import { discoverResourceRoots, qualifyResource, resourceFilesystemId, type ResourceRoot } from "../resource-paths.js";
+import { buildSkillCatalog, commandIntentSkillName, resourceFromReadPath, skillCatalogAdvertisements, skillFromResource, skillWrappersFromPrompt, type SkillCatalog } from "./skills.js";
+import { discoverResourceRoots, resourceFilesystemId, type ResourceRoot } from "../resource-paths.js";
 import { publishResourceRoots } from "../resource-root-registry.js";
 import { inventoryResources } from "../resource-inventory.js";
 import { registerHarnessProcess, unregisterHarnessProcess, type ProcessRegistration } from "../process-attribution.js";
@@ -66,9 +65,11 @@ export class HotplateCollector {
     this.#startSegment(event.reason, ctx);
     this.#safe(() => {
       this.#state = { kind: "active", store: this.#openStore(), abort: new AbortController() };
-      this.#catalog = buildSkillCatalog(commands());
+      const available = commands();
+      this.#roots = discoverResourceRoots({ cwd: ctx.cwd, env: this.#env, project: { host: "pi", boundary: { kind: "infer" } },
+        advertisements: skillCatalogAdvertisements(available, ctx.cwd, this.#scope.sessionId) });
+      this.#catalog = buildSkillCatalog(available, ctx.cwd, this.#roots);
       this.#enqueue({ kind: "catalog-snapshot", skills: this.#catalog.skills });
-      this.#roots = discoverResourceRoots({ cwd: ctx.cwd, env: this.#env, advertisedRoots: this.#catalog.skills.map((skill) => dirname(skill.canonicalPath)) });
       this.#publishRoots();
       if (this.#scope.sessionId) this.#registration = registerHarnessProcess({ host: "pi", binding: {
         kind: "dedicated", sessionId: this.#scope.sessionId, actorId: this.#scope.sessionId, projectCwd: ctx.cwd,
@@ -124,7 +125,7 @@ export class HotplateCollector {
       if (event.message.role === "user") {
         const text = typeof event.message.content === "string" ? event.message.content
           : event.message.content.filter(block => block.type === "text").map(block => block.text).join("\n");
-        for (const skill of skillWrappersFromPrompt(text, this.#scope.projectCwd)) {
+        for (const skill of skillWrappersFromPrompt(text, this.#scope.projectCwd, this.#roots)) {
           this.#enqueue({ kind: "wrapper-observed", skill, wrapperSource: "unknown-pasted-or-transformed" });
         }
       } else if (event.message.role === "assistant") {
@@ -141,9 +142,9 @@ export class HotplateCollector {
       const model = this.#toolCallModels.get(event.toolCallId) ?? null;
       this.#toolCallModels.delete(event.toolCallId);
       if (event.toolName !== "read" || typeof event.input.path !== "string") return;
-      const skill = skillFromReadPath(event.input.path, ctx.cwd, this.#catalog);
+      const resource = resourceFromReadPath(event.input.path, ctx.cwd, this.#roots);
+      const skill = skillFromResource(resource, this.#catalog);
       if (skill) this.#enqueue({ kind: "read-result", skill, toolCallId: event.toolCallId, outcome: event.isError ? "error" : "success", model });
-      const resource = qualifyResource({ path: event.input.path, cwd: ctx.cwd, roots: this.#roots });
       if (resource) this.#enqueue({ kind: "resource-access", resource, operationId: event.toolCallId, mechanism: "host-tool",
         access: "read", outcome: event.isError ? "error" : "success", model, process: this.#registration?.process ?? null,
         attribution: this.#scope.sessionId === null ? "harness" : "session" });
@@ -199,10 +200,11 @@ export class HotplateCollector {
 
   #publishRoots(): void {
     if (this.#state.kind !== "active") return;
-    if (!publishResourceRoots({ host: "pi", sessionId: this.#scope.sessionId, filesystemId: resourceFilesystemId(this.#env),
-      roots: this.#catalog.skills.map((skill) => dirname(skill.canonicalPath)), env: this.#env })) this.#reportFailure();
-    if (!publishResourceRoots({ host: "pi", sessionId: this.#scope.sessionId, filesystemId: resourceFilesystemId(this.#env), origin: "conventional",
-      roots: this.#roots.filter((root) => root.origin === "conventional" && root.scope === "project").map((root) => root.path), env: this.#env })) this.#reportFailure();
+    for (const origin of ["host", "conventional"] as const) {
+      const localRoots = this.#roots.filter((root) => root.origin === origin && root.scope !== "unassigned");
+      if (!publishResourceRoots({ host: "pi", sessionId: this.#scope.sessionId, filesystemId: resourceFilesystemId(this.#env), origin,
+        roots: localRoots.map((root) => root.path), rootDescriptors: localRoots, env: this.#env })) this.#reportFailure();
+    }
   }
 
   #enqueue(evidence: Evidence, scope = this.#scope): void {

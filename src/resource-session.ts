@@ -11,11 +11,11 @@ import { parseProcessIdentity, readProcessIdentity } from "./process-attribution
 import { openResourceRecorder } from "./resource-capture.js";
 import type { ProcessIdentity } from "./resource-domain.js";
 import { inventoryResources } from "./resource-inventory.js";
-import { discoverResourceRoots, resourceFilesystemId, type ResourceRoot } from "./resource-paths.js";
+import { discoverResourceRoots, resourceFilesystemId, type ResourceAdvertisement, type ResourceRoot } from "./resource-paths.js";
 import { publishResourceRoots } from "./resource-root-registry.js";
 import { resolveHotplateDatabasePath } from "./store.js";
 
-export type SessionInventoryRequest = { host: NativeHostId; sessionId: string; cwd: string; advertisedRoots?: readonly string[]; harnessProcess?: ProcessIdentity | null; leaseToken?: string };
+export type SessionInventoryRequest = { host: NativeHostId; sessionId: string; cwd: string; advertisements?: readonly ResourceAdvertisement[]; advertisedRoots?: readonly string[]; harnessProcess?: ProcessIdentity | null; leaseToken?: string };
 
 export function parseSessionInventoryRequest(value: unknown): SessionInventoryRequest {
   if (!value || typeof value !== "object" || !("host" in value) || !("sessionId" in value) || !("cwd" in value)
@@ -37,6 +37,23 @@ export function parseSessionInventoryRequest(value: unknown): SessionInventoryRe
     }
     request.advertisedRoots = roots;
   }
+  if ("advertisements" in value) {
+    if (!Array.isArray(value.advertisements) || value.advertisements.length > 2000) throw new Error("Invalid inventory advertisements.");
+    const advertisements: ResourceAdvertisement[] = [];
+    for (const advertisement of value.advertisements) {
+      if (!advertisement || typeof advertisement !== "object" || !("kind" in advertisement) || !("path" in advertisement)
+        || typeof advertisement.path !== "string" || !isAbsolute(advertisement.path) || advertisement.path.length > 4096 || advertisement.path.includes("\0")
+        || !("host" in advertisement) || advertisement.host !== request.host || !("sessionId" in advertisement) || advertisement.sessionId !== request.sessionId) {
+        throw new Error("Invalid inventory advertisements.");
+      }
+      const identity = { path: advertisement.path, host: request.host, sessionId: request.sessionId };
+      if (advertisement.kind === "package") advertisements.push({ ...identity, kind: "package" });
+      else if (advertisement.kind === "collection" && "source" in advertisement && advertisement.source === "host-configuration") {
+        advertisements.push({ ...identity, kind: "collection", source: "host-configuration" });
+      } else throw new Error("Invalid inventory advertisements.");
+    }
+    request.advertisements = advertisements;
+  }
   if ("leaseToken" in value) {
     if (typeof value.leaseToken !== "string" || !/^[a-f0-9-]{36}$/u.test(value.leaseToken)) throw new Error("Invalid inventory lease.");
     request.leaseToken = value.leaseToken;
@@ -45,7 +62,8 @@ export function parseSessionInventoryRequest(value: unknown): SessionInventoryRe
 }
 
 function sessionSlot(request: SessionInventoryRequest, env: NodeJS.ProcessEnv) {
-  const roots = discoverResourceRoots({ cwd: request.cwd, env, ...(request.advertisedRoots ? { advertisedRoots: request.advertisedRoots } : {}) });
+  const roots = discoverResourceRoots({ cwd: request.cwd, env, project: { host: request.host, boundary: { kind: "infer" } },
+    ...(request.advertisements ? { advertisements: request.advertisements } : {}), ...(request.advertisedRoots ? { advertisedRoots: request.advertisedRoots } : {}) });
   publishSessionRoots(request, env, roots);
   const configuration = readNativeAccountConfiguration(env);
   const databasePath = configuration?.databasePath ?? resolveHotplateDatabasePath({ env });
@@ -157,8 +175,9 @@ export async function runSessionInventory(request: SessionInventoryRequest, env:
 }
 
 function publishSessionRoots(request: SessionInventoryRequest, env: NodeJS.ProcessEnv, roots: readonly ResourceRoot[]): void {
-  if (request.advertisedRoots) publishResourceRoots({ host: request.host, sessionId: request.sessionId,
-    filesystemId: resourceFilesystemId(env), roots: request.advertisedRoots, process: request.harnessProcess ?? null, env });
-  publishResourceRoots({ host: request.host, sessionId: request.sessionId, filesystemId: resourceFilesystemId(env), origin: "conventional",
-    roots: roots.filter((root) => root.origin === "conventional" && (root.scope === "account" || root.scope === "project")).map((root) => root.path), process: request.harnessProcess ?? null, env });
+  for (const origin of ["host", "conventional"] as const) {
+    const localRoots = roots.filter((root) => root.origin === origin && root.scope !== "unassigned");
+    publishResourceRoots({ host: request.host, sessionId: request.sessionId, filesystemId: resourceFilesystemId(env), origin,
+      roots: localRoots.map((root) => root.path), rootDescriptors: localRoots, process: request.harnessProcess ?? null, env });
+  }
 }

@@ -18,6 +18,8 @@ const config = join(root, "config");
 const databasePath = join(root, "capture.sqlite");
 const skillPath = host === "codex" ? ".agents/skills/hotplate-probe/SKILL.md" : ".claude/skills/hotplate-probe/SKILL.md";
 const referencePath = join(skillPath, "..", "references", "guide.md");
+const missingPath = join(skillPath, "..", "..", "absent", "SKILL.md");
+const outsidePath = "source/uninstalled/SKILL.md";
 const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
 let child;
 let requestCount = 0;
@@ -40,9 +42,9 @@ const server = createServer(async (request, response) => {
     const emit = (type, data) => response.write(`event: ${type}\ndata: ${JSON.stringify({ type, sequence_number: sequence++, ...data })}\n\n`);
     if (host === "codex") {
       const names = input.tools?.map(tool => tool.name) ?? [];
-      const item = requestCount <= 3
+      const item = requestCount <= 4
         ? { type: "function_call", id: `fc_${requestCount}`, call_id: `call_${requestCount}`, name: "exec_command",
-          arguments: JSON.stringify({ cmd: `cat ${join(project, requestCount === 1 ? skillPath : requestCount === 2 ? "absent/SKILL.md" : referencePath)}`, workdir: project }) }
+          arguments: JSON.stringify({ cmd: `cat ${join(project, requestCount === 1 ? skillPath : requestCount === 2 ? missingPath : requestCount === 3 ? referencePath : outsidePath)}`, workdir: project }) }
         : { type: "message", id: "msg_done", role: "assistant", status: "completed", content: [{ type: "output_text", text: "Probe done.", annotations: [] }] };
       assert.ok(names.includes("exec_command"));
       const result = { id: `resp_${requestCount}`, object: "response", created_at: 1, status: "in_progress", model: "probe", output: [] };
@@ -52,7 +54,7 @@ const server = createServer(async (request, response) => {
       emit("response.completed", { response: { ...result, status: "completed", output: [item], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } });
     } else {
       const tool = requestCount === 1 ? { name: "Skill", input: { skill: "hotplate-probe" } }
-        : requestCount <= 4 ? { name: "Read", input: { file_path: join(project, requestCount === 2 ? skillPath : requestCount === 3 ? "absent/SKILL.md" : referencePath) } } : null;
+        : requestCount <= 5 ? { name: "Read", input: { file_path: join(project, requestCount === 2 ? skillPath : requestCount === 3 ? missingPath : requestCount === 4 ? referencePath : outsidePath) } } : null;
       const message = { id: `msg_${requestCount}`, type: "message", role: "assistant", model: "claude-sonnet-4-6", content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } };
       emit("message_start", { message });
       if (tool) {
@@ -78,6 +80,8 @@ try {
   await mkdir(join(project, referencePath, ".."), { recursive: true });
   await writeFile(join(project, skillPath), "---\nname: hotplate-probe\ndescription: Synthetic smoke fixture\n---\nHOTPLATE_SMOKE_CONTENT_CANARY\n");
   await writeFile(join(project, referencePath), "HOTPLATE_SMOKE_REFERENCE_CANARY\n");
+  await mkdir(join(project, outsidePath, ".."), { recursive: true });
+  await writeFile(join(project, outsidePath), "HOTPLATE_SMOKE_OUTSIDE_CANARY\n");
   await writeFile(join(root, "resources.json"), JSON.stringify({ version: 1, roots: [] }));
   await new Promise(done => server.listen(0, "127.0.0.1", done));
   const origin = `http://127.0.0.1:${server.address().port}`;
@@ -142,11 +146,15 @@ try {
     } while (Date.now() < deadline);
     const reference = resources.find(row => row.resource.canonicalPath === join(project, referencePath));
     const skill = resources.find(row => row.resource.canonicalPath === join(project, skillPath));
+    const missing = resources.find(row => row.resource.canonicalPath === join(project, missingPath));
     assert.ok(reference, "The reference read did not produce resource evidence");
     assert.ok(skill, "The skill read did not produce resource evidence");
     assert.equal(reference.resource.kind, "reference");
     assert.equal(host === "codex" ? reference.attemptCount : reference.successfulReadCount, 1);
     assert.equal(host === "codex" ? skill.attemptCount : skill.successfulReadCount, 1);
+    assert.ok(missing, "An in-scope missing skill did not produce resource evidence");
+    assert.equal(host === "codex" ? missing.attemptCount : missing.failedReadCount, 1);
+    assert.equal(resources.some(row => row.resource.canonicalPath === join(project, outsidePath)), false, "An out-of-scope read produced resource evidence");
     assert.notEqual(reference.lastInventoriedAt, null, "Reference was not inventoried");
     assert.notEqual(skill.lastInventoriedAt, null, "Skill was not inventoried");
     assert.ok(completeInventories > 0, "Session inventory did not complete");
@@ -157,6 +165,8 @@ try {
     const persisted = JSON.stringify([persistedDb.prepare("SELECT * FROM observations").all(), persistedDb.prepare("SELECT * FROM resource_events").all()]);
     assert.equal(persisted.includes("HOTPLATE_SMOKE_CONTENT_CANARY"), false);
     assert.equal(persisted.includes("HOTPLATE_SMOKE_REFERENCE_CANARY"), false);
+    assert.equal(persisted.includes(join(project, outsidePath)), false, "An out-of-scope read produced legacy evidence");
+    assert.equal(persisted.includes("HOTPLATE_SMOKE_OUTSIDE_CANARY"), false);
   } finally { persistedDb.close(); }
   process.stdout.write(`${JSON.stringify({ host, provider: "deterministic-local", requestCount, elapsedMs: Math.round(performance.now() - started),
     legacy: { attempts: overview.readAttemptCount, successfulReads: overview.successfulReadCount, failedReads: overview.failedReadCount, invocations: overview.skillInvocationCount },

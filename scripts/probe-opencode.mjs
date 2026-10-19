@@ -24,6 +24,8 @@ const root = await mkdtemp(join(tmpdir(), `hotplate-opencode-${major}-`));
 const project = join(root, "project");
 const skillPath = join(project, ".opencode/skills/hotplate-probe/SKILL.md");
 const referencePath = join(skillPath, "..", "references", "guide.md");
+const missingPath = join(skillPath, "..", "..", "missing", "SKILL.md");
+const outsidePath = join(project, "source", "uninstalled", "SKILL.md");
 const database = join(root, "hotplate.sqlite");
 const canary = "HOTPLATE_SYNTHETIC_CONTENT_CANARY";
 const referenceCanary = "HOTPLATE_SYNTHETIC_REFERENCE_CANARY";
@@ -57,6 +59,8 @@ try {
   execFileSync("git", ["init", "--quiet", project]);
   await writeFile(skillPath, `---\nname: hotplate-probe\ndescription: Synthetic capability probe\n---\n${canary}\n`);
   await writeFile(referencePath, `${referenceCanary}\n`);
+  await mkdir(join(outsidePath, ".."), { recursive: true });
+  await writeFile(outsidePath, "HOTPLATE_SYNTHETIC_OUTSIDE_CANARY\n");
   await writeFile(env.HOTPLATE_RESOURCES_CONFIG, JSON.stringify({ version: 1, roots: [] }));
   modelServer = createServer(async (request, response) => {
     let raw = "";
@@ -68,8 +72,9 @@ try {
     const calls = hasTools && !emittedTools ? [
       { name: "read", args: readArgs(skillPath) },
       { name: "read", args: readArgs(skillPath) },
-      { name: "read", args: readArgs(join(project, "missing/SKILL.md")) },
+      { name: "read", args: readArgs(missingPath) },
       { name: "read", args: readArgs(referencePath) },
+      { name: "read", args: readArgs(outsidePath) },
       { name: "skill", args: major === "1" ? { name: "hotplate-probe" } : { id: "hotplate-probe" } },
     ] : [];
     if (hasTools) emittedTools = true;
@@ -151,11 +156,14 @@ try {
     } while (Date.now() < inventoryDeadline);
     const reference = resources.find(row => row.resource.canonicalPath === referencePath);
     const skill = resources.find(row => row.resource.canonicalPath === skillPath);
+    const missing = resources.find(row => row.resource.canonicalPath === missingPath);
     assert.ok(reference, "The reference read did not produce resource evidence");
     assert.ok(skill, "The skill read did not produce resource evidence");
     assert.equal(reference.resource.kind, "reference");
     assert.equal(reference.successfulReadCount, 1);
     assert.equal(skill.successfulReadCount, 2);
+    if (major === "2") assert.equal(missing?.failedReadCount, 1, "The in-scope missing skill did not produce failed-read evidence");
+    assert.equal(resources.some(row => row.resource.canonicalPath === outsidePath), false, "An out-of-scope read produced resource evidence");
     assert.notEqual(reference.lastInventoriedAt, null, "Reference was not inventoried");
     assert.notEqual(skill.lastInventoriedAt, null, "Skill was not inventoried");
     assert.ok(completeInventories > 0, "Session inventory did not complete");
@@ -166,6 +174,8 @@ try {
     const persisted = JSON.stringify([persistedDb.prepare("SELECT * FROM observations").all(), persistedDb.prepare("SELECT * FROM resource_events").all()]);
     assert.equal(persisted.includes(canary), false, "Raw skill content leaked into capture");
     assert.equal(persisted.includes(referenceCanary), false, "Raw reference content leaked into capture");
+    assert.equal(persisted.includes(outsidePath), false, "An out-of-scope read produced legacy evidence");
+    assert.equal(persisted.includes("HOTPLATE_SYNTHETIC_OUTSIDE_CANARY"), false);
   } finally { persistedDb.close(); }
   const report = { host: `opencode-v${major}`, version: execFileSync(binary, ["--version"], { encoding: "utf8" }).trim(), installedPlugin: true, modelRequests,
     observations: rows.map(({ host, evidence_kind, outcome, skill_path }) => ({ host, kind: evidence_kind, outcome, hasPath: skill_path !== null })),

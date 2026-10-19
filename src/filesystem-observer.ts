@@ -1,12 +1,11 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { statSync } from "node:fs";
-import { isAbsolute, relative } from "node:path";
+import { isAbsolute } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { HostId } from "./domain.js";
 import { parseProcessIdentity, readProcessIdentity, resolveProcessAttribution } from "./process-attribution.js";
 import type { ObserverCoverageEvidence, ObserverCoverageReason, ProcessIdentity, ResourceAccessEvidence } from "./resource-domain.js";
-import { qualifyResource, type ResourceRoot } from "./resource-paths.js";
+import { admitResourcePath, qualifyResource, type ResourceRoot } from "./resource-paths.js";
 
 export type FilesystemObservation = {
   evidence: ResourceAccessEvidence | ObserverCoverageEvidence;
@@ -27,7 +26,7 @@ type HelperMessage =
 function parseMessage(value: unknown): HelperMessage | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const fields = Object.fromEntries(Object.entries(value));
-  if (fields.type === "ready") return { type: "ready" };
+  if (fields.type === "ready" && fields.scopeVersion === 1) return { type: "ready" };
   if (fields.type === "unavailable" && (fields.reason === "permission-denied" || fields.reason === "unsupported" || fields.reason === "helper-unavailable" || fields.reason === "io-error")) return { type: "unavailable", reason: fields.reason };
   if (fields.type === "loss" && (fields.reason === "queue-overflow" || fields.reason === "process-exited" || fields.reason === "io-error")) return { type: "loss", reason: fields.reason };
   if (fields.type !== "access" || typeof fields.path !== "string" || !isAbsolute(fields.path) || fields.path.length > 4096 || fields.path.includes("\0") || (fields.access !== "open" && fields.access !== "access") || typeof fields.uid !== "number" || !Number.isSafeInteger(fields.uid) || fields.uid < 0) return null;
@@ -36,9 +35,38 @@ function parseMessage(value: unknown): HelperMessage | null {
   return { type: "access", path: fields.path, access: fields.access, process: identity, uid: fields.uid };
 }
 
-function contained(path: string, root: string): boolean {
-  const suffix = relative(root, path);
-  return suffix === "" || (!suffix.startsWith("../") && suffix !== ".." && !isAbsolute(suffix));
+export function encodeFilesystemScope(roots: readonly ResourceRoot[]): Buffer {
+  if (roots.length === 0 || roots.length > 1024) throw new Error("Invalid filesystem scope root count");
+  const tokens = ["scope-v1"];
+  let bytes = Buffer.byteLength(tokens[0] ?? "") + 1;
+  const append = (...values: string[]): void => {
+    for (const value of values) {
+      const length = Buffer.byteLength(value);
+      if (length === 0 || length > 4096 || value.includes("\0")) throw new Error("Invalid filesystem scope value");
+      bytes += length + 1;
+      if (bytes > 8 * 1024 * 1024) throw new Error("Filesystem scope exceeds the input limit");
+      tokens.push(value);
+    }
+  };
+  for (const root of roots) {
+    const { extent, exclusions } = root.admission;
+    if (admitResourcePath({ path: root.path, cwd: root.path, roots: [root], entry: extent === "tree" ? "directory" : "file" }).kind !== "accepted") {
+      throw new Error("Filesystem scope root is no longer admitted");
+    }
+    if (exclusions.segments.length + exclusions.prefixes.length > 16) throw new Error("Too many filesystem scope exclusions");
+    append("root", extent === "tree" ? "directory" : "file", root.canonicalPath);
+    for (const [kind, rules] of [["segment", exclusions.segments], ["prefix", exclusions.prefixes]] as const) {
+      for (const rule of rules) {
+        if (isAbsolute(rule) || rule.split("/").some(component => component === "" || component === "." || component === "..") || (kind === "segment" && rule.includes("/"))) {
+          throw new Error("Invalid filesystem scope exclusion");
+        }
+        append(kind, rule);
+      }
+    }
+    append("end-root");
+  }
+  append("end-scope");
+  return Buffer.from(`${tokens.join("\0")}\0`);
 }
 
 export function startFilesystemObserver(input: {
@@ -57,15 +85,11 @@ export function startFilesystemObserver(input: {
   const observerProcess = readProcessIdentity(process.pid);
   const groups = new Map<string, ResourceRoot[]>();
   const watchRoots: ResourceRoot[] = [];
-  const directoryRoots = new Set<string>();
   const invalidRoots: { root: ResourceRoot; reason: ObserverCoverageReason }[] = [];
   for (const root of input.roots) {
-    try {
-      const stat = statSync(root.canonicalPath);
-      if (!stat.isDirectory() && !stat.isFile()) { invalidRoots.push({ root, reason: "io-error" }); continue; }
-      if (stat.isDirectory()) directoryRoots.add(root.canonicalPath);
-    } catch (cause) {
-      invalidRoots.push({ root, reason: cause !== null && typeof cause === "object" && "code" in cause && (cause.code === "EACCES" || cause.code === "EPERM") ? "permission-denied" : "io-error" });
+    const admission = admitResourcePath({ path: root.path, cwd: root.path, roots: [root], entry: root.admission.extent === "tree" ? "directory" : "file" });
+    if (admission.kind === "rejected") {
+      invalidRoots.push({ root, reason: admission.reason === "unreadable" ? "permission-denied" : "io-error" });
       continue;
     }
     watchRoots.push(root);
@@ -81,7 +105,7 @@ export function startFilesystemObserver(input: {
   let heartbeat: NodeJS.Timeout | null = null;
   let startupTimer: NodeJS.Timeout | null = null;
   let killTimer: NodeJS.Timeout | null = null;
-  let phase: "starting" | "active" | "stopping" | "ended" = "starting";
+  let phase: "starting" | "active" | "draining" | "stopping" | "ended" = "starting";
   let unavailable = false;
   let childClosed = false;
   let draining = false;
@@ -89,7 +113,6 @@ export function startFilesystemObserver(input: {
   let sequence = 0;
   let overflowPending = false;
   const queue: FilesystemObservation[] = [];
-  const inScope = (path: string): boolean => watchRoots.some((root) => directoryRoots.has(root.canonicalPath) ? contained(path, root.canonicalPath) : path === root.canonicalPath);
 
   const settle = (): void => {
     if (!childClosed || draining || queue.length > 0 || phase === "ended") return;
@@ -155,7 +178,7 @@ export function startFilesystemObserver(input: {
   const handle = (message: HelperMessage): void => {
     if (phase === "ended" || unavailable || failure) return;
     if (message.type === "ready") {
-      if (phase === "stopping") return;
+      if (phase === "stopping" || phase === "draining") return;
       if (phase !== "starting") { fail("io-error"); return; }
       phase = "active";
       if (startupTimer !== null) clearTimeout(startupTimer);
@@ -165,15 +188,15 @@ export function startFilesystemObserver(input: {
       return;
     }
     if (message.type === "unavailable") { fail(message.reason); return; }
-    if (phase !== "active" && phase !== "stopping") { fail("io-error"); return; }
+    if (phase !== "active" && phase !== "draining") { fail("io-error"); return; }
     if (message.type === "loss") {
       if (!overflowPending) { overflowPending = true; coverage({ status: "overflow", reason: message.reason }); }
       return;
     }
-    if (message.uid !== process.getuid?.() || !inScope(message.path)) return;
+    if (message.uid !== process.getuid?.()) return;
     if (observerProcess !== null && message.process !== null && observerProcess.pid === message.process.pid && observerProcess.startTicks === message.process.startTicks && observerProcess.bootId === message.process.bootId) return;
     const resource = qualifyResource({ path: message.path, cwd: watchRoots[0]?.path ?? "/", roots: watchRoots });
-    if (!resource || !inScope(resource.canonicalPath)) return;
+    if (!resource) return;
     if (queue.length >= 512) {
       if (!overflowPending) { overflowPending = true; coverage({ status: "overflow", reason: "queue-overflow" }); }
       return;
@@ -189,8 +212,8 @@ export function startFilesystemObserver(input: {
   };
 
   const stop = async (): Promise<void> => {
-    if (phase !== "ended" && phase !== "stopping") {
-      phase = "stopping";
+    if (phase !== "ended" && phase !== "stopping" && phase !== "draining") {
+      phase = phase === "active" ? "draining" : "stopping";
       terminate();
     }
     return done;
@@ -208,11 +231,14 @@ export function startFilesystemObserver(input: {
     fail("unsupported");
     return { observerId, done, stop };
   }
-  const roots = [...new Set(watchRoots.map((root) => root.canonicalPath))];
-  child = spawn(input.helperPath, ["--uid", String(uid), ...roots.flatMap((root) => ["--root", root])], { stdio: ["pipe", "pipe", "pipe"], env });
+  let policy: Buffer;
+  try { policy = encodeFilesystemScope(watchRoots); }
+  catch { childClosed = true; fail("io-error"); return { observerId, done, stop }; }
+  child = spawn(input.helperPath, ["--uid", String(uid)], { stdio: ["pipe", "pipe", "pipe"], env });
   startupTimer = setTimeout(() => fail("helper-unavailable"), 5000);
   startupTimer.unref();
-  child.stdin.end();
+  child.stdin.on("error", () => fail("io-error"));
+  child.stdin.end(policy);
   child.stderr.resume();
   const decoder = new StringDecoder("utf8");
   let pending = "";
@@ -237,7 +263,7 @@ export function startFilesystemObserver(input: {
     pending += decoder.end();
     if (pending.length > 0 && !unavailable && !failure) fail("io-error");
     if (!unavailable && !failure) {
-      if (phase === "stopping" && code === 0) coverage({ status: "stopped", reason: null });
+      if ((phase === "stopping" || phase === "draining") && code === 0) coverage({ status: "stopped", reason: null });
       else fail("process-exited");
     }
     settle();

@@ -1,5 +1,6 @@
 import type { CaptureFact } from "../capture.js";
-import { hookContext, object, resourceFact, skillAtPath, text } from "./common.js";
+import { discoverResourceRoots } from "../resource-paths.js";
+import { hookContext, object, resourceFact, skillAtResource, text } from "./common.js";
 
 export function parseClaudeCodeHook(input: unknown, observedAt = new Date().toISOString(), env: NodeJS.ProcessEnv = process.env): readonly CaptureFact[] {
   const hook = object(input);
@@ -9,9 +10,10 @@ export function parseClaudeCodeHook(input: unknown, observedAt = new Date().toIS
   if (!context || !toolInput) return [];
   const outcome = hook.hook_event_name === "PostToolUse" ? "success" : "error";
   if (hook.tool_name === "Read") {
-    const skill = skillAtPath(toolInput.file_path, context.scope.projectCwd);
+    const roots = discoverResourceRoots({ cwd: context.scope.projectCwd, env, project: { host: "claude-code", boundary: { kind: "infer" } } });
+    const resource = resourceFact(context, toolInput.file_path, { access: "read", outcome, roots });
+    const skill = skillAtResource(resource?.evidence.resource ?? null);
     const facts: CaptureFact[] = skill && context.sessionId !== null ? [{ ...context, evidence: { kind: "read-result", skill, toolCallId: context.occurrenceId, outcome, model: null } }] : [];
-    const resource = resourceFact(context, toolInput.file_path, { access: "read", outcome, env });
     if (resource) facts.push(resource);
     return facts;
   }

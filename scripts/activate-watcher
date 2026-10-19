@@ -4,7 +4,7 @@ umask 077
 
 fail() { printf '%s\n' "$*" >&2; exit 1; }
 if [[ ${1:-} == --help ]]; then
-  printf '%s\n' 'Usage: scripts/activate-watcher [ROOT ...]' 'Build and activate the Linux filesystem watcher for the current account.' 'Optional roots are saved in the existing resource configuration. Run without sudo.'
+  printf '%s\n' 'Usage: scripts/activate-watcher [ROOT ...]' 'Build and activate the Linux filesystem watcher for the current account.' 'Installed account roots are discovered without positional arguments.' 'Optional exact content roots are validated before activation and saved in the existing resource configuration. Run without sudo.'
   exit 0
 fi
 [[ $(uname -s) == Linux && $(id -u) != 0 ]] || fail 'Run as the capturing Linux user, without sudo.'
@@ -50,7 +50,7 @@ Description=Hotplate resource inventory and filesystem observer
 [Service]
 Type=simple
 WorkingDirectory=%h
-ExecStart=${[process.execPath, `${repo}/dist/src/cli.js`, 'resources', 'watch', '--project', process.env.HOME, '--helper', helper].map((value, index) => quote(value, index > 0)).join(' ')}
+ExecStart=${[process.execPath, `${repo}/dist/src/cli.js`, 'resources', 'watch', '--helper', helper].map((value, index) => quote(value, index > 0)).join(' ')}
 ${environment}
 Restart=on-failure
 RestartSec=5
@@ -63,8 +63,19 @@ JS
 )
 trap 'printf "%s\n" "Activation stopped. Inspect the error above; use journalctl --user -u $service for service errors." >&2' ERR
 temporary=
-trap '[[ -z $temporary ]] || rm -f -- "$temporary"' EXIT
+validation=
+trap '[[ -z $temporary ]] || rm -f -- "$temporary"; [[ -z $validation ]] || rm -rf -- "$validation"' EXIT
 cd -- "$repo"
+if (( ${#roots[@]} > 0 )); then
+  validation=$(mktemp -d "${TMPDIR:-/tmp}/hotplate-activate.XXXXXX")
+  npm run build -- --outDir "$validation"
+  "$node" --input-type=module - "$validation/src/resources-command.js" "${roots[@]}" <<'JS'
+import { pathToFileURL } from 'node:url';
+const [module, ...roots] = process.argv.slice(2);
+const { validateResourceRoot } = await import(pathToFileURL(module).href);
+for (const root of roots) validateResourceRoot(root);
+JS
+fi
 npm run build
 npm run build:observer
 "$node" "$repo/dist/src/cli.js" resources status >/dev/null

@@ -1,8 +1,8 @@
-import { basename, dirname, isAbsolute, resolve } from "node:path";
+import { basename, dirname, isAbsolute } from "node:path";
 import type { CaptureFact } from "../capture.js";
 import type { NativeHostId, SkillRef } from "../domain.js";
-import type { ResourceAccessEvidence } from "../resource-domain.js";
-import { discoverResourceRoots, qualifyResource, type ResourceRoot } from "../resource-paths.js";
+import type { ResourceAccessEvidence, ResourceLocation } from "../resource-domain.js";
+import { qualifyResource, type ResourceRoot } from "../resource-paths.js";
 
 export function object(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? Object.fromEntries(Object.entries(value)) : null;
@@ -12,12 +12,15 @@ export function text(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 && value.length <= 4096 && !/[\u0000-\u001f]/u.test(value) ? value : null;
 }
 
-export function skillAtPath(path: unknown, cwd: string): SkillRef | null {
+export function skillAtPath(path: unknown, cwd: string, roots: readonly ResourceRoot[]): SkillRef | null {
   const candidate = text(path);
-  if (!candidate || basename(candidate) !== "SKILL.md") return null;
-  const canonicalPath = resolve(cwd, candidate);
-  const name = basename(dirname(canonicalPath));
-  return name ? { name, canonicalPath, version: null } : null;
+  return candidate ? skillAtResource(qualifyResource({ path: candidate, cwd, roots })) : null;
+}
+
+export function skillAtResource(resource: ResourceLocation | null): SkillRef | null {
+  if (!resource || basename(resource.observedPath) !== "SKILL.md") return null;
+  const name = basename(dirname(resource.canonicalPath));
+  return name ? { name, canonicalPath: resource.canonicalPath, version: null } : null;
 }
 
 export function hookContext(input: unknown, host: NativeHostId, observedAt: string): Omit<CaptureFact, "evidence"> | null {
@@ -41,13 +44,11 @@ export function hookContext(input: unknown, host: NativeHostId, observedAt: stri
 export function resourceFact(context: Omit<CaptureFact, "evidence">, path: unknown, options: {
   access: "read" | "attempt";
   outcome: ResourceAccessEvidence["outcome"];
-  roots?: readonly ResourceRoot[];
-  env?: NodeJS.ProcessEnv;
-}): CaptureFact | null {
+  roots: readonly ResourceRoot[];
+}): (Omit<CaptureFact, "evidence"> & { evidence: ResourceAccessEvidence }) | null {
   const value = text(path);
   if (!value) return null;
-  const roots = options.roots ?? discoverResourceRoots({ cwd: context.scope.projectCwd, ...(options.env ? { env: options.env } : {}) });
-  const resource = qualifyResource({ path: value, cwd: context.scope.projectCwd, roots });
+  const resource = qualifyResource({ path: value, cwd: context.scope.projectCwd, roots: options.roots });
   if (!resource) return null;
   return { ...context, evidence: {
     kind: "resource-access", resource, operationId: context.occurrenceId,

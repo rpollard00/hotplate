@@ -1,12 +1,14 @@
 import { spawn } from "node:child_process";
+import { isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
-import { captureFact, parseCaptureFact } from "../capture.js";
+import { captureFact, parseCaptureFact, type CaptureFact } from "../capture.js";
 import type { NativeHostId } from "../domain.js";
 import { parseClaudeCodeHook } from "./claude-code.js";
 import { parseCodexHook } from "./codex.js";
 import { findHarnessAncestor, parseProcessIdentity, registerHarnessProcess } from "../process-attribution.js";
-import { object, text } from "./common.js";
+import { object, skillAtPath, text } from "./common.js";
 import { launchSessionInventory, runSessionInventory, parseSessionInventoryRequest } from "../resource-session.js";
+import { discoverResourceRoots, qualifyResource, type ResourceRoot } from "../resource-paths.js";
 
 export function nativeHost(value: unknown): NativeHostId | null {
   return value === "codex" || value === "claude-code" || value === "opencode-v1" || value === "opencode-v2" ? value : null;
@@ -63,15 +65,65 @@ async function worker(host: NativeHostId): Promise<void> {
   const cwd = text(hook?.cwd) ?? facts[0]?.scope.projectCwd;
   const actorId = text(hook?.agent_id) ?? facts[0]?.actorId ?? sessionId;
   const harness = parseProcessIdentity(JSON.parse(process.env.HOTPLATE_HOOK_PROCESS ?? "null"));
+  const request = sessionId && cwd ? parseSessionInventoryRequest({ host, sessionId, cwd, harnessProcess: harness,
+    ...(hook?.advertised_roots === undefined ? {} : { advertisedRoots: hook.advertised_roots }),
+    ...(hook?.advertisements === undefined ? {} : { advertisements: hook.advertisements }) }) : null;
   if (harness) registerHarnessProcess({ host, process: harness, source: "native-hook", binding: host === "claude-code" && sessionId && actorId && cwd
     ? { kind: "dedicated", sessionId, actorId, projectCwd: cwd } : { kind: "shared" } });
+  const scopes = new Map<string, readonly ResourceRoot[]>();
   for (const fact of facts) {
     if (fact.host !== host) throw new Error("Capture host mismatch");
-    const result = await captureFact({ fact });
+    let local = fact;
+    if (host === "opencode-v1" || host === "opencode-v2") {
+      if (!isAbsolute(fact.scope.projectCwd)) throw new Error("Invalid capture project directory");
+      if (hook?.facts !== undefined && request && (fact.sessionId !== request.sessionId || fact.scope.projectCwd !== request.cwd)) throw new Error("Capture session mismatch");
+      const key = JSON.stringify([fact.sessionId, fact.scope.projectCwd]);
+      let roots = scopes.get(key);
+      if (!roots) {
+        roots = discoverResourceRoots({ cwd: fact.scope.projectCwd, project: { host, boundary: { kind: "infer" } },
+          ...(request?.advertisements ? { advertisements: request.advertisements } : {}),
+          ...(request?.advertisedRoots ? { advertisedRoots: request.advertisedRoots } : {}) });
+        scopes.set(key, roots);
+      }
+      const admitted = qualifyLocalFact(fact, roots);
+      if (!admitted) continue;
+      local = admitted;
+    }
+    const result = await captureFact({ fact: local });
     if (result.kind === "recorded" && result.dropped > 0) throw new Error("Capture commit unavailable");
   }
-  if (sessionId && cwd) launchSessionInventory(parseSessionInventoryRequest({ host, sessionId, cwd, harnessProcess: harness,
-    ...(hook?.advertised_roots === undefined ? {} : { advertisedRoots: hook.advertised_roots }) }));
+  if (request) launchSessionInventory(request);
+}
+
+function qualifyLocalFact(fact: CaptureFact, roots: readonly ResourceRoot[]): CaptureFact | null {
+  const evidence = fact.evidence;
+  switch (evidence.kind) {
+    case "command-intent": return fact;
+    case "read-attempt":
+    case "read-result": {
+      const skill = skillAtPath(evidence.skill.canonicalPath, fact.scope.projectCwd, roots);
+      return skill ? { ...fact, evidence: { ...evidence, skill: { ...evidence.skill, canonicalPath: skill.canonicalPath } } } : null;
+    }
+    case "skill-invocation": {
+      const resource = evidence.skill.canonicalPath === null ? null : qualifyResource({ path: evidence.skill.canonicalPath, cwd: fact.scope.projectCwd, roots });
+      return { ...fact, evidence: { ...evidence, skill: { ...evidence.skill, canonicalPath: resource?.canonicalPath ?? null } } };
+    }
+    case "catalog-snapshot": {
+      const skills = evidence.skills.flatMap((candidate) => {
+        const resource = qualifyResource({ path: candidate.canonicalPath, cwd: fact.scope.projectCwd, roots });
+        return resource ? [{ ...candidate, canonicalPath: resource.canonicalPath }] : [];
+      });
+      return { ...fact, evidence: { ...evidence, skills } };
+    }
+    case "resource-access": {
+      const resource = qualifyResource({ path: evidence.resource.observedPath, cwd: fact.scope.projectCwd, roots });
+      return resource ? { ...fact, evidence: { ...evidence, resource } } : null;
+    }
+    default: {
+      const exhaustive: never = evidence;
+      return exhaustive;
+    }
+  }
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url) && process.argv[2] === "--worker") {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile, symlink } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile, symlink } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { setImmediate as nextTick } from "node:timers/promises";
 import { DatabaseSync } from "node:sqlite";
 import { execFile } from "node:child_process";
@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { HotplateCollector } from "../src/collector/collector.js";
 import { skillFromReadPath, skillWrappersFromPrompt } from "../src/collector/skills.js";
+import { discoverResourceRoots } from "../src/resource-paths.js";
 import { openHotplateReadStore, openHotplateStore } from "../src/store.js";
 
 async function fixture(run: (path: string, ctx: ReturnType<typeof context>) => Promise<void>) {
@@ -170,6 +171,9 @@ test("run, branch and session boundaries do not attach later intent to a previou
 
 test("model attribution follows each assistant call and repeated reads stay separate", async () => {
   await fixture(async (path, ctx) => {
+    const skillPath = join(ctx.cwd, ".agents", "skills", "alpha", "SKILL.md");
+    await mkdir(dirname(skillPath), { recursive: true });
+    await writeFile(skillPath, "body");
     const collector = new HotplateCollector({ env: { HOME: ctx.cwd }, openStore: () => openHotplateStore({ databasePath: path }) });
     await collector.sessionStart({ type: "session_start", reason: "startup" }, ctx, () => []);
     collector.beforeAgentStart("run", ctx);
@@ -177,11 +181,11 @@ test("model attribution follows each assistant call and repeated reads stay sepa
       collector.turnStart({ type: "turn_start", turnIndex: index, timestamp: Date.now() }, ctx);
       collector.messageEnd({ type: "message_end", message: {
         role: "assistant", api: "test", provider: "local", model: `requested-${index}`, responseModel: `actual-${index}`,
-        content: [{ type: "toolCall", id: `call-${index}`, name: "read", arguments: { path: "/skills/alpha/SKILL.md" } }],
+        content: [{ type: "toolCall", id: `call-${index}`, name: "read", arguments: { path: skillPath } }],
         usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
         stopReason: "toolUse", timestamp: Date.now(),
       } });
-      collector.toolResult({ type: "tool_result", toolName: "read", toolCallId: `call-${index}`, input: { path: "/skills/alpha/SKILL.md" }, content: [], details: undefined, isError: false }, ctx);
+      collector.toolResult({ type: "tool_result", toolName: "read", toolCallId: `call-${index}`, input: { path: skillPath }, content: [], details: undefined, isError: false }, ctx);
     }
     await collector.shutdown("quit", ctx);
     const open = openHotplateReadStore({ databasePath: path });
@@ -198,11 +202,17 @@ test("model attribution follows each assistant call and repeated reads stay sepa
 
 test("skill identity expands pi path prefixes without hashing arbitrary wrapper files", async () => {
   const catalog = { byPath: new Map(), skills: [] };
-  assert.equal(skillFromReadPath("@~/.agents/skills/alpha/SKILL.md", "/project", catalog)?.canonicalPath, join(homedir(), ".agents/skills/alpha/SKILL.md"));
-  await fixture(async (path) => {
+  await fixture(async (path, ctx) => {
+    const skillPath = join(ctx.cwd, ".agents", "skills", "alpha", "SKILL.md");
+    await mkdir(dirname(skillPath), { recursive: true });
+    await writeFile(skillPath, "private skill content");
+    const roots = discoverResourceRoots({ cwd: ctx.cwd, env: { HOME: ctx.cwd }, project: { host: "pi", boundary: { kind: "infer" } } });
+    assert.equal(skillFromReadPath(`@~/${relative(homedir(), skillPath)}`, ctx.cwd, catalog, roots)?.canonicalPath, skillPath);
+    assert.equal(skillFromReadPath(new URL(`file://${skillPath}`).href, ctx.cwd, catalog, roots)?.canonicalPath, skillPath);
     await writeFile(path, "private unrelated content");
-    const wrapper = skillWrappersFromPrompt(`<skill name="x" location="${path}">\nx\n</skill>`);
+    const wrapper = skillWrappersFromPrompt(`<skill name="x" location="${skillPath}">\nx\n</skill>`, ctx.cwd, roots);
     assert.equal(wrapper[0]?.version, null);
+    assert.deepEqual(skillWrappersFromPrompt(`<skill name="x" location="${path}">\nx\n</skill>`, ctx.cwd, roots), []);
   });
 });
 

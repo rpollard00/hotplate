@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { parseProcessIdentity, readProcessIdentity, resolveProcessAttribution } from "../src/process-attribution.js";
-import { discoverResourceRoots, saveResourceRoots } from "../src/resource-paths.js";
+import { discoverResourceRoots, qualifyResource, saveResourceRoots } from "../src/resource-paths.js";
 import { publishResourceRoots, readRegisteredRoots } from "../src/resource-root-registry.js";
 import { runSessionInventory } from "../src/resource-session.js";
 import { inventoryResources } from "../src/resource-inventory.js";
@@ -20,7 +20,7 @@ function fixture() {
   const env = { HOME: directory, XDG_STATE_HOME: join(directory, "state"), HOTPLATE_FILESYSTEM_ID: "fixture-namespace", HOTPLATE_DB: join(directory, "capture.sqlite") };
   const registry = join(directory, ".local", "state", "hotplate", "advertised-roots");
   const roots = [join(directory, "custom-catalog")];
-  for (const path of roots) mkdirSync(path);
+  for (const path of roots) { mkdirSync(path); writeFileSync(join(path, "SKILL.md"), "fixture"); }
   return { directory, env, registry, roots };
 }
 
@@ -59,7 +59,7 @@ test("malformed and public registrations never qualify resource roots", (t) => {
   assert.equal(discoverResourceRoots({ cwd: data.directory, env: data.env }).some((root) => root.path === data.roots[0]), false);
 });
 
-test("expired roots and reused process identities are removed instead of trusted", (t) => {
+test("registry reads ignore stale records without mutation and explicit pruning removes them", (t) => {
   const data = fixture();
   t.after(() => rmSync(data.directory, { recursive: true, force: true }));
   publishResourceRoots({ host: "pi", sessionId: "expired", filesystemId: data.env.HOTPLATE_FILESYSTEM_ID, roots: data.roots, process: null, env: data.env });
@@ -70,6 +70,8 @@ test("expired roots and reused process identities are removed instead of trusted
   assert.ok(registration);
   writeFileSync(path, JSON.stringify({ ...registration, advertisedAt: Date.now() - 400000, expiresAt: Date.now() - 100000 }));
   assert.deepEqual(readRegisteredRoots({ filesystemId: data.env.HOTPLATE_FILESYSTEM_ID, env: data.env }), []);
+  assert.equal(existsSync(path), true);
+  readRegisteredRoots({ filesystemId: data.env.HOTPLATE_FILESYSTEM_ID, env: data.env, pruneExpired: true });
   assert.equal(existsSync(path), false);
   const identity = readProcessIdentity(process.pid);
   if (identity) {
@@ -80,6 +82,8 @@ test("expired roots and reused process identities are removed instead of trusted
     assert.ok(live);
     writeFileSync(join(data.registry, liveFile), JSON.stringify({ ...live, process: { ...identity, startTicks: `${BigInt(identity.startTicks) + 1n}` } }));
     assert.deepEqual(readRegisteredRoots({ filesystemId: data.env.HOTPLATE_FILESYSTEM_ID, env: data.env }), []);
+    assert.equal(existsSync(join(data.registry, liveFile)), true);
+    readRegisteredRoots({ filesystemId: data.env.HOTPLATE_FILESYSTEM_ID, env: data.env, pruneExpired: true });
     assert.equal(existsSync(join(data.registry, liveFile)), false);
   }
 });
@@ -97,7 +101,7 @@ test("session discovery publishes another project's conventional roots to accoun
   const discovered = discoverResourceRoots({ cwd: watcherCwd, env: data.env }).find((entry) => entry.path === root);
   assert.equal(discovered?.origin, "conventional");
   assert.equal(discovered?.scope, "unassigned");
-  assert.equal(discoverResourceRoots({ cwd: project, env: data.env }).find((entry) => entry.path === root)?.scope, "project");
+  assert.equal(discoverResourceRoots({ cwd: project, env: data.env, project: { host: "codex", boundary: { kind: "infer" } } }).find((entry) => entry.path === root)?.scope, "project");
 });
 
 test("cross-project discovery enables global inventory and reads without inventing scoped availability", async (t) => {
@@ -235,4 +239,77 @@ test("native inventory advertises harness-specific account roots without renewin
     assert.equal(root?.origin, "conventional");
     assert.equal(root?.scope, "unassigned");
   }
+});
+
+test("version two registrations retain project authority and reject retargeted installation anchors", (t) => {
+  const data = fixture();
+  t.after(() => rmSync(data.directory, { recursive: true, force: true }));
+  const project = join(data.directory, "project");
+  const collection = join(project, ".agents/skills");
+  const target = join(data.directory, "target");
+  const replacement = join(data.directory, "replacement");
+  for (const path of [collection, target, replacement]) mkdirSync(path, { recursive: true });
+  writeFileSync(join(target, "reference.md"), "body");
+  symlinkSync(target, join(collection, "installed"));
+  const selected = discoverResourceRoots({ cwd: project, env: data.env, project: { host: "codex", boundary: { kind: "reported", path: project } } })
+    .filter(root => root.scope === "project");
+  assert.equal(selected.length, 2);
+  assert.equal(publishResourceRoots({ host: "codex", sessionId: "project", origin: "conventional", filesystemId: data.env.HOTPLATE_FILESYSTEM_ID,
+    roots: selected.map(root => root.path), rootDescriptors: selected, env: data.env }), true);
+  const registration = readRegisteredRoots({ filesystemId: data.env.HOTPLATE_FILESYSTEM_ID, env: data.env })[0];
+  assert.equal(registration?.version, 2);
+  const watched = discoverResourceRoots({ cwd: data.directory, env: data.env });
+  assert.ok(qualifyResource({ path: join(target, "reference.md"), cwd: data.directory, roots: watched }));
+  assert.ok(watched.every(root => root.scope === "unassigned"));
+  rmSync(join(collection, "installed"));
+  symlinkSync(replacement, join(collection, "installed"));
+  const changed = discoverResourceRoots({ cwd: data.directory, env: data.env });
+  assert.equal(qualifyResource({ path: join(target, "reference.md"), cwd: data.directory, roots: changed }), null);
+});
+
+test("legacy records cannot promote checkouts or ownerless host declarations to resource scope", (t) => {
+  const data = fixture();
+  t.after(() => rmSync(data.directory, { recursive: true, force: true }));
+  const checkout = join(data.directory, "checkout");
+  const ownerless = join(data.directory, "ownerless");
+  mkdirSync(join(checkout, ".git"), { recursive: true });
+  mkdirSync(ownerless);
+  publishResourceRoots({ host: "codex", sessionId: "old-host", filesystemId: data.env.HOTPLATE_FILESYSTEM_ID, roots: [checkout, ownerless], env: data.env });
+  publishResourceRoots({ host: "codex", sessionId: "old-convention", origin: "conventional", filesystemId: data.env.HOTPLATE_FILESYSTEM_ID, roots: [checkout], env: data.env });
+  assert.deepEqual(discoverResourceRoots({ cwd: data.directory, env: data.env }), []);
+  const selected = discoverResourceRoots({ cwd: data.directory, env: data.env, advertisements: [{ kind: "collection", path: ownerless, host: "codex", sessionId: "explicit", source: "host-configuration" }] });
+  assert.equal(publishResourceRoots({ host: "codex", sessionId: "explicit", filesystemId: data.env.HOTPLATE_FILESYSTEM_ID,
+    roots: selected.map(root => root.path), rootDescriptors: selected, env: data.env }), true);
+  assert.equal(discoverResourceRoots({ cwd: data.directory, env: data.env }).find(root => root.path === ownerless)?.scope, "unassigned");
+});
+
+test("publication prunes expired records while discovery leaves the registry unchanged", (t) => {
+  const data = fixture();
+  t.after(() => rmSync(data.directory, { recursive: true, force: true }));
+  publishResourceRoots({ host: "codex", sessionId: "stale", filesystemId: data.env.HOTPLATE_FILESYSTEM_ID, roots: data.roots, process: null, env: data.env });
+  const filename = readdirSync(data.registry)[0];
+  assert.ok(filename);
+  const path = join(data.registry, filename);
+  const registration = readRegisteredRoots({ filesystemId: data.env.HOTPLATE_FILESYSTEM_ID, env: data.env })[0];
+  assert.ok(registration);
+  writeFileSync(path, JSON.stringify({ ...registration, advertisedAt: Date.now() - 400000, expiresAt: Date.now() - 100000 }));
+  const before = readFileSync(path, "utf8");
+  discoverResourceRoots({ cwd: data.directory, env: data.env });
+  assert.equal(readFileSync(path, "utf8"), before);
+  publishResourceRoots({ host: "codex", sessionId: "current", filesystemId: data.env.HOTPLATE_FILESYSTEM_ID, roots: data.roots, process: null, env: data.env });
+  assert.equal(existsSync(path), false);
+  assert.equal(readRegisteredRoots({ filesystemId: data.env.HOTPLATE_FILESYSTEM_ID, env: data.env }).length, 1);
+});
+
+test("registered package proof is revalidated when its marker disappears", (t) => {
+  const data = fixture();
+  t.after(() => rmSync(data.directory, { recursive: true, force: true }));
+  const path = data.roots[0];
+  assert.ok(path);
+  const selected = discoverResourceRoots({ cwd: data.directory, env: data.env, advertisements: [{ kind: "package", path, host: "opencode-v2", sessionId: "catalog" }] });
+  assert.equal(publishResourceRoots({ host: "opencode-v2", sessionId: "catalog", filesystemId: data.env.HOTPLATE_FILESYSTEM_ID,
+    roots: selected.map(root => root.path), rootDescriptors: selected, env: data.env }), true);
+  rmSync(join(path, "SKILL.md"));
+  assert.deepEqual(discoverResourceRoots({ cwd: data.directory, env: data.env }), []);
+  assert.ok(qualifyResource({ path: join(path, "SKILL.md"), cwd: data.directory, roots: selected }));
 });

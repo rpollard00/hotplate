@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { startFilesystemObserver, type FilesystemObservation } from "../src/filesystem-observer.js";
+import { encodeFilesystemScope, startFilesystemObserver, type FilesystemObservation } from "../src/filesystem-observer.js";
 import { readProcessIdentity, registerHarnessProcess } from "../src/process-attribution.js";
-import type { ResourceRoot } from "../src/resource-paths.js";
+import { discoverResourceRoots } from "../src/resource-paths.js";
 
 function fixture(t: { after: (fn: () => void) => void }) {
   const directory = mkdtempSync(join(tmpdir(), "hotplate-observer-"));
@@ -17,8 +17,8 @@ function fixture(t: { after: (fn: () => void) => void }) {
   writeFileSync(join(path, "sample/SKILL.md"), "PRIVATE_SKILL_CONTENT");
   const resource = join(path, "sample/references/principle.md");
   writeFileSync(resource, "PRIVATE_REFERENCE_CONTENT");
-  const roots: ResourceRoot[] = [{ path, canonicalPath: path, filesystemId: "fixture-fs", origin: "configured", scope: "account" }];
-  const env = { ...process.env, HOTPLATE_PROCESS_REGISTRY: join(directory, "registry") };
+  const env = { ...process.env, HOME: directory, HOTPLATE_PROCESS_REGISTRY: join(directory, "registry") };
+  const roots = discoverResourceRoots({ cwd: directory, env, roots: [path], filesystemId: "fixture-fs" });
   function helper(messages: unknown[], tail = "setInterval(()=>{},1000)", setup = "process.once('SIGTERM',()=>process.exit(0));"): string {
     const executable = join(directory, "helper.cjs");
     writeFileSync(executable, `#!${process.execPath}\n${setup}process.stdout.write(${JSON.stringify(messages.map((message) => JSON.stringify(message)).join("\n") + "\n")});${tail}\n`);
@@ -41,7 +41,7 @@ test("observer emits bounded scoped metadata and stable heartbeats, excluding it
   const observations: FilesystemObservation[] = [];
   const access = { type: "access", access: "access", process: null, uid: process.getuid?.(), path: f.resource };
   const helperPath = f.helper([
-    { type: "ready" },
+    { type: "ready", scopeVersion: 1 },
     access,
     { ...access, path: `${f.roots[0]?.path}-outside/secret.md` },
     { ...access, uid: (process.getuid?.() ?? 0) + 1 },
@@ -81,7 +81,7 @@ test("observer callback receives a dedicated harness session from a wrapped read
     symlinkSync(executable, join(path, "exe"));
   }
   assert.ok(registerHarnessProcess({ env: f.env, procRoot, pid: 20, host: "claude-code", source: "native-hook", binding: { kind: "dedicated", sessionId: "native-session", actorId: "native-session", projectCwd: f.directory } }));
-  const helperPath = f.helper([{ type: "ready" }, { type: "access", path: f.resource, access: "access", process: readProcessIdentity(40, { procRoot }), uid: process.getuid?.() }]);
+  const helperPath = f.helper([{ type: "ready", scopeVersion: 1 }, { type: "access", path: f.resource, access: "access", process: readProcessIdentity(40, { procRoot }), uid: process.getuid?.() }]);
   const observations: FilesystemObservation[] = [];
   const observer = startFilesystemObserver({ ...f, procRoot, helperPath, onObservation: (event) => { observations.push(event); } });
   t.after(() => observer.stop());
@@ -97,7 +97,7 @@ test("graceful shutdown drains the helper's final access before recording stoppe
   const f = fixture(t);
   const observations: FilesystemObservation[] = [];
   const access = { type: "access", access: "access", process: null, uid: process.getuid?.(), path: f.resource };
-  const helperPath = f.helper([{ type: "ready" }], undefined, `process.once('SIGTERM',()=>{process.stdout.write(${JSON.stringify(JSON.stringify(access) + "\n")},()=>process.exit(0));});`);
+  const helperPath = f.helper([{ type: "ready", scopeVersion: 1 }], undefined, `process.once('SIGTERM',()=>{process.stdout.write(${JSON.stringify(JSON.stringify(access) + "\n")},()=>process.exit(0));});`);
   const observer = startFilesystemObserver({ ...f, helperPath, onObservation: (event) => { observations.push(event); } });
   t.after(() => observer.stop());
   await until(() => observations.some((event) => event.evidence.kind === "observer-coverage" && event.evidence.status === "active"));
@@ -110,9 +110,9 @@ test("graceful shutdown drains the helper's final access before recording stoppe
 test("missing roots remain unavailable while existing roots continue to be observed", { skip: process.platform !== "linux" }, async (t) => {
   const f = fixture(t);
   const missing = join(f.directory, "missing-skills");
-  const roots: ResourceRoot[] = [...f.roots, { path: missing, canonicalPath: missing, filesystemId: "fixture-fs", origin: "configured", scope: "account" }];
+  const roots = discoverResourceRoots({ cwd: f.directory, env: f.env, roots: [...f.roots.map(root => root.path), missing], filesystemId: "fixture-fs" });
   const observations: FilesystemObservation[] = [];
-  const observer = startFilesystemObserver({ ...f, roots, helperPath: f.helper([{ type: "ready" }]), onObservation: (event) => { observations.push(event); } });
+  const observer = startFilesystemObserver({ ...f, roots, helperPath: f.helper([{ type: "ready", scopeVersion: 1 }]), onObservation: (event) => { observations.push(event); } });
   t.after(() => observer.stop());
   await until(() => observations.some((event) => event.evidence.kind === "observer-coverage" && event.evidence.status === "active"));
   await observer.stop();
@@ -127,7 +127,7 @@ test("symlink root coverage uses the same physical root identity as inventory", 
   assert.ok(root);
   symlinkSync(root.path, alias);
   const observations: FilesystemObservation[] = [];
-  const observer = startFilesystemObserver({ ...f, roots: [{ ...root, path: alias }], helperPath: f.helper([{ type: "ready" }]), onObservation: (event) => { observations.push(event); } });
+  const observer = startFilesystemObserver({ ...f, roots: discoverResourceRoots({ cwd: f.directory, env: f.env, roots: [alias], filesystemId: "fixture-fs" }), helperPath: f.helper([{ type: "ready", scopeVersion: 1 }]), onObservation: (event) => { observations.push(event); } });
   t.after(() => observer.stop());
   await until(() => observations.length > 0);
   await observer.stop();
@@ -141,7 +141,7 @@ test("malformed or overlong helper streams fail coverage without retaining their
   for (const content of ["INVALID_SECRET_PAYLOAD", "x".repeat(40_000)]) {
     await t.test(`reject ${content.length} bytes`, async (subtest) => {
       const f = fixture(subtest);
-      const helperPath = f.helper([{ type: "ready" }], `process.stdout.write(${JSON.stringify(`${content}\n`)});setInterval(()=>{},1000)`);
+      const helperPath = f.helper([{ type: "ready", scopeVersion: 1 }], `process.stdout.write(${JSON.stringify(`${content}\n`)});setInterval(()=>{},1000)`);
       const observations: FilesystemObservation[] = [];
       const observer = startFilesystemObserver({ ...f, helperPath, onObservation: (event) => { observations.push(event); } });
       await observer.done;
@@ -151,16 +151,68 @@ test("malformed or overlong helper streams fail coverage without retaining their
   }
 });
 
+test("unacknowledged, old, or unavailable helpers cannot emit access evidence", { skip: process.platform !== "linux" }, async t => {
+  for (const prefix of [[], [{ type: "ready" }], [{ type: "ready", scopeVersion: 2 }], [{ type: "ready", scopeVersion: 1 }, { type: "unavailable", reason: "io-error" }]]) {
+    const f = fixture(t);
+    const observations: FilesystemObservation[] = [];
+    const access = { type: "access", access: "access", process: null, uid: process.getuid?.(), path: f.resource };
+    const observer = startFilesystemObserver({ ...f, helperPath: f.helper([...prefix, access, { type: "ready", scopeVersion: 1 }, access]), onObservation: event => { observations.push(event); } });
+    await observer.done;
+    assert.equal(observations.filter(event => event.evidence.kind === "resource-access").length, 0);
+    assert.ok(observations.some(event => event.evidence.kind === "observer-coverage" && event.evidence.status === "unavailable"));
+  }
+});
+
+test("observer rechecks exclusions and rejects copied or retargeted roots", { skip: process.platform !== "linux" }, async t => {
+  const f = fixture(t);
+  const root = f.roots[0];
+  assert.ok(root);
+  for (const suffix of ["sample/.git/config", "sample/.jj/repo", "sample/node_modules/dependency/SKILL.md", "sample/.artifacts/kept.md"]) {
+    const path = join(root.path, suffix);
+    mkdirSync(join(path, ".."), { recursive: true });
+    writeFileSync(path, "fixture");
+  }
+  const observations: FilesystemObservation[] = [];
+  const messages = [f.resource, ...["sample/.git/config", "sample/.jj/repo", "sample/node_modules/dependency/SKILL.md", "sample/.artifacts/kept.md"].map(path => join(root.path, path))]
+    .map(path => ({ type: "access", access: "access", process: null, uid: process.getuid?.(), path }));
+  const observer = startFilesystemObserver({ ...f, helperPath: f.helper([{ type: "ready", scopeVersion: 1 }, ...messages]), onObservation: event => { observations.push(event); } });
+  t.after(() => observer.stop());
+  await until(() => observations.filter(event => event.evidence.kind === "resource-access").length === 2);
+  await observer.stop();
+  const invalid: FilesystemObservation[] = [];
+  const copied = startFilesystemObserver({ ...f, roots: [{ ...root }], helperPath: join(f.directory, "not-started"), onObservation: event => { invalid.push(event); } });
+  await copied.done;
+  assert.ok(invalid.every(event => event.evidence.kind === "observer-coverage" && event.evidence.status === "unavailable"));
+  assert.throws(() => encodeFilesystemScope([{ ...root }]), /no longer admitted/u);
+  const alias = join(f.directory, "alias");
+  symlinkSync(root.path, alias);
+  const aliasedRoots = discoverResourceRoots({ cwd: f.directory, env: f.env, roots: [alias] });
+  unlinkSync(alias);
+  symlinkSync(f.directory, alias);
+  assert.throws(() => encodeFilesystemScope(aliasedRoots), /no longer admitted/u);
+  assert.throws(() => encodeFilesystemScope(Array.from({ length: 1025 }, () => root)), /root count/u);
+});
+
+test("an old helper that exits without reading policy cannot cause an unhandled stdin error", { skip: process.platform !== "linux" }, async t => {
+  const f = fixture(t);
+  const observations: FilesystemObservation[] = [];
+  const observer = startFilesystemObserver({ ...f, roots: Array.from({ length: 1024 }, () => f.roots).flat(),
+    helperPath: f.helper([], "process.exit(2)", ""), onObservation: event => { observations.push(event); } });
+  await observer.done;
+  assert.equal(observations.filter(event => event.evidence.kind === "resource-access").length, 0);
+  assert.ok(observations.some(event => event.evidence.kind === "observer-coverage" && event.evidence.status === "unavailable"));
+});
+
 test("callback rejection stops observation and reaches the coordinator through done", { skip: process.platform !== "linux" }, async (t) => {
   const f = fixture(t);
-  const observer = startFilesystemObserver({ ...f, helperPath: f.helper([{ type: "ready" }]), onObservation: () => { throw new Error("fixture persistence failed"); } });
+  const observer = startFilesystemObserver({ ...f, helperPath: f.helper([{ type: "ready", scopeVersion: 1 }]), onObservation: () => { throw new Error("fixture persistence failed"); } });
   await assert.rejects(observer.done, /fixture persistence failed/u);
   await assert.rejects(observer.stop(), /fixture persistence failed/u);
 });
 
 test("a persistence failure drains paused helper output and still terminates", { skip: process.platform !== "linux", timeout: 5000 }, async (t) => {
   const f = fixture(t);
-  const messages = [{ type: "ready" }, ...Array.from({ length: 700 }, () => ({ type: "access", access: "access", path: f.resource, process: null, uid: process.getuid?.() }))];
+  const messages = [{ type: "ready", scopeVersion: 1 }, ...Array.from({ length: 700 }, () => ({ type: "access", access: "access", path: f.resource, process: null, uid: process.getuid?.() }))];
   const observer = startFilesystemObserver({ ...f, helperPath: f.helper(messages), onObservation: async (event) => {
     if (event.evidence.kind === "resource-access") {
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -174,7 +226,7 @@ test("missing helper, denied permission and unexpected exit leave explicit unava
   for (const expected of ["helper-unavailable", "permission-denied", "process-exited"] as const) {
     await t.test(expected, async (subtest) => {
       const f = fixture(subtest);
-      const helperPath = expected === "helper-unavailable" ? join(f.directory, "missing") : f.helper(expected === "permission-denied" ? [{ type: "unavailable", reason: expected }] : [{ type: "ready" }], "");
+      const helperPath = expected === "helper-unavailable" ? join(f.directory, "missing") : f.helper(expected === "permission-denied" ? [{ type: "unavailable", reason: expected }] : [{ type: "ready", scopeVersion: 1 }], "");
       const observations: FilesystemObservation[] = [];
       const observer = startFilesystemObserver({ ...f, helperPath, onObservation: (event) => { observations.push(event); } });
       await observer.done;
@@ -191,7 +243,7 @@ test("native helper compiles and reports actual kernel availability", { skip: pr
   const helperPath = join(f.directory, "hotplate-fanotify");
   execFileSync("cc", ["-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", join(process.cwd(), "native/fanotify.c"), "-o", helperPath]);
   if (process.getuid?.() !== 0) {
-    const differentUser = spawnSync(helperPath, ["--uid", String((process.getuid?.() ?? 0) + 1), "--root", f.resource], { encoding: "utf8", timeout: 1000 });
+    const differentUser = spawnSync(helperPath, ["--uid", String((process.getuid?.() ?? 0) + 1)], { input: encodeFilesystemScope(f.roots), encoding: "utf8", timeout: 1000 });
     assert.equal(differentUser.status, 2);
     assert.deepEqual(JSON.parse(differentUser.stdout), { type: "unavailable", reason: "io-error" });
   }
@@ -204,7 +256,8 @@ test("native helper compiles and reports actual kernel availability", { skip: pr
   if (first?.kind === "observer-coverage" && first.status === "unavailable") {
     assert.equal(first.reason, "permission-denied");
     await observer.done;
-    const fileRoot = spawnSync(helperPath, ["--uid", String(process.getuid?.()), "--root", f.resource], { encoding: "utf8", timeout: 1000 });
+    const fileRoots = discoverResourceRoots({ cwd: f.directory, env: f.env, roots: [f.resource] });
+    const fileRoot = spawnSync(helperPath, ["--uid", String(process.getuid?.())], { input: encodeFilesystemScope(fileRoots), encoding: "utf8", timeout: 1000 });
     assert.deepEqual(JSON.parse(fileRoot.stdout), { type: "unavailable", reason: "permission-denied" });
     t.diagnostic("CAP_SYS_ADMIN is unavailable: verified honest EPERM coverage; privileged read attribution remains unverified.");
     return;

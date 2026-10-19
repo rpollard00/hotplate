@@ -7,7 +7,8 @@ import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { captureFact } from "../src/capture.js";
+import { createSyntheticSourceInfo } from "@earendil-works/pi-coding-agent";
+import { captureFact, type CaptureFact } from "../src/capture.js";
 import { HotplateCollector } from "../src/collector/collector.js";
 import { parseClaudeCodeHook } from "../src/integrations/claude-code.js";
 import { parseCodexHook } from "../src/integrations/codex.js";
@@ -189,4 +190,180 @@ test("the native CLI retains physical and alias read operands and continues to t
     assert.equal(rows.find((row) => row.resource.canonicalPath === data.principle)?.attemptCount, 1);
   } finally { await store.close(); }
   await delay(100);
+});
+
+test("every native read adapter gates legacy and resource facts with the same project scope", (t) => {
+  const data = fixture();
+  t.after(() => rmSync(data.directory, { recursive: true, force: true }));
+  const project = join(data.directory, "project");
+  const cwd = join(project, "src");
+  mkdirSync(cwd, { recursive: true });
+  mkdirSync(join(project, ".git"));
+  const env = { ...data.env, HOME: join(data.directory, "home"), CODEX_HOME: join(data.directory, "codex"), HOTPLATE_RESOURCE_ROOTS: "" };
+  for (const host of ["codex", "claude-code", "opencode-v1", "opencode-v2"] as const) {
+    const providerDirectory = host === "codex" ? ".agents" : host === "claude-code" ? ".claude" : ".opencode";
+    const root = join(project, providerDirectory, "skills");
+    const skill = join(root, "example", "SKILL.md");
+    const hidden = join(root, "example", ".artifacts", "guide.md");
+    const outside = join(data.directory, `${host}-outside`, "SKILL.md");
+    const ancestor = join(data.directory, providerDirectory, "skills", "outside-boundary", "SKILL.md");
+    const excluded = [".git", ".jj", "node_modules"]
+      .map((segment) => join(root, "example", segment, "nested", "SKILL.md"));
+    if (host === "claude-code") excluded.push(join(root, ".trash", "retired", "SKILL.md"));
+    for (const path of [skill, hidden, outside, ancestor, ...excluded]) { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, "BODY_CANARY"); }
+    const escape = join(root, "example", "escape");
+    if (host !== "opencode-v2") symlinkSync(dirname(outside), escape);
+    const read = (path: string): readonly CaptureFact[] => {
+      const hook = { hook_event_name: "PostToolUse", session_id: "scope-session", cwd, tool_use_id: "read", tool_response: "OUTPUT_CANARY" };
+      if (host === "codex") return parseCodexHook({ ...hook, tool_name: "Bash", tool_input: { command: `cat ${path}` } }, undefined, env);
+      if (host === "claude-code") return parseClaudeCodeHook({ ...hook, tool_name: "Read", tool_input: { file_path: path } }, undefined, env);
+      const context = { projectCwd: cwd, env };
+      return host === "opencode-v1"
+        ? extractOpenCodeV1Facts({ tool: "read", sessionID: "scope-session", callID: "read", args: { filePath: path } }, { output: "OUTPUT_CANARY" }, context)
+        : extractOpenCodeV2Facts({ tool: "read", sessionID: "scope-session", id: "read", input: { path }, status: "completed", result: {} }, context);
+    };
+    assert.deepEqual(read(skill).map((fact) => fact.evidence.kind), [host === "codex" ? "read-attempt" : "read-result", "resource-access"], host);
+    assert.equal(read(join(root, "missing", "SKILL.md")).length, 2, `${host} missing in-scope skill`);
+    assert.deepEqual(read(hidden).map((fact) => fact.evidence.kind), ["resource-access"], `${host} hidden artifact`);
+    for (const path of [outside, ancestor, ...excluded, join(escape, "SKILL.md")]) assert.deepEqual(read(path), [], `${host}: ${path}`);
+  }
+});
+
+test("Pi admits catalog packages, fallback reads and wrappers without granting raw paths authority", async (t) => {
+  const data = fixture();
+  t.after(() => rmSync(data.directory, { recursive: true, force: true }));
+  const project = join(data.directory, "project");
+  const marker = join(project, ".agents", "skills", "example", "SKILL.md");
+  const catalogPath = join(data.directory, "catalog-package", "SKILL.md");
+  const standalone = join(data.directory, "file-catalog", "standalone.md");
+  const sibling = join(dirname(standalone), "sibling.md");
+  const excluded = join(dirname(marker), "node_modules", "hidden", "SKILL.md");
+  const outside = join(data.directory, "source", "SKILL.md");
+  const missing = join(project, ".agents", "skills", "missing", "SKILL.md");
+  for (const path of [marker, catalogPath, standalone, sibling, excluded, outside]) { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, "PRIVATE_CANARY"); }
+  const escape = join(dirname(marker), "nested-link");
+  symlinkSync(dirname(outside), escape);
+  const env = { ...data.env, HOTPLATE_RESOURCE_ROOTS: "" };
+  const collector = new HotplateCollector({ env, openStore: () => openHotplateStore({ databasePath: data.databasePath }) });
+  const ctx = { cwd: project, sessionManager: { getLeafId: () => "leaf", getSessionId: () => "pi-scope", getSessionFile: () => undefined }, ui: { setStatus: () => {} } };
+  await collector.sessionStart({ type: "session_start", reason: "startup" }, ctx, () => [
+    { name: "skill:catalog-name", source: "skill", sourceInfo: createSyntheticSourceInfo(catalogPath, { source: "test" }) },
+    { name: "skill:standalone", source: "skill", sourceInfo: createSyntheticSourceInfo(standalone, { source: "test" }) },
+    { name: "skill:excluded", source: "skill", sourceInfo: createSyntheticSourceInfo(excluded, { source: "test" }) },
+  ]);
+  for (const [index, path] of [marker, catalogPath, standalone, missing, outside, sibling, excluded, join(escape, "SKILL.md")].entries()) {
+    collector.toolResult({ type: "tool_result", toolName: "read", toolCallId: `read-${index}`, input: { path }, content: [], details: undefined, isError: path === missing }, ctx);
+    collector.messageEnd({ type: "message_end", message: { role: "user", content: `<skill name="wrapper" location="${path}">PRIVATE_CANARY</skill>`, timestamp: Date.now() } });
+  }
+  rmSync(catalogPath);
+  collector.toolResult({ type: "tool_result", toolName: "read", toolCallId: "catalog-file-removed", input: { path: catalogPath }, content: [], details: undefined, isError: true }, ctx);
+  await collector.shutdown("quit", ctx);
+  const store = openHotplateStore({ databasePath: data.databasePath });
+  try {
+    const overview = await store.queryOverview({ sessionId: "pi-scope" });
+    assert.equal(overview.catalogSkillCount, 2);
+    assert.equal(overview.successfulReadCount, 3);
+    assert.equal(overview.failedReadCount, 2);
+    assert.equal(overview.wrapperObservedCount, 4);
+    const skills = (await store.querySkillTable({ sessionId: "pi-scope" })).rows;
+    assert.equal(skills.find((row) => row.skillName === "catalog-name")?.successfulReadCount, 1);
+    assert.equal(skills.find((row) => row.skillName === "catalog-name")?.failedReadCount, 1);
+    const resources = (await store.queryResources({ sessionId: "pi-scope" })).rows;
+    assert.deepEqual(resources.map((row) => row.resource.canonicalPath).sort(), [marker, catalogPath, standalone, missing].sort());
+  } finally { await store.close(); }
+});
+
+test("OpenCode v2 rejects invalid catalog paths without losing named invocation evidence", (t) => {
+  const data = fixture();
+  t.after(() => rmSync(data.directory, { recursive: true, force: true }));
+  const marker = join(data.root, "example", "SKILL.md");
+  const excluded = join(data.root, "example", "node_modules", "hidden", "SKILL.md");
+  for (const path of [marker, excluded]) { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, "body"); }
+  const missing = join(data.directory, "uncataloged", "SKILL.md");
+  const event = { tool: "skill", sessionID: "catalog-session", id: "call", input: { id: "named" }, status: "completed", result: {} };
+  for (const path of [marker, excluded, missing]) {
+    const facts = extractOpenCodeV2Facts(event, { projectCwd: data.directory, env: data.env, skills: [{ id: "named", name: "named", path }] });
+    assert.equal(facts.length, 1);
+    const evidence = facts[0]?.evidence;
+    assert.equal(evidence?.kind, "skill-invocation");
+    if (evidence?.kind === "skill-invocation") {
+      assert.equal(evidence.skill.name, "named");
+      assert.equal(evidence.skill.canonicalPath, path === marker ? marker : null);
+    }
+  }
+});
+
+test("OpenCode v2 advertises a standalone catalog entrypoint without authorizing its siblings", (t) => {
+  const data = fixture();
+  t.after(() => rmSync(data.directory, { recursive: true, force: true }));
+  const entrypoint = join(data.directory, "catalog", "standalone.md");
+  const sibling = join(dirname(entrypoint), "source.md");
+  mkdirSync(dirname(entrypoint));
+  writeFileSync(entrypoint, "body");
+  writeFileSync(sibling, "body");
+  const context = { projectCwd: data.directory, env: data.env, skills: [{ id: "named", name: "named", path: entrypoint }] };
+  const invocation = extractOpenCodeV2Facts({ tool: "skill", sessionID: "catalog-session", id: "invoke", input: { id: "named" }, status: "completed", result: {} }, context)[0];
+  assert.equal(invocation?.evidence.kind, "skill-invocation");
+  if (invocation?.evidence.kind === "skill-invocation") assert.equal(invocation.evidence.skill.canonicalPath, entrypoint);
+  const read = (path: string) => extractOpenCodeV2Facts({ tool: "read", sessionID: "catalog-session", id: "read", input: { path }, status: "completed", result: {} }, context);
+  assert.deepEqual(read(entrypoint).map((fact) => fact.evidence.kind), ["resource-access"]);
+  assert.deepEqual(read(sibling), []);
+});
+
+test("the local OpenCode capture worker rechecks serialized file evidence and advertised package proof", async (t) => {
+  const data = fixture();
+  t.after(() => rmSync(data.directory, { recursive: true, force: true }));
+  const marker = join(data.root, "example", "SKILL.md");
+  const excluded = join(data.root, "example", ".git", "hidden", "SKILL.md");
+  const outside = join(data.directory, "checkout", "SKILL.md");
+  for (const path of [marker, excluded, outside]) { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, "body"); }
+  const unproven = join(data.directory, "without-marker");
+  mkdirSync(unproven);
+  writeFileSync(join(unproven, "reference.md"), "body");
+  const standalone = join(data.directory, "catalog", "entry.md");
+  const sibling = join(dirname(standalone), "sibling.md");
+  mkdirSync(dirname(standalone));
+  writeFileSync(standalone, "body");
+  writeFileSync(sibling, "body");
+  for (const host of ["opencode-v1", "opencode-v2"] as const) {
+    const sessionId = `worker-${host}`;
+    const advertisedRoots = [unproven];
+    const advertisements = [{ kind: "package", path: standalone, host, sessionId }] as const;
+    await runSessionInventory({ host, sessionId, cwd: data.directory, advertisedRoots, advertisements }, data.env);
+    const base = { host, sessionId, actorId: sessionId, occurrenceId: "call", observedAt: "2026-10-18T00:00:00.000Z",
+      scope: { projectCwd: data.directory, sessionId, sessionFile: null, segmentId: sessionId, segmentReason: "unknown", runId: null, turnId: null, leafId: null } } satisfies Omit<CaptureFact, "evidence">;
+    const facts: CaptureFact[] = [marker, excluded, outside].flatMap((path, index) => [
+      { ...base, occurrenceId: `legacy-${index}`, evidence: { kind: "read-result", skill: { name: "example", canonicalPath: path, version: null }, toolCallId: `legacy-${index}`, outcome: "success", model: null } },
+      { ...base, occurrenceId: `resource-${index}`, evidence: { kind: "resource-access", resource: { filesystemId: "forged", canonicalPath: outside, observedPath: path, rootPath: data.directory, kind: "file", ownerSkillPath: outside }, operationId: `resource-${index}`, mechanism: "host-tool", access: "read", outcome: "success", model: null, process: null, attribution: "session" } },
+    ]);
+    facts.push({ ...base, occurrenceId: "invocation", evidence: { kind: "skill-invocation", skill: { name: "named", canonicalPath: excluded, version: null }, toolCallId: "invocation", outcome: "success", model: null } });
+    facts.push({ ...base, occurrenceId: "standalone-invocation", evidence: { kind: "skill-invocation", skill: { name: "standalone", canonicalPath: standalone, version: null }, toolCallId: "standalone-invocation", outcome: "success", model: null } });
+    facts.push({ ...base, occurrenceId: "catalog", evidence: { kind: "catalog-snapshot", skills: [marker, excluded, outside, standalone, sibling].map((canonicalPath) => ({ name: canonicalPath === standalone ? "standalone" : "example", canonicalPath, version: null })) } });
+    facts.push({ ...base, occurrenceId: "unproven", evidence: { kind: "resource-access", resource: { filesystemId: "forged", canonicalPath: join(unproven, "reference.md"), observedPath: join(unproven, "reference.md"), rootPath: unproven, kind: "reference", ownerSkillPath: null }, operationId: "unproven", mechanism: "host-tool", access: "read", outcome: "success", model: null, process: null, attribution: "session" } });
+    await new Promise<void>((done, reject) => {
+      const child = spawn(process.execPath, [fileURLToPath(new URL("../src/integrations/command.js", import.meta.url)), "--worker", host], { env: data.env, stdio: ["pipe", "ignore", "pipe"] });
+      let stderr = "";
+      child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+      child.once("error", reject);
+      child.once("exit", (code) => code === 0 ? done() : reject(new Error(stderr)));
+      child.stdin.end(JSON.stringify({ session_id: sessionId, cwd: data.directory, advertised_roots: advertisedRoots, advertisements, facts }));
+    });
+    const store = openHotplateStore({ databasePath: data.databasePath });
+    try {
+      const overview = await store.queryOverview({ host, sessionId });
+      assert.equal(overview.readResultCount, 1, host);
+      assert.equal(overview.skillInvocationCount, 2, host);
+      assert.equal(overview.catalogSkillCount, 2, host);
+      const rows = (await store.queryResources({ sessionId })).rows;
+      const reads = rows.filter((row) => row.successfulReadCount > 0);
+      assert.equal(reads.length, 1, host);
+      assert.equal(reads[0]?.resource.canonicalPath, marker);
+      assert.equal(reads[0]?.resource.filesystemId, "fixture");
+      assert.equal(reads[0]?.resource.rootPath, data.root);
+      assert.equal((await store.querySkillTable({ sessionId })).rows.find((row) => row.skillName === "named")?.canonicalPath, null);
+      assert.equal((await store.querySkillTable({ sessionId })).rows.find((row) => row.skillName === "standalone")?.canonicalPath, standalone);
+      assert.equal(rows.some((row) => row.resource.canonicalPath.startsWith(unproven)), false);
+      assert.equal(rows.some((row) => row.resource.canonicalPath === sibling), false);
+    } finally { await store.close(); }
+  }
 });

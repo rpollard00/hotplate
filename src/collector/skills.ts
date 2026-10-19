@@ -1,16 +1,25 @@
-import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { SlashCommandInfo } from "@earendil-works/pi-coding-agent";
 import type { SkillRef } from "../domain.js";
+import type { ResourceLocation } from "../resource-domain.js";
+import { qualifyResource, type ResourceAdvertisement, type ResourceRoot } from "../resource-paths.js";
 
 export type SkillCatalog = {
   byPath: ReadonlyMap<string, SkillRef>;
   skills: readonly SkillRef[];
 };
 
-export function buildSkillCatalog(commands: readonly SlashCommandInfo[]): SkillCatalog {
+export function skillCatalogAdvertisements(commands: readonly SlashCommandInfo[], cwd: string, sessionId: string | null): readonly ResourceAdvertisement[] {
+  return commands.flatMap((command) => {
+    if (command.source !== "skill") return [];
+    const path = normalizePath(command.sourceInfo.path, cwd);
+    return path ? [{ kind: "package", path: basename(path) === "SKILL.md" ? dirname(path) : path, host: "pi", sessionId } satisfies ResourceAdvertisement] : [];
+  });
+}
+
+export function buildSkillCatalog(commands: readonly SlashCommandInfo[], cwd: string, roots: readonly ResourceRoot[]): SkillCatalog {
   const byPath = new Map<string, SkillRef>();
 
   for (const command of commands) {
@@ -18,14 +27,15 @@ export function buildSkillCatalog(commands: readonly SlashCommandInfo[]): SkillC
       continue;
     }
 
-    const canonicalPath = canonicalizePath(command.sourceInfo.path);
+    const resource = resourceFromReadPath(command.sourceInfo.path, cwd, roots);
+    if (!resource) continue;
     const name = command.name.startsWith("skill:") ? command.name.slice("skill:".length) : command.name;
     const skill: SkillRef = {
       name,
-      canonicalPath,
+      canonicalPath: resource.canonicalPath,
       version: null,
     };
-    byPath.set(canonicalPath, skill);
+    byPath.set(resource.canonicalPath, skill);
   }
 
   return { byPath, skills: [...byPath.values()].sort(compareSkillRef) };
@@ -36,7 +46,7 @@ export function commandIntentSkillName(input: string): string | null {
   return match?.[1] ?? null;
 }
 
-export function skillWrappersFromPrompt(prompt: string, cwd = process.cwd()): readonly SkillRef[] {
+export function skillWrappersFromPrompt(prompt: string, cwd: string, roots: readonly ResourceRoot[]): readonly SkillRef[] {
   const skills: SkillRef[] = [];
   const wrapperPattern = /<skill\s+name="([^"]+)"\s+location="([^"]+)"\s*>/g;
   for (const match of prompt.matchAll(wrapperPattern)) {
@@ -45,41 +55,49 @@ export function skillWrappersFromPrompt(prompt: string, cwd = process.cwd()): re
     if (!name || !location) {
       continue;
     }
-    const canonicalPath = canonicalizePath(location, cwd);
-    skills.push({ name, canonicalPath, version: null });
+    const resource = resourceFromReadPath(location, cwd, roots);
+    if (resource) skills.push({ name, canonicalPath: resource.canonicalPath, version: null });
   }
   return skills;
 }
 
-export function skillFromReadPath(inputPath: string, cwd: string, catalog: SkillCatalog): SkillRef | null {
-  const canonicalPath = canonicalizePath(inputPath, cwd);
-  const cataloged = catalog.byPath.get(canonicalPath);
+export function skillFromReadPath(inputPath: string, cwd: string, catalog: SkillCatalog, roots: readonly ResourceRoot[]): SkillRef | null {
+  return skillFromResource(resourceFromReadPath(inputPath, cwd, roots), catalog);
+}
+
+export function skillFromResource(resource: ResourceLocation | null, catalog: SkillCatalog): SkillRef | null {
+  if (!resource) return null;
+  const cataloged = catalog.byPath.get(resource.canonicalPath);
   if (cataloged) {
     return { ...cataloged, version: null };
   }
 
-  if (basename(canonicalPath) !== "SKILL.md") {
+  if (basename(resource.observedPath) !== "SKILL.md") {
     return null;
   }
 
   return {
-    name: basename(dirname(canonicalPath)),
-    canonicalPath,
+    name: basename(dirname(resource.canonicalPath)),
+    canonicalPath: resource.canonicalPath,
     version: null,
   };
 }
 
-function canonicalizePath(path: string, cwd = process.cwd()): string {
+export function resourceFromReadPath(inputPath: string, cwd: string, roots: readonly ResourceRoot[]): ResourceLocation | null {
+  const path = normalizePath(inputPath, cwd);
+  return path ? qualifyResource({ path, cwd, roots }) : null;
+}
+
+function normalizePath(path: string, cwd: string): string | null {
   let normalized = path.replace(/[\u00a0\u2000-\u200a\u202f\u205f\u3000]/g, " ");
   if (normalized.startsWith("@")) normalized = normalized.slice(1);
   if (normalized === "~") normalized = homedir();
   else if (normalized.startsWith("~/")) normalized = join(homedir(), normalized.slice(2));
-  if (normalized.startsWith("file://")) normalized = fileURLToPath(normalized);
-  const absolute = resolve(cwd, normalized);
   try {
-    return realpathSync.native(absolute);
+    if (normalized.startsWith("file://")) normalized = fileURLToPath(normalized);
+    return resolve(cwd, normalized);
   } catch {
-    return absolute;
+    return null;
   }
 }
 

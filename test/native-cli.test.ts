@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openHotplateReadStore } from "../src/store.js";
 
@@ -12,11 +12,19 @@ const cli = fileURLToPath(new URL("../src/cli.js", import.meta.url));
 test("capture CLI commits once, retains no content, and handles malformed input silently", async () => {
   const directory = mkdtempSync(join(tmpdir(), "hotplate-capture-cli-"));
   const databasePath = join(directory, "capture.sqlite");
-  const env: NodeJS.ProcessEnv = { ...process.env, HOTPLATE_DB: databasePath, NODE_NO_WARNINGS: "1" };
+  const skillPath = join(directory, ".claude", "skills", "skill", "SKILL.md");
+  const otherPath = join(directory, ".claude", "skills", "other", "SKILL.md");
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: join(directory, "home"), XDG_CONFIG_HOME: join(directory, "config"),
+    XDG_CACHE_HOME: join(directory, "cache"), XDG_DATA_HOME: join(directory, "data"), XDG_STATE_HOME: join(directory, "state"),
+    HOTPLATE_RESOURCE_REGISTRY: join(directory, "resource-registry"), HOTPLATE_PROCESS_REGISTRY: join(directory, "process-registry"),
+    HOTPLATE_DB: databasePath, NODE_NO_WARNINGS: "1" };
   delete env.HOTPLATE_CONFIG;
   delete env.HOTPLATE_DISABLED;
+  delete env.HOTPLATE_RESOURCE_ROOTS;
+  delete env.HOTPLATE_RESOURCES_CONFIG;
   try {
-    const hook = { hook_event_name: "PostToolUse", session_id: "test-session", tool_use_id: "test-tool", cwd: directory, tool_name: "Read", tool_input: { file_path: join(directory, "skill/SKILL.md") }, tool_response: "PRIVATE_OUTPUT_CANARY", prompt: "PRIVATE_PROMPT_CANARY", error: "PRIVATE_ERROR_CANARY" };
+    for (const path of [skillPath, otherPath]) { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, "PRIVATE_SKILL_CANARY"); }
+    const hook = { hook_event_name: "PostToolUse", session_id: "test-session", tool_use_id: "test-tool", cwd: directory, tool_name: "Read", tool_input: { file_path: skillPath }, tool_response: "PRIVATE_OUTPUT_CANARY", prompt: "PRIVATE_PROMPT_CANARY", error: "PRIVATE_ERROR_CANARY" };
     for (let i = 0; i < 2; i += 1) {
       const result = spawnSync(process.execPath, [cli, "capture", "claude-code"], { env, input: JSON.stringify(hook), encoding: "utf8", timeout: 3000 });
       assert.equal(result.status, 0);
@@ -24,7 +32,7 @@ test("capture CLI commits once, retains no content, and handles malformed input 
       assert.equal(result.stderr, "");
     }
     const conflict = spawnSync(process.execPath, [cli, "capture", "claude-code"], {
-      env, input: JSON.stringify({ ...hook, tool_input: { file_path: join(directory, "other/SKILL.md") } }), encoding: "utf8", timeout: 3000,
+      env, input: JSON.stringify({ ...hook, tool_input: { file_path: otherPath } }), encoding: "utf8", timeout: 3000,
     });
     assert.equal(conflict.status, 0);
     assert.equal(conflict.stdout, "");
@@ -38,6 +46,12 @@ test("capture CLI commits once, retains no content, and handles malformed input 
       assert.equal(overview.successfulReadCount, 1);
       assert.equal(JSON.stringify(await opened.store.querySkillChain({})).includes("CANARY"), false);
     } finally { await opened.store.close(); }
+    const databaseFailure = spawnSync(process.execPath, [cli, "capture", "claude-code"], {
+      env: { ...env, HOTPLATE_DB: directory }, input: JSON.stringify(hook), encoding: "utf8", timeout: 3000,
+    });
+    assert.equal(databaseFailure.status, 0);
+    assert.equal(databaseFailure.stdout, "");
+    assert.equal(databaseFailure.stderr, "Hotplate capture unavailable.\n");
     for (const input of ['{"invalid":"PRIVATE_CANARY"', "x".repeat(1024 * 1024 + 1)]) {
       const result = spawnSync(process.execPath, [cli, "capture", "claude-code"], { env, input, encoding: "utf8", timeout: 3000 });
       assert.equal(result.status, 0);

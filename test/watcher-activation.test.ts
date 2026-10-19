@@ -74,12 +74,12 @@ test("watcher activation builds, preserves account selection and caller roots, a
   assert.ok(body.startsWith("# Managed by Hotplate activate-watcher; resources service v1\n"));
   assert.ok(body.includes("WorkingDirectory=%h\n"));
   assert.ok(body.includes('checkout $$cash %%value \\"quoted\\"/dist/src/cli.js'));
-  assert.ok(body.includes('home $$cash %%value \\"quoted\\" \\\\path'));
+  assert.ok(body.includes('home $cash %%value \\"quoted\\" \\\\path'));
   assert.ok(body.includes('Environment="HOTPLATE_INTEGRATION_SETTINGS=' + selection.replaceAll('"', '\\"').replaceAll('%', '%%') + '"'));
   assert.ok(body.includes("UnsetEnvironment=HOTPLATE_CONFIG\n"));
   assert.ok(body.includes("UnsetEnvironment=HOTPLATE_DB\n"));
   assert.ok(body.includes("UnsetEnvironment=HOTPLATE_DISABLED\n"));
-  assert.doesNotMatch(body, /NoNewPrivileges|User=root|sudo/u);
+  assert.doesNotMatch(body, /NoNewPrivileges|User=root|sudo|--project/u);
   assert.equal(statSync(f.unit).mode & 0o777, 0o600);
   const installed = "/usr/local/libexec/hotplate/1001/hotplate-fanotify";
   const privileged = [
@@ -146,4 +146,31 @@ test("watcher activation stops on capability failure and reports a failed restar
   assert.doesNotMatch(restart.stdout, /Service restarted\./u);
   assert.ok(existsSync(f.unit));
   assert.equal(f.calls("systemctl").filter(args => args[1] === "show").length, 0);
+});
+
+test("watcher activation rejects broad roots before privileged calls or persistent writes", { skip: process.platform !== "linux" }, t => {
+  const f = fixture(t);
+  const checkout = join(f.caller, "source-checkout");
+  mkdirSync(join(checkout, ".git"), { recursive: true });
+  const result = f.run([checkout]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Resource root rejected.*source-root/u);
+  assert.deepEqual(f.calls("sudo"), []);
+  assert.deepEqual(f.calls("systemctl"), [["--user", "show-environment"]]);
+  assert.equal(existsSync(f.unit), false);
+  assert.equal(existsSync(join(f.repository, "dist")), false);
+  assert.equal(existsSync(join(f.repository, "native/hotplate-fanotify")), false);
+  assert.equal(existsSync(join(f.home, ".config/hotplate/resources.json")), false);
+});
+
+test("watcher activation needs no positional root for installed account collections", { skip: process.platform !== "linux" }, t => {
+  const f = fixture(t);
+  mkdirSync(join(f.home, ".agents/skills/sample"), { recursive: true });
+  writeFileSync(join(f.home, ".agents/skills/sample/SKILL.md"), "fixture");
+  const result = f.run();
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(existsSync(join(f.home, ".config/hotplate/resources.json")), false);
+  const body = readFileSync(f.unit, "utf8");
+  assert.match(body, /"resources" "watch" "--helper"/u);
+  assert.doesNotMatch(body, /--project|--root/u);
 });

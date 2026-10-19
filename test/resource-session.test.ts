@@ -8,7 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import { test, type TestContext } from "node:test";
 import { readProcessIdentity } from "../src/process-attribution.js";
 import { discoverResourceRoots } from "../src/resource-paths.js";
-import { runSessionInventory, type SessionInventoryRequest } from "../src/resource-session.js";
+import { parseSessionInventoryRequest, runSessionInventory, type SessionInventoryRequest } from "../src/resource-session.js";
 
 function fixture(t: TestContext) {
   const directory = mkdtempSync(join(tmpdir(), "hotplate-resource-session-"));
@@ -29,7 +29,7 @@ function fixture(t: TestContext) {
 }
 
 function slot(data: ReturnType<typeof fixture>, request: SessionInventoryRequest) {
-  const roots = discoverResourceRoots({ cwd: request.cwd, env: data.env });
+  const roots = discoverResourceRoots({ cwd: request.cwd, env: data.env, project: { host: request.host, boundary: { kind: "infer" } } });
   const key = createHash("sha256").update(JSON.stringify([data.databasePath, "local", request.host, request.sessionId, request.cwd, roots])).digest("hex");
   return { lease: join(data.cache, `${key}.lease`), completed: join(data.cache, `${key}.complete`) };
 }
@@ -109,4 +109,16 @@ test("a stale worker cannot release another process lease", async t => {
   await runSessionInventory({ ...request, leaseToken: randomUUID() }, data.env);
   assert.equal(readFileSync(paths.lease, "utf8"), owner);
   assert.equal(existsSync(paths.completed), false);
+});
+
+test("session inventory parses typed advertisements in their host and session context", () => {
+  const request = { host: "opencode-v2", sessionId: "session", cwd: "/project" };
+  const packageAdvertisement = { kind: "package", path: "/installed/example", host: request.host, sessionId: request.sessionId };
+  const collectionAdvertisement = { ...packageAdvertisement, kind: "collection", source: "host-configuration" };
+  assert.deepEqual(parseSessionInventoryRequest({ ...request, advertisements: [packageAdvertisement, collectionAdvertisement] }).advertisements,
+    [packageAdvertisement, collectionAdvertisement]);
+  for (const advertisement of [{ ...packageAdvertisement, host: "codex" }, { ...packageAdvertisement, sessionId: "other" },
+    { ...packageAdvertisement, path: "relative" }, { ...collectionAdvertisement, source: "read-path" }]) {
+    assert.throws(() => parseSessionInventoryRequest({ ...request, advertisements: [advertisement] }), /Invalid inventory advertisements/);
+  }
 });

@@ -2,7 +2,7 @@ import { basename, dirname, isAbsolute } from "node:path";
 import type { CaptureFact } from "../../capture.js";
 import { registerHarnessProcess } from "../../process-attribution.js";
 import { resourceFact } from "../common.js";
-import { discoverResourceRoots, resourceFilesystemId } from "../../resource-paths.js";
+import { discoverResourceRoots, qualifyResource, resourceFilesystemId, type ResourceAdvertisement } from "../../resource-paths.js";
 import { publishResourceRoots } from "../../resource-root-registry.js";
 import { object, reportOpenCodeUnavailable, sendOpenCodeFacts, toolEvidence, toolScope, validContext, type OpenCodeContext } from "./bridge.js";
 
@@ -19,15 +19,14 @@ export function extractOpenCodeV2Facts(input: unknown, context: V2Context): read
   const args = object(event.input);
   const skill = context.skills?.find((entry) => entry.id === args?.id);
   const normalized = event.tool === "read" ? { filePath: args?.path } : { name: skill?.name ?? args?.id };
-  const evidence = toolEvidence(event.tool, normalized, event.id, event.status === "completed" ? "success" : "error", context);
-  if (evidence?.kind === "skill-invocation" && skill?.path && isAbsolute(skill.path) && basename(skill.path) === "SKILL.md") evidence.skill.canonicalPath = skill.path;
   const fact = { host: "opencode-v2", sessionId: event.sessionID, actorId: event.sessionID, occurrenceId: event.id, observedAt: context.observedAt ?? new Date().toISOString(), scope: toolScope(event.sessionID, context, typeof event.messageID === "string" ? event.messageID : null) } satisfies Omit<CaptureFact, "evidence">;
+  const roots = context.roots ?? discoverResourceRoots({ cwd: context.projectCwd, project: { host: "opencode-v2", boundary: { kind: "infer" } },
+    advertisements: catalogAdvertisements(context.skills ?? [], event.sessionID), ...(context.env ? { env: context.env } : {}) });
+  const resource = event.tool === "read" ? resourceFact(fact, normalized.filePath, { access: "read", outcome: event.status === "completed" ? "success" : "error", roots }) : null;
+  const evidence = toolEvidence(event.tool, normalized, event.id, event.status === "completed" ? "success" : "error", context, resource?.evidence.resource ?? null);
+  if (evidence?.kind === "skill-invocation" && skill?.path) evidence.skill.canonicalPath = qualifyResource({ path: skill.path, cwd: context.projectCwd, roots })?.canonicalPath ?? null;
   const facts: CaptureFact[] = evidence ? [{ ...fact, evidence }] : [];
-  if (event.tool === "read") {
-    const roots = discoverResourceRoots({ cwd: context.projectCwd, advertisedRoots: catalogRoots(context.skills ?? []), ...(context.env ? { env: context.env } : {}) });
-    const resource = resourceFact(fact, normalized.filePath, { access: "read", outcome: event.status === "completed" ? "success" : "error", roots });
-    if (resource?.evidence.kind === "resource-access") { resource.evidence.model = context.model ?? null; facts.push(resource); }
-  }
+  if (resource) { resource.evidence.model = context.model ?? null; facts.push(resource); }
   return facts;
 }
 
@@ -68,19 +67,23 @@ export default {
             catalogs.set(key, skills);
           }
         }
-        const advertisedRoots = catalogRoots(skills ?? []);
-        if (!publishResourceRoots({ host: "opencode-v2", sessionId: input.sessionID, filesystemId: resourceFilesystemId(), roots: advertisedRoots })) reportOpenCodeUnavailable();
-        const conventionalRoots = discoverResourceRoots({ cwd: location.directory, advertisedRoots }).filter((root) => root.origin === "conventional" && (root.scope === "account" || root.scope === "project"));
-        if (!publishResourceRoots({ host: "opencode-v2", sessionId: input.sessionID, filesystemId: resourceFilesystemId(), origin: "conventional", roots: conventionalRoots.map((root) => root.path) })) reportOpenCodeUnavailable();
-        const facts = extractOpenCodeV2Facts(event, { projectCwd: location.directory, skills: skills ?? [] });
-        await sendOpenCodeFacts(facts, { host: "opencode-v2", sessionId: input.sessionID, cwd: location.directory, advertisedRoots });
+        const advertisements = catalogAdvertisements(skills ?? [], input.sessionID);
+        const roots = discoverResourceRoots({ cwd: location.directory, project: { host: "opencode-v2", boundary: { kind: "infer" } }, advertisements });
+        for (const origin of ["host", "conventional"] as const) {
+          const localRoots = roots.filter((root) => root.origin === origin && root.scope !== "unassigned");
+          if (!publishResourceRoots({ host: "opencode-v2", sessionId: input.sessionID, filesystemId: resourceFilesystemId(), origin,
+            roots: localRoots.map((root) => root.path), rootDescriptors: localRoots })) reportOpenCodeUnavailable();
+        }
+        const facts = extractOpenCodeV2Facts(event, { projectCwd: location.directory, skills: skills ?? [], roots });
+        await sendOpenCodeFacts(facts, { host: "opencode-v2", sessionId: input.sessionID, cwd: location.directory, advertisements });
       } catch { reportOpenCodeUnavailable(); }
     });
   },
 };
 
-function catalogRoots(skills: NonNullable<V2Context["skills"]>): readonly string[] {
-  return [...new Set(skills.flatMap((skill) => skill.path && isAbsolute(skill.path) && basename(skill.path) === "SKILL.md" ? [dirname(skill.path)] : []))];
+function catalogAdvertisements(skills: NonNullable<V2Context["skills"]>, sessionId: string): readonly ResourceAdvertisement[] {
+  return [...new Set(skills.flatMap((skill) => skill.path && isAbsolute(skill.path) ? [basename(skill.path) === "SKILL.md" ? dirname(skill.path) : skill.path] : []))]
+    .map((path) => ({ kind: "package", path, host: "opencode-v2", sessionId }));
 }
 
 async function bounded<T>(request: Promise<T>): Promise<T | null> {

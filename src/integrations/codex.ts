@@ -1,6 +1,6 @@
 import type { CaptureFact } from "../capture.js";
 import { discoverResourceRoots } from "../resource-paths.js";
-import { hookContext, object, resourceFact, skillAtPath } from "./common.js";
+import { hookContext, object, resourceFact, skillAtResource } from "./common.js";
 
 export function parseCodexHook(input: unknown, observedAt = new Date().toISOString(), env: NodeJS.ProcessEnv = process.env): readonly CaptureFact[] {
   const hook = object(input);
@@ -10,14 +10,15 @@ export function parseCodexHook(input: unknown, observedAt = new Date().toISOStri
   if (!context || !toolInput || typeof hook.tool_response !== "string" || typeof toolInput.command !== "string") return [];
   const match = /^cat (?:-- )?(\/[A-Za-z0-9_./-]+\/SKILL\.md)$/u.exec(toolInput.command);
   const facts: CaptureFact[] = [];
-  const skill = match?.[0] === toolInput.command ? skillAtPath(match[1], context.scope.projectCwd) : null;
-  if (skill && context.sessionId !== null) facts.push({ ...context, evidence: { kind: "read-attempt", skill, toolCallId: context.occurrenceId, model: null } });
   const paths = literalReadPaths(toolInput.command);
   if (!paths.length) return facts;
-  const roots = discoverResourceRoots({ cwd: context.scope.projectCwd, env });
+  const roots = discoverResourceRoots({ cwd: context.scope.projectCwd, env, project: { host: "codex", boundary: { kind: "infer" } } });
   for (const path of paths) {
     const resource = resourceFact(context, path, { access: "attempt", outcome: "unknown", roots });
-    if (resource) facts.push(resource);
+    if (!resource) continue;
+    const skill = match?.[0] === toolInput.command && match[1] === path ? skillAtResource(resource.evidence.resource) : null;
+    if (skill && context.sessionId !== null) facts.push({ ...context, evidence: { kind: "read-attempt", skill, toolCallId: context.occurrenceId, model: null } });
+    facts.push(resource);
   }
   return facts;
 }

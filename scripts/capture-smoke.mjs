@@ -9,6 +9,7 @@ const root = await mkdtemp(join(tmpdir(), "hotplate-capture-smoke-"));
 const databasePath = join(root, "capture.sqlite");
 const skillPath = join(root, "skills/smoke/SKILL.md");
 const referencePath = join(root, "skills/smoke/reference.md");
+const outsidePath = join(root, "source/uninstalled/SKILL.md");
 const elapsed = [];
 const env = { PATH: process.env.PATH, HOME: join(root, "home"), XDG_CONFIG_HOME: join(root, "config"),
   XDG_CACHE_HOME: join(root, "cache"), XDG_DATA_HOME: join(root, "data"), XDG_STATE_HOME: join(root, "state"),
@@ -24,7 +25,7 @@ async function capture(id) {
   child.stderr.on("data", chunk => { error += chunk; });
   child.stdin.end(JSON.stringify({
     hook_event_name: "PostToolUse", session_id: "synthetic-capture-session", cwd: root, tool_use_id: `read-${id}`,
-    tool_name: "Read", tool_input: { file_path: id === "reference" ? referencePath : skillPath },
+    tool_name: "Read", tool_input: { file_path: id === "reference" ? referencePath : id === "outside" ? outsidePath : skillPath },
     tool_response: "HOTPLATE_CAPTURE_SMOKE_OUTPUT_CANARY",
   }));
   const timer = setTimeout(() => child.kill("SIGKILL"), 2000);
@@ -38,10 +39,13 @@ async function capture(id) {
 try {
   await mkdir(join(root, "skills/smoke"), { recursive: true });
   for (const path of [skillPath, referencePath]) await writeFile(path, "HOTPLATE_CAPTURE_SMOKE_OUTPUT_CANARY");
+  await mkdir(join(outsidePath, ".."), { recursive: true });
+  await writeFile(outsidePath, "HOTPLATE_CAPTURE_SMOKE_OUTSIDE_CANARY");
   for (let id = 0; id < 20; id++) elapsed.push(await capture(id));
   const burst = await Promise.all(Array.from({ length: 8 }, (_, index) => capture(index + 20)));
   await capture(0);
   await capture("reference");
+  await capture("outside");
   const store = openHotplateStore({ databasePath });
   try {
     const overview = await store.queryOverview({ host: "claude-code" });
@@ -53,6 +57,7 @@ try {
     assert.ok(resources.every(row => row.presence === "present"));
   } finally { await store.close(); }
   assert.equal((await readFile(databasePath)).includes(Buffer.from("HOTPLATE_CAPTURE_SMOKE_OUTPUT_CANARY")), false);
+  assert.equal((await readFile(databasePath)).includes(Buffer.from(outsidePath)), false);
   const percentile = values => [...values].sort((a, b) => a - b)[Math.ceil(values.length * 0.95) - 1];
   const result = { sequentialP95Ms: percentile(elapsed), burstP95Ms: percentile(burst), captures: 29, duplicateRetries: 1, inventoriedFiles: 2, privacyCanaryAbsent: true };
   assert.ok(result.sequentialP95Ms < 250, "Sequential capture exceeded the 250ms target");

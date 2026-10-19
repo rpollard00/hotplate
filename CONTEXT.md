@@ -14,7 +14,16 @@ The coding-agent integration that produced an observation. OpenCode v1 and OpenC
 The reason for an observation: command intent, observed wrapper, read attempt, read result, native skill invocation, catalog snapshot, capture gap, resource access, inventory snapshot, or observer coverage.
 
 **Resource**:
-A file location within a discovered or configured content root. Its identity includes the account source, filesystem namespace, and canonical path. Files do not need an Explorer entry or a skill owner.
+A file location in selected installed or project skill content, including support files without a skill owner. Its identity includes the account source, filesystem namespace, and canonical path.
+
+**Installation authority**:
+The basis for selecting an exact content boundary: an installed collection, a project convention, a host advertisement, or an explicit content declaration.
+
+**Installation alias**:
+A logical installation path that selects an exact physical content subtree. Multiple aliases can name the same resource locations.
+
+**Project boundary**:
+The reported project or nearest repository or worktree boundary that limits a host's project skill discovery.
 
 **Resource access**:
 Evidence that a host tool attempted or completed a read, or that the filesystem reported an open or access. These evidence kinds remain separate. An access does not prove that a model received or followed the contents.
