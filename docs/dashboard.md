@@ -1,52 +1,48 @@
 # Skill dashboard
 
-The dashboard shows recorded skill activity, model read counts, and paths within sessions. It does not score skill quality.
+The dashboard shows recorded skill evidence and session paths. It does not score skill quality.
 
-- Overview shows per-skill trends, ranked skills, read patterns, and an exploration selection.
-- Agents compares skill use across Pi, Claude Code, Codex, OpenCode, and untagged records.
-- Models shows read counts by skill and model. Zero means no matching recorded reads, not a missed opportunity.
-- Session paths shows recorded activity within each run, including requests, wrappers, read groups, and gaps.
+- Metrics has one trend and one skill comparison. The same controls reshape both views.
+- Session paths shows requests, wrappers, read groups, invocations, attempts, and gaps within recorded runs.
+- Resources shows file inventory, access evidence, attribution, and observation coverage.
 
-The Skill trends chart starts with five skills in one stacked area chart. Each colored area shows successful reads in its UTC interval. Repeated successful reads count separately. The stack height is the total for the displayed skills. Intervals with no recorded successful reads have zero area.
+## Metrics
 
-Select a skill in the ranking or chart legend to inspect its paths. A newly selected skill outside the chart adds an area without replacing another skill. The values beside each name follow the date under the pointer or keyboard cursor.
+Select a Measure to show successful reads, skill uses, read failures, native invocations, invocation failures, read attempts, requests, or wrappers. Native invocations counts successful invocations. Read attempts remain unconfirmed.
 
-Open Skills to search for exact skill names. Select or clear a checkbox to add or remove a skill in the same list. These actions preserve the exploration skill and dates. Custom displayed names survive refreshes and filter changes without substitution, even when a skill has no reads in the filtered report. Each skill keeps its color while the page remains open.
+Split by selects Skill / total ranking, Agent, Model, or Agent + model. The trend stacks counts for the selected measure. The comparison shows a total ranking or a matrix. Matrix columns contain observed cohorts, including Unknown model and No model attribution where applicable. It never constructs all possible agent/model combinations.
 
-Drag across the chart to select dates. One band follows the pointer continuously. New selections use complete UTC hours in hourly views, or complete UTC days in longer views. Drag the band to move the interval without changing its duration, including partial custom periods. Drag either handle to resize it. Press Escape during a drag to cancel it. The ranking, model counts, and matching paths update on release.
+For Skill uses, Display can show Count or Session share in the comparison. The trend continues to show counts. Session share divides sessions with the skill use by sessions with any skill use in that cohort. A model cohort has its own denominator. Sessions that span models can contribute to several columns. A missing denominator displays a dash, not zero.
 
-With the chart focused, Left and Right inspect intervals. Enter selects one, and Shift+Enter extends the selection. With a handle focused, Left and Right change that edge by one hour in hourly views, or one day in longer views. With the band focused, these keys move the whole interval. Shift multiplies the step by seven. The activity data table shows the displayed skills, date-selection buttons, and exact counts, with 24 intervals per page. Clear either selection chip to widen the view.
+A skill use is a successful read, a successful native skill invocation, or a read attempt. Failed reads and failed invocations are excluded. Requests and wrappers are excluded. Hosts capture different evidence: Codex read attempts have no known outcome.
 
-The exploration panel lists matching paths and model counts for successful reads that match the selected skill and UTC dates. Select a model to see paths where that model made a matching read. Open a path to inspect all its recorded steps, then return to the selection. Full-report model details opens the Models matrix for the current report filters, not the selected interval. Skill names combine across source variants in the main views. Expand Files and requests in Models to inspect the original paths and machines.
+Skill names retain their exact recorded form, including plugin prefixes. This changes the former Agents view, which removed prefixes such as `superpowers:`. Files with the same exact name remain grouped. Select a count to inspect matching evidence and session paths. Expand Files and requests in the skill detail to inspect original paths and machines. The catalog follows machine, project, and date filters only.
 
-An interval compares with the immediately preceding interval of equal duration. With only a skill selected, the comparison uses the latest available elapsed period of up to seven days. An equal preceding period stays inside the loaded scope. Comparison totals show recorded paths with successful reads and raw read counts. A skill share is the number of read-bearing paths containing that skill divided by all read-bearing paths in the period. Repeated reads count once in the share and every time in the raw read count. If the previous interval is outside the current report scope, Hotplate does not treat it as zero.
+The unit for session share is one host session on one machine and account source. Records without a session use their segment identity. Claude Code subagents share their parent session. OpenCode subagents use child sessions.
 
-## Agents
+The default trend shows successful reads for five skills. Open Skills to search exact names and add or remove layers. Custom names survive refreshes and filter changes without substitution. Each name keeps its color while the page remains open. Agent, Model, and Agent + model show all observed series. Exact counts follow in View activity data, with 24 intervals per page. Undated evidence stays in the comparison and is omitted from the trend.
 
-Hosts record different evidence. Pi, Claude Code, and OpenCode record reads of `SKILL.md` files. Claude Code and OpenCode also record native skill invocations. Codex records read attempts without an outcome. Successful reads alone cannot compare these hosts, so the Agents tab uses skill use.
+## Selection and paths
 
-A skill use is a successful read, a successful native skill invocation, or a read attempt. Read attempts show as unconfirmed. Failed reads and failed invocations are failures, not uses. Requests and wrappers are not uses. Skill use does not change the successful-read counts in other tabs.
+Select a skill in the successful-read ranking or legend to explore its successful reads. A skill outside the default five adds a trend layer. Drag across the chart to select UTC dates. The comparison follows these dates. Changing Measure, Split by, or Display preserves the interval and does not fetch another report.
 
-The unit of comparison is the agent session: one host session in one machine and account source. A run means different things in different hosts, so the Agents tab does not compare runs. Records without a host show as Unknown host.
+The Successful-read exploration panel remains specific to successful reads, including when the trend shows another measure. Its model counts, period comparison, and matching paths use successful reads in the selected interval. Skill details opens the shared detail region in Metrics. Model and path drilldowns preserve the selected read, model, and dates. The local path Model filter also supports native invocations and read attempts. It matches the same skill and measure as the selected count.
 
-Some limits apply to these comparisons:
+Drag the selection band to move it without changing its duration. Drag either handle to resize it. Press Escape during a drag to cancel it. With the chart focused, Left and Right inspect intervals. Enter selects one. Shift+Enter extends the selection. With a handle focused, Left and Right change one edge. With the band focused, these keys move the interval. Shift multiplies the step by seven. Hourly views use hour steps. Longer views use day steps.
 
-- Claude Code subagents share the session of their parent. OpenCode subagents run in child sessions, so each OpenCode subagent counts as one more agent session.
-- Skills are grouped by name. A plugin prefix, for example `superpowers:`, is not part of the name.
-- Only reads have model attribution. A model filter removes native invocations and read attempts, so Codex and most Claude Code uses disappear from the Agents tab.
+An interval compares with the immediately preceding interval of equal duration. With only a skill selected, the comparison uses the latest period of up to seven days. Comparison shares count read-bearing paths that contain each skill. Repeated reads count once in the share and every time in the read count. A previous interval outside the loaded scope remains unavailable.
 
-- The summary shows the skill uses, sessions with skill use, distinct skills, failures, and last use for each host.
-- The chart stacks skill uses per UTC interval by host. Move the pointer over the chart, or focus it and press Left or Right, to read the values for one interval. The activity data table gives exact counts.
-- The matrix shows skills by host. Agent share is the number of sessions of a host that used the skill, divided by the sessions of that host with skill use. Select the Skill uses measure to show raw counts. An asterisk marks a cell that has only read attempts.
-
-Select a matrix cell to open the session paths of that host that contain the skill. Select Show only this agent to apply the Agent host filter to all tabs. Select Show all agents to remove it.
-
-Each host keeps one color. Labels and the data table repeat each value, so color is not the only identification.
+Read patterns is a collapsed disclosure. It shows same-group and consecutive successful-read relationships, with their original path evidence. Capture gaps represent lost records. Filtered gaps represent hidden records. Neither gap creates a relationship across the missing evidence.
 
 ## Filters
 
-The Filters panel changes the report scope. Exploration selects paths within that scope without altering the overview totals or the Models matrix. Last 7 days is the default. Refresh recalculates relative periods but keeps custom UTC dates fixed. Reset restores Last 7 days and the top five trends. Select All time to recover older records. The filter summary appears only for applied restrictions. Windows up to seven days use UTC hours. Longer windows use daily or adaptive bins without truncation.
-Skill catalog is separate from About this data, a disclosure available on every tab. The disclosure defines counts, grouping, model attribution, paths, gaps, and capture coverage.
+Agent, Model, and Period remain visible in every workspace. Select All agents or All models to broaden the scope. Models are atomic provider/id pairs. Unknown model selects model-bearing evidence without attribution. Requests and wrappers have no model dimension and are excluded by an explicit model selection.
+
+The slicers allow observed agent/model combinations in the current machine, project, source, and date context. Incompatible options are disabled. A selection that becomes unavailable stays visible until you clear it or broaden the scope. Changing an agent or model preserves the project.
+
+More filters contains machine, project, command source, and custom UTC dates. Source applies to requests only. The summary shows applied restrictions. Last 7 days is the default. Refresh recalculates relative periods and keeps custom UTC dates fixed. Reset restores Last 7 days, successful reads, the total ranking, and the top five trends. Select All time to recover older records.
+
+Windows up to seven days use UTC hours. Longer windows use daily or adaptive bins without truncation. About this data remains available from every workspace.
 
 ## Local preview
 
@@ -101,6 +97,6 @@ A larger controlled response checks bounded rendering. It is not a production st
 - A gap interrupts the path. It represents filtered or lost records.
 
 Hotplate does not capture task outcomes, expected skill choices, causal parent-skill links, or agent identities. Miss rates and usefulness scores require those signals.
-Model comparisons use read results only. Unknown models remain separate from named models.
+Model comparisons use attributed read results, native invocations, and read attempts. Unknown models remain separate from records without model attribution.
 
 The dashboard is read-only. Its filters are not access controls. The server still materializes the full filtered dataset before browser pagination.

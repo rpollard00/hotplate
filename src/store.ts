@@ -207,7 +207,12 @@ class SqliteHotplateStore implements HotplateStore {
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
     const strings = (sql: string, values: readonly SqlValue[] = params): string[] => this.#db.prepare(sql).all(...values).map(row => requireString(row.value, "filter option"));
     const time = this.#db.prepare(`SELECT MIN(observed_at) AS first, MAX(observed_at) AS last FROM observations ${where}`).get(...params);
+    const { host: _host, modelSelection: _selection, modelProvider: _provider, modelId: _modelId, ...facetFilter } = filter;
+    const facets = observationWhere(facetFilter, ["AND evidence_kind IN ('read-result', 'read-attempt', 'skill-invocation')"]);
+    const agentModelPairs = this.#db.prepare(`SELECT DISTINCT host, model_provider, model_id FROM observations ${facets.sql} ORDER BY host, model_provider, model_id`).all(...facets.params)
+      .map(row => ({ host: parseHostId(requireString(row.host, "facet host")), model: modelFromColumns(row.model_provider, row.model_id) }));
     return {
+      agentModelPairs,
       hosts: strings("SELECT DISTINCT host AS value FROM observations UNION SELECT DISTINCT host AS value FROM catalog_skills ORDER BY value", []).map(parseHostId),
       machines: strings("SELECT machine_id AS value FROM observations UNION SELECT machine_id AS value FROM catalog_skills ORDER BY value", []).map(parseMachineId),
       projects: strings(`SELECT project_cwd AS value FROM observations ${where} UNION SELECT project_cwd AS value FROM catalog_skills ${where} ORDER BY value`, [...params, ...params]),
@@ -1035,14 +1040,22 @@ function observationWhere(filter: DashboardFilter, suffixes: readonly string[] =
     clauses.push("source = ?");
     params.push(filter.source);
   }
-  if (filter.modelProvider !== undefined) {
+  if (filter.modelSelection !== undefined) {
+    clauses.push("evidence_kind IN ('read-result', 'read-attempt', 'skill-invocation')");
+    if (filter.modelSelection.kind === "unknown") clauses.push("model_provider IS NULL AND model_id IS NULL");
+    else {
+      clauses.push("model_provider = ? AND model_id = ?");
+      params.push(filter.modelSelection.model.provider, filter.modelSelection.model.id);
+    }
+  }
+  if (filter.modelSelection === undefined && filter.modelProvider !== undefined) {
     if (filter.modelProvider === null) clauses.push("model_provider IS NULL");
     else {
       clauses.push("model_provider = ?");
       params.push(filter.modelProvider);
     }
   }
-  if (filter.modelId !== undefined) {
+  if (filter.modelSelection === undefined && filter.modelId !== undefined) {
     if (filter.modelId === null) clauses.push("model_id IS NULL");
     else {
       clauses.push("model_id = ?");
@@ -1237,6 +1250,7 @@ function chainEvidenceIncluded(evidence: ChainObservation["evidence"], filter: C
   }
 
   if (evidence.kind === "command-intent") {
+    if (filter.modelSelection !== undefined) return false;
     if (filter.includeCommandIntent === false) return false;
     if (filter.modelProvider !== undefined && filter.modelProvider !== null) return false;
     if (filter.modelId !== undefined && filter.modelId !== null) return false;
@@ -1244,6 +1258,7 @@ function chainEvidenceIncluded(evidence: ChainObservation["evidence"], filter: C
   }
 
   if (evidence.kind === "wrapper-observed") {
+    if (filter.modelSelection !== undefined) return false;
     if (filter.includeWrapperObserved === false) return false;
     return filter.source === undefined
       && (filter.modelProvider === undefined || filter.modelProvider === null)
@@ -1252,6 +1267,10 @@ function chainEvidenceIncluded(evidence: ChainObservation["evidence"], filter: C
 
   if (evidence.kind === "read-attempt" ? filter.includeReadAttempt === false : evidence.kind === "skill-invocation" ? filter.includeSkillInvocation === false : filter.includeReadResult === false) return false;
   if (filter.source !== undefined) return false;
+  if (filter.modelSelection !== undefined) {
+    return filter.modelSelection.kind === "unknown" ? evidence.model === null
+      : evidence.model?.provider === filter.modelSelection.model.provider && evidence.model.id === filter.modelSelection.model.id;
+  }
   if (filter.modelProvider !== undefined) {
     if (filter.modelProvider === null && evidence.model !== null) return false;
     if (filter.modelProvider !== null && evidence.model?.provider !== filter.modelProvider) return false;

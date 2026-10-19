@@ -150,7 +150,7 @@ export function queryResources(db: DatabaseSync, filter: DashboardFilter): Resou
     row.presence = present ? "present" : absent && !unknown ? "absent" : "unknown";
     row.observation = row.attributedAccessCount > 0 ? "observed" : "unknown";
     if (row.observation === "observed" || row.presence !== "present" || row.firstInventoriedAt === null
-      || row.unattributedAccessCount > 0 || filter.modelId !== undefined || filter.modelProvider !== undefined) continue;
+      || row.unattributedAccessCount > 0 || filter.modelSelection !== undefined || filter.modelId !== undefined || filter.modelProvider !== undefined) continue;
     const availableFrom = Date.parse(row.firstInventoriedAt);
     const requestedFrom = Math.max(availableFrom, filter.fromObservedAt === undefined ? -Infinity : Date.parse(filter.fromObservedAt));
     const physicalRoots = row.rootPaths.filter(rootPath => {
@@ -245,13 +245,16 @@ function scopeMatches(observation: ResourceObservation, filter: DashboardFilter)
 function accessScope(observation: ResourceObservation, filter: DashboardFilter): "exact" | "ambiguous" | "excluded" {
   const evidence = observation.evidence;
   if (evidence.kind !== "resource-access") return "excluded";
+  if (filter.modelSelection?.kind === "unknown" && evidence.model !== null) return "excluded";
+  const provider = filter.modelSelection?.kind === "known" ? filter.modelSelection.model.provider : filter.modelSelection?.kind === "unknown" ? null : filter.modelProvider;
+  const modelId = filter.modelSelection?.kind === "known" ? filter.modelSelection.model.id : filter.modelSelection?.kind === "unknown" ? null : filter.modelId;
   const comparisons: readonly [string | null | undefined, string | null, boolean][] = [
     [filter.host, observation.host ?? "unknown", observation.host === undefined || observation.host === "unknown"],
     [filter.projectCwd, observation.scope.projectCwd, observation.scope.projectCwd === "[unknown project]"],
     [filter.sessionId, observation.scope.sessionId, observation.scope.sessionId === null],
     [filter.runId, observation.scope.runId, observation.scope.runId === null],
-    [filter.modelProvider, evidence.model?.provider ?? null, evidence.model === null],
-    [filter.modelId, evidence.model?.id ?? null, evidence.model === null],
+    [provider, evidence.model?.provider ?? null, evidence.model === null],
+    [modelId, evidence.model?.id ?? null, evidence.model === null],
   ];
   let ambiguous = false;
   for (const [requested, actual, unknown] of comparisons) {

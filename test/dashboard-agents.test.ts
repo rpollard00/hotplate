@@ -155,12 +155,13 @@ test("agent sessions stay whole when the store splits native observations into s
   }
 });
 
-test("agent skill rows group plugin-prefixed native invocations with plain skill names", () => {
+test("agent skill rows retain exact plugin-prefixed native invocation names", () => {
   const result = report([
     run([step([read("brainstorming")])], { host: "pi" }),
     run([step([invoke("superpowers:brainstorming")])], { host: "claude-code", runId: null }),
   ]);
   assert.deepEqual(result.agents.skills.map((row) => [row.name, row.cells.map((cell) => [cell.host, cell.sessions])]), [
-    ["brainstorming", [["pi", 1], ["claude-code", 1]]],
+    ["brainstorming", [["pi", 1]]],
+    ["superpowers:brainstorming", [["claude-code", 1]]],
   ]);
 });

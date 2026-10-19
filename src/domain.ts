@@ -94,6 +94,12 @@ export type CaptureWriteSummary = {
   dropped: number;
 };
 
+export type ModelSelection =
+  | Readonly<{ kind: "known"; model: NonNullable<ModelRef> }>
+  | Readonly<{ kind: "unknown" }>;
+
+export type AgentModelPair = Readonly<{ host: HostId; model: ModelRef }>;
+
 export type DashboardFilter = {
   host?: HostId;
   machineId?: MachineId;
@@ -101,6 +107,7 @@ export type DashboardFilter = {
   sessionId?: string | null;
   runId?: string | null;
   source?: InputSource;
+  modelSelection?: ModelSelection;
   modelProvider?: string | null;
   modelId?: string | null;
   fromObservedAt?: string;
@@ -235,6 +242,7 @@ export type DashboardFilterOptions = {
   hosts: readonly HostId[];
   machines: readonly MachineId[];
   projects: readonly string[];
+  agentModelPairs: readonly AgentModelPair[];
   modelProviders: readonly string[];
   modelIds: readonly string[];
   timeRange: { firstObservedAt: string | null; lastObservedAt: string | null };

@@ -1,3 +1,5 @@
+import { projectMetrics } from "./metrics.js";
+
 export const dashboardHtml = `<!doctype html>
 <html lang="en">
 <head>
@@ -14,24 +16,19 @@ export const dashboardHtml = `<!doctype html>
   </header>
   <div class="shell">
     <nav class="workspace-nav" aria-label="Workspaces">
-      <button type="button" data-workspace="overview" aria-current="page">Overview</button>
-      <button type="button" data-workspace="agents">Agents</button>
-      <button type="button" data-workspace="models">Models</button>
+      <button type="button" data-workspace="metrics" aria-current="page">Metrics</button>
       <button type="button" data-workspace="paths">Session paths</button>
       <button type="button" data-workspace="resources">Resources</button>
     </nav>
     <div class="scope-bar">
       <p id="scope-summary" hidden></p>
-      <div class="scope-actions"><label class="inline-label">Period<select id="time-preset"><option value="all">All time</option><option value="7" selected>Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="custom">Custom dates</option></select></label><button type="button" id="toggle-filters" class="quiet" aria-expanded="false" aria-controls="scope-panel">Filters</button><button type="button" id="reset-filters" class="quiet">Reset</button></div>
+      <div class="scope-actions"><label class="inline-label">Agent<select id="host-filter" name="host" form="filter-form"><option value="">All agents</option></select></label><label class="inline-label">Model<select id="model-filter" name="model" form="filter-form"><option value="">All models</option></select></label><label class="inline-label">Period<select id="time-preset"><option value="all">All time</option><option value="7" selected>Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="custom">Custom dates</option></select></label><button type="button" id="toggle-filters" class="quiet" aria-expanded="false" aria-controls="scope-panel">More filters</button><button type="button" id="reset-filters" class="quiet">Reset</button></div>
     </div>
     <section id="scope-panel" class="panel" hidden aria-label="Filters">
       <form id="filter-form" class="filter-grid">
-        <label>Agent host<select id="host-filter" name="host"><option value="">All agent hosts</option></select></label>
         <label>Machine<select id="machine-filter" name="machineId"><option value="">All machines</option></select></label>
         <label>Project<select id="project-filter" name="projectCwd"><option value="">All projects</option></select></label>
         <label>Command source <span>Requests only</span><select id="source-filter" name="source"><option value="">All command sources</option><option value="interactive">Interactive</option><option value="rpc">RPC</option><option value="extension">Extension</option></select></label>
-        <label>Model provider <span>Reads only</span><select id="model-provider-filter" name="modelProvider"><option value="">All providers</option></select></label>
-        <label>Model <span>Reads only</span><select id="model-id-filter" name="modelId"><option value="">All models</option></select></label>
         <label>From (UTC)<input id="from-filter" name="fromObservedAt" type="datetime-local" step="0.001"></label>
         <label>To (UTC)<input id="to-filter" name="toObservedAt" type="datetime-local" step="0.001"></label>
         <div class="filter-actions"><button type="submit">Apply filters</button></div>
@@ -41,30 +38,26 @@ export const dashboardHtml = `<!doctype html>
     <section id="message-panel" class="message panel" role="status" hidden></section>
     <main id="workspace" tabindex="-1" aria-busy="true">
       <div id="dashboard-content" hidden>
-        <section id="overview-workspace" aria-labelledby="overview-heading">
-          <div class="page-heading"><div><h1 id="overview-heading">Skill activity</h1></div></div>
+        <section id="metrics-workspace" aria-labelledby="metrics-heading">
+          <div class="page-heading"><div><h1 id="metrics-heading">Skill metrics</h1></div></div>
           <div id="overview-cards" class="metrics-grid" aria-label="Filtered totals"></div>
           <div id="evidence-context" class="evidence-context"></div>
+          <div class="metric-controls"><label>Measure<select id="metric-measure"><option value="successfulReads">Successful reads</option><option value="uses">Skill uses</option><option value="failedReads">Read failures</option><option value="invocations">Native invocations</option><option value="invocationFailures">Invocation failures</option><option value="readAttempts">Read attempts</option><option value="requests">Requests</option><option value="wrappers">Wrappers</option></select></label><label>Split by<select id="metric-split"><option value="skill">Skill / total ranking</option><option value="agent">Agent</option><option value="model">Model</option><option value="agent-model">Agent + model</option></select></label></div><p id="metric-explanation" class="footnote"></p>
           <div class="overview-grid">
-            <section class="panel activity-panel" aria-labelledby="activity-heading"><div class="section-heading"><div><h2 id="activity-heading">Skill trends</h2></div><div class="activity-actions"><span class="small muted">UTC</span><button id="view-explorer" class="quiet" type="button" hidden>View selection</button></div></div><div id="activity-chart"></div></section>
-            <section class="panel" aria-labelledby="skills-heading"><div class="section-heading"><div><h2 id="skills-heading">Most-read skills</h2></div><span class="small muted">Successful reads</span></div><label class="search-label"><span class="sr-only">Find a skill</span><input id="skill-search" type="search" placeholder="Find a skill…"></label><div id="skill-table"></div></section>
+            <section class="panel activity-panel" aria-labelledby="activity-heading"><div class="section-heading"><div><h2 id="activity-heading">Over time</h2></div><div class="activity-actions"><span class="small muted">UTC</span><button id="view-explorer" class="quiet" type="button" hidden>View selection</button></div></div><div id="activity-chart"></div></section>
+            <section class="panel" aria-labelledby="skills-heading"><div class="section-heading"><h2 id="skills-heading">Compare skills</h2><label class="inline-label">Display<select id="metric-display"><option value="count">Count</option><option value="session-share">Session share</option></select></label></div><label class="search-label"><span class="sr-only">Find a skill</span><input id="skill-search" type="search" placeholder="Find a skill…"></label><div id="skill-table" class="table-wrap" tabindex="0" role="region" aria-label="Skill comparison"></div><p id="comparison-scroll-hint" class="matrix-scroll-hint footnote" hidden>Scroll horizontally to compare all columns.</p><div id="comparison-pagination"></div><p id="comparison-note" class="footnote"></p></section>
           </div>
           <section id="explorer-panel" class="panel explorer-panel" aria-labelledby="explorer-heading" tabindex="-1" hidden>
-            <div class="section-heading"><div><p class="small muted">Within the current filters</p><h2 id="explorer-heading">Explore selection</h2></div><div class="explorer-actions"><button id="explore-models" class="quiet" type="button" hidden>Full-report model details</button><button id="clear-explorer" class="quiet" type="button">Clear selection</button></div></div>
+            <div class="section-heading"><div><p class="small muted">Within the current filters</p><h2 id="explorer-heading">Successful-read exploration</h2></div><div class="explorer-actions"><button id="explore-models" class="quiet" type="button" hidden>Skill details</button><button id="clear-explorer" class="quiet" type="button">Clear selection</button></div></div>
             <div id="explore-chips" class="explore-chips"></div>
             <p id="explore-rule" class="small muted"></p>
             <div id="explore-totals" class="explore-totals"></div>
             <div class="explore-layout"><section id="explore-comparison" aria-label="Period comparison"></section><div class="explore-side"><section aria-labelledby="explore-path-heading"><div class="section-heading"><h3 id="explore-path-heading">Matching paths</h3><button id="explore-all-paths" class="link" type="button">View all</button></div><div id="explore-paths"></div></section><section aria-labelledby="explore-model-heading"><h3 id="explore-model-heading">Models in selection</h3><p class="footnote">Successful reads matching the selected skill and UTC dates.</p><div id="explore-model-list"></div></section></div></div>
             <p id="explore-announcement" class="sr-only" role="status" aria-live="polite"></p>
           </section>
-          <section class="panel" aria-labelledby="relationships-heading"><div class="section-heading"><div><h2 id="relationships-heading">Read patterns</h2></div><button type="button" id="browse-paths" class="quiet">View session paths</button></div><div id="relationship-view"></div></section>
+          <section id="skill-detail" class="panel" aria-live="polite" hidden></section>
+          <details class="panel" id="read-patterns"><summary id="relationships-heading">Read patterns</summary><div class="section-heading"><button type="button" id="browse-paths" class="quiet">View session paths</button></div><div id="relationship-view"></div></details>
           <details class="panel" id="catalog-context"><summary>Skill catalog</summary><p class="footnote">The catalog follows machine, project, and date filters only.</p><label class="search-label">Find a catalog skill<input id="catalog-search" type="search" placeholder="Search names…"></label><div id="catalog-list"></div></details>
-        </section>
-        <section id="agents-workspace" aria-labelledby="agents-heading" hidden>
-          <div class="page-heading"><div><h1 id="agents-heading">Skill use by agent</h1></div></div>
-          <section class="panel" aria-labelledby="agent-summary-heading"><div class="section-heading"><div><h2 id="agent-summary-heading">Agents</h2></div><div id="agent-summary-actions"></div></div><div id="agent-summary"></div></section>
-          <section id="agent-activity-panel" class="panel" aria-labelledby="agent-activity-heading"><div class="section-heading"><div><h2 id="agent-activity-heading">Skill use over time</h2></div><span class="small muted">UTC</span></div><div id="agent-activity"></div></section>
-          <section id="agent-skills-panel" class="panel" aria-labelledby="agent-skills-heading"><div class="section-heading"><div><h2 id="agent-skills-heading">Skills by agent</h2></div><label class="inline-label">Measure<select id="agent-measure"><option value="share">Agent share</option><option value="uses">Skill uses</option></select></label></div><label class="search-label">Find a skill<input id="agent-search" type="search" placeholder="Search skill names…"></label><div id="agent-matrix" class="table-wrap" tabindex="0" role="region" aria-label="Skills by agent table"></div><p class="matrix-scroll-hint footnote">Scroll horizontally to compare agents.</p><div id="agent-pagination"></div><p id="agent-unconfirmed-note" class="footnote" hidden>* Read attempts only. The outcome is unknown.</p><p class="footnote">Agent share: the sessions of an agent that used the skill, divided by the sessions of that agent with skill use. Skills are grouped by name. A plugin prefix, for example <code>superpowers:</code>, is not part of the name.</p></section>
         </section>
         <section id="resources-workspace" aria-labelledby="resources-heading" hidden>
           <div class="page-heading"><div><h1 id="resources-heading">Resources</h1><p id="resource-summary"></p></div></div>
@@ -80,11 +73,6 @@ export const dashboardHtml = `<!doctype html>
             <div id="resource-pagination"></div>
             <p id="resource-evidence-note" class="footnote">Reads, failures, and attempts come from agent tools. Opens and accesses come from filesystem observation.</p>
           </section>
-        </section>
-        <section id="models-workspace" aria-labelledby="models-heading" hidden>
-          <div class="page-heading"><div><h1 id="models-heading">Skills by model</h1></div></div>
-          <section class="panel"><div class="section-heading"><label class="search-label">Find a skill<input id="model-search" type="search" placeholder="Search skill names…"></label><label class="inline-label">Measure<select id="model-measure"><option value="successfulReads">Successful reads</option><option value="failedReads">Read failures</option></select></label></div><div id="model-matrix" class="table-wrap" tabindex="0" role="region" aria-label="Skill by model counts"></div><p class="matrix-scroll-hint footnote">Scroll horizontally to compare models.</p><div id="model-pagination"></div><p class="footnote">Skills are grouped by name.</p></section>
-          <section id="skill-detail" class="panel" aria-live="polite"></section>
         </section>
         <section id="paths-workspace" aria-labelledby="paths-heading" hidden>
           <div class="page-heading"><div><h1 id="paths-heading">Session paths</h1><p>Recorded activity by session and available run.</p></div></div>
@@ -156,9 +144,14 @@ p { color: var(--muted); }
 .workspace-nav { display: flex; gap: 26px; padding-top: 8px; border-bottom: 1px solid var(--line); }
 .workspace-nav button { padding: 14px 1px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--muted); font-size: 13px; }
 .workspace-nav button[aria-current] { border-bottom-color: var(--teal); color: var(--ink); }
-.scope-bar { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 15px 0; font-size: 12px; }
-.scope-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; margin-left: auto; }
+.scope-bar { flex-wrap: wrap; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 15px 0; font-size: 12px; }
+.scope-actions { flex-wrap: wrap; max-width: 100%; display: flex; align-items: center; gap: 8px; min-width: 0; margin-left: auto; }
 .inline-label { display: flex; align-items: center; gap: 8px; }
+.scope-actions label { min-width: 0; }
+.scope-actions select { max-width: 230px; min-width: 0; }
+.metric-controls { display: flex; flex-wrap: wrap; gap: 18px; margin: 0 0 8px; }
+.metric-controls label { display: flex; align-items: center; gap: 8px; }
+#metric-explanation { margin: 0 0 18px; }
 .scope-actions button, .scope-actions select { padding: 5px 9px; font-size: 12px; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 22px; min-width: 0; margin-bottom: 18px; }
 .filter-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 14px; align-items: end; }
@@ -177,6 +170,8 @@ p { color: var(--muted); }
 .metric-card:last-child .metric-value { color: var(--accent); }
 .evidence-context { display: flex; flex-wrap: wrap; gap: 8px 24px; font-size: 12px; padding: 12px 2px 22px; color: var(--muted); }
 .overview-grid { display: grid; grid-template-columns: minmax(0,1.55fr) minmax(330px,1fr); gap: 18px; }
+.overview-grid.matrix-layout { grid-template-columns: minmax(0,1fr); }
+.matrix th { overflow-wrap: anywhere; }
 .activity-actions { display: flex; align-items: center; gap: 12px; }
 .activity-actions button { font-size: 11px; padding: 5px 8px; }
 .trend-layout { display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 0 10px; margin-top: 14px; }
@@ -305,23 +300,6 @@ th { font-size: 11px; color: var(--muted); font-weight: 600; }
 .matrix td button { width: 100%; min-height: 37px; border: 0; color: #284c43; font-weight: 600; }
 .matrix .heat-0 { background: #f5f6f2; color: #737b72; font-weight: 400; }
 .matrix .heat-1 { background: #e5eee6; }.matrix .heat-2 { background: #cadfce; }.matrix .heat-3 { background: #99c2ac; }.matrix .heat-4 { background: #477f6b; color: white; }
-.model-provider { display: block; font-weight: 400; font-size: 10px; }
-.agent-list { list-style: none; margin: 0; padding: 0; }
-.agent-row { display: grid; grid-template-columns: minmax(120px,170px) minmax(160px,1fr) auto minmax(150px,auto); grid-template-areas: "name uses facts action"; align-items: center; gap: 8px 24px; padding: 14px 0; border-top: 1px solid var(--line); font-size: 12px; }
-.agent-row:first-child { border-top: 0; padding-top: 0; }
-.agent-row:last-child { padding-bottom: 0; }
-.agent-name { grid-area: name; display: flex; align-items: center; gap: 9px; min-width: 0; font-size: 13px; overflow-wrap: anywhere; }
-.agent-swatch { display: inline-block; width: 10px; height: 10px; flex-shrink: 0; border-radius: 2px; background: var(--host-color); }
-.agent-uses { grid-area: uses; min-width: 0; }
-.agent-total { display: flex; align-items: baseline; gap: 6px; color: var(--ink); }
-.agent-total strong { font-size: 15px; font-variant-numeric: tabular-nums; }
-.agent-uses .rank-track { margin: 6px 0; }
-.agent-uses .rank-fill { background: var(--host-color); }
-.agent-facts { grid-area: facts; display: grid; grid-template-columns: 7.5em 6.5em 11em; gap: 4px 16px; font-variant-numeric: tabular-nums; }
-.agent-row > button { grid-area: action; justify-self: end; padding: 5px 9px; font-size: 11px; }
-.agent-svg .trend-area { stroke-width: 2; }
-.trend-labels div.trend-label:hover { background: transparent; }
-.matrix th .agent-swatch { margin-right: 6px; }
 .matrix th small { display: block; font-size: 10px; font-weight: 400; }
 .matrix td > span { display: block; min-height: 37px; line-height: 37px; border-radius: 6px; }
 .detail-counts { display: flex; flex-wrap: wrap; gap: 12px 24px; padding: 15px 0; font-size: 12px; }
@@ -372,15 +350,11 @@ dt { color: var(--muted); }dd { margin: 0; overflow-wrap: anywhere; }
 @media (max-width: 760px) {
   .explore-layout { grid-template-columns: 1fr; gap: 20px; }
   .compare-row { grid-template-columns: minmax(0,1fr) 68px 68px; }
-  .shell { width: calc(100% - 28px); }.app-header { padding: 12px 14px; }.identity { gap: 9px; }.identity-note { display: none; }.header-actions { gap: 8px; }.preview { font-size: 9px; }.workspace-nav { gap: 24px; }.scope-bar { align-items: start; flex-direction: column; gap: 10px; }.scope-actions { width: 100%; }.scope-actions .inline-label { margin-right: auto; }.page-heading { align-items: start; gap: 12px; }.page-heading p { font-size: 12px; }.panel { padding: 17px; }.metrics-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }.metric-card { padding: 17px; }.metric-card:nth-child(2) { border-right: 0; }.metric-card:nth-child(-n+2) { border-bottom: 1px solid var(--line); }.metric-value { font-size: 31px; }.overview-grid, .relationship-grid, .path-layout { grid-template-columns: 1fr; }.filter-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }.trend-plot { height: 200px; }.section-heading { align-items: start; flex-wrap: wrap; }.section-heading > button { font-size: 11px; }.path-toolbar { gap: 12px; }.path-toolbar .search-label { max-width: none; flex: 1; min-width: 140px; }.path-toolbar .inline-label { max-width: 100%; }.path-toolbar select { max-width: 160px; }.route-master { margin-bottom: 0; }.route-detail { min-height: 0; }.step-heading { flex-wrap: wrap; gap: 4px; }.relationship-flow { gap: 6px; }.skill-node { font-size: 11px; }
+  .shell { width: calc(100% - 28px); }.app-header { padding: 12px 14px; }.identity { gap: 9px; }.identity-note { display: none; }.header-actions { gap: 8px; }.preview { font-size: 9px; }.workspace-nav { gap: 24px; }.scope-bar { align-items: start; flex-direction: column; gap: 10px; }.scope-actions { width: 100%; }.scope-actions .inline-label { flex: 1 1 140px; flex-direction: column; align-items: stretch; gap: 4px; }.scope-actions select { width: 100%; max-width: 100%; min-height: 40px; }.scope-actions button { min-height: 40px; }.metric-controls label { flex: 1 1 140px; flex-direction: column; align-items: stretch; gap: 4px; }.metric-controls select { width: 100%; }.scope-actions { margin-left: 0; }.page-heading { align-items: start; gap: 12px; }.page-heading p { font-size: 12px; }.panel { padding: 17px; }.metrics-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }.metric-card { padding: 17px; }.metric-card:nth-child(2) { border-right: 0; }.metric-card:nth-child(-n+2) { border-bottom: 1px solid var(--line); }.metric-value { font-size: 31px; }.overview-grid, .relationship-grid, .path-layout { grid-template-columns: 1fr; }.filter-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }.trend-plot { height: 200px; }.section-heading { align-items: start; flex-wrap: wrap; }.section-heading > button { font-size: 11px; }.path-toolbar { gap: 12px; }.path-toolbar .search-label { max-width: none; flex: 1; min-width: 140px; }.path-toolbar .inline-label { max-width: 100%; }.path-toolbar select { max-width: 160px; }.route-master { margin-bottom: 0; }.route-detail { min-height: 0; }.step-heading { flex-wrap: wrap; gap: 4px; }.relationship-flow { gap: 6px; }.skill-node { font-size: 11px; }
 }
 @media (max-width: 900px) {
-  .agent-row { grid-template-columns: minmax(0,1fr) auto; grid-template-areas: "name action" "uses uses" "facts facts"; }
-  .agent-facts { display: flex; flex-wrap: wrap; }
 }
 @media (max-width: 480px) {
-  .agent-row { grid-template-columns: minmax(0,1fr); grid-template-areas: "name" "uses" "facts" "action"; }
-  .agent-row > button { justify-self: start; }
 }
 @media (max-width: 760px) {
   .matrix th:first-child { width: 150px; }
@@ -391,14 +365,14 @@ dt { color: var(--muted); }dd { margin: 0; overflow-wrap: anywhere; }
 @media (prefers-reduced-motion: no-preference) { button { transition: background-color .12s; } }
 `;
 
-export const dashboardJs = String.raw`'use strict';
+export const dashboardJs = 'const projectMetrics = ' + projectMetrics.toString() + ';\n' + String.raw`'use strict';
 const $ = (id) => document.getElementById(id);
 const state = {
-  requestId: 0, controller: null, report: null, resources: [], resourceCoverage: [], workspace: 'overview',
+  requestId: 0, controller: null, report: null, pathModels: [], resources: [], resourceCoverage: [], workspace: 'metrics', metricView: null,
   focus: { kind: 'all' }, routeKey: null, skillSelection: null,
   explore: { skillName: null, interval: null },
   trends: { kind: 'top', count: 5 },
-  pages: { activity: 0, skills: 0, models: 0, columns: 0, relationships: 0, routes: 0, steps: 0, catalog: 0, identities: 0, evidence: 0, agentActivity: 0, agentSkills: 0, resources: 0 },
+  pages: { activity: 0, skills: 0, columns: 0, relationships: 0, routes: 0, steps: 0, catalog: 0, identities: 0, evidence: 0, resources: 0 },
 };
 let activityView = null;
 const skillColors = new Map();
@@ -415,7 +389,7 @@ const hostColors = { pi: '#2a78d6', 'claude-code': '#eb6834', codex: '#1baf7a', 
 const hostLabel = (host) => hostLabels[host] || host;
 const hostColor = (host) => hostColors[host] || hostColors.unknown;
 class DashboardFetchError extends Error {}
-const pageLabels = { models: 'skill rows', columns: 'model columns', agentActivity: 'agent activity rows', agentSkills: 'skills by agent' };
+const pageLabels = { skills: 'skill rows', columns: 'comparison columns' };
 function node(tag, text, className) {
   const element = document.createElement(tag);
   if (text !== undefined && text !== null) element.textContent = String(text);
@@ -472,15 +446,16 @@ function restorePagerFocus(key, direction) {
 }
 function pageItems(items, key, size) { state.pages[key] = Math.min(state.pages[key], Math.max(0, Math.ceil(items.length / size) - 1)); return items.slice(state.pages[key] * size, (state.pages[key] + 1) * size); }
 function setOptions(select, label, options) {
-  const current = select.value;
+  const current = select.value; const currentLabel = select.selectedOptions[0]?.textContent.replace(/ · unavailable$/, '') || current;
   const all = node('option', label); all.value = '';
   select.replaceChildren(all);
   for (const option of options) { const item = node('option', option.label); item.value = option.value; select.append(item); }
-  select.value = options.some((option) => option.value === current) ? current : '';
+  if (current && !options.some((option) => option.value === current)) { const retained = node('option', currentLabel + ' · unavailable'); retained.value = current; retained.disabled = true; select.append(retained); }
+  select.value = current;
 }
 function showWorkspace(name, focusHeading = false) {
   state.workspace = name;
-  for (const workspace of ['overview', 'agents', 'models', 'paths', 'resources']) $(workspace + '-workspace').hidden = workspace !== name;
+  for (const workspace of ['metrics', 'paths', 'resources']) $(workspace + '-workspace').hidden = workspace !== name;
   document.querySelectorAll('[data-workspace]').forEach((item) => {
     if (item.dataset.workspace === name) item.setAttribute('aria-current', 'page'); else item.removeAttribute('aria-current');
   });
@@ -505,7 +480,7 @@ function resetSelections() {
   state.focus = { kind: 'all' }; state.routeKey = null; state.skillSelection = null;
   state.explore = { skillName: null, interval: null };
   for (const key of Object.keys(state.pages)) state.pages[key] = 0;
-  for (const id of ['skill-search', 'model-search', 'agent-search', 'route-search', 'catalog-search', 'route-model', 'resource-search', 'resource-kind', 'resource-observation']) $(id).value = '';
+  for (const id of ['skill-search', 'route-search', 'catalog-search', 'route-model', 'resource-search', 'resource-kind', 'resource-observation']) $(id).value = '';
 }
 function applyTimePreset() {
   const preset = $('time-preset').value;
@@ -543,8 +518,11 @@ async function loadDashboard() {
     state.report = payload.report;
     state.resources = Array.isArray(payload.resources?.rows) ? payload.resources.rows : [];
     state.resourceCoverage = Array.isArray(payload.resourceCoverage?.rows) ? payload.resourceCoverage.rows : [];
+    const models = [...state.report.models];
+    for (const measure of ['uses', 'invocationFailures']) for (const series of projectMetrics(state.report, { measure, split: 'model', display: 'count' }).series) { if (series.attribution !== 'none' && !models.some(column => sameModel(column.model, series.model))) models.push({ model: series.model }); }
+    state.pathModels = models;
     resetSelections();
-    renderScope(); renderOverview(); renderAgents(); renderModels(); renderPaths(); renderResources();
+    renderScope(); renderMetrics(); renderPaths(); renderResources();
     $('message-panel').hidden = true; $('dashboard-content').hidden = false;
     setStatus('ready', 'Ready');
   } catch (error) {
@@ -559,12 +537,23 @@ async function loadDashboard() {
 }
 function renderFilterOptions(options) {
   if (!options) return;
+  const pairs = options.agentModelPairs || [];
+  const modelValue = (model) => model === null ? 'unknown' : JSON.stringify([model.provider, model.id]);
+  const selectedHost = $('host-filter').value; const selectedModel = $('model-filter').value;
   const rank = (host) => { const index = hostOrder.indexOf(host); return index === -1 ? hostOrder.length : index; };
-  setOptions($('host-filter'), 'All agent hosts', [...(options.hosts || [])].sort((left, right) => rank(left) - rank(right) || left.localeCompare(right)).map((value) => ({ value, label: hostLabel(value) })));
-  for (const [id, label, values] of [
-    ['machine-filter', 'All machines', options.machines], ['project-filter', 'All projects', options.projects],
-    ['model-provider-filter', 'All providers', options.modelProviders], ['model-id-filter', 'All models', options.modelIds],
-  ]) setOptions($(id), label, values.map((value) => ({ value, label: value })));
+  setOptions($('host-filter'), 'All agents', [...(options.hosts || [])].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b)).map(value => ({ value, label: hostLabel(value) })));
+  const models = [...new Map(pairs.map(pair => [modelValue(pair.model), pair.model])).entries()];
+  setOptions($('model-filter'), 'All models', models.map(([value, model]) => ({ value, label: modelLabel(model) })));
+  for (const option of $('host-filter').options) if (option.value) {
+    option.disabled = !options.hosts.includes(option.value) || Boolean(selectedModel && !pairs.some(pair => pair.host === option.value && modelValue(pair.model) === selectedModel));
+    option.textContent = hostLabel(option.value) + (option.disabled ? ' · unavailable' : '');
+  }
+  for (const option of $('model-filter').options) if (option.value) {
+    option.disabled = !models.some(([value]) => value === option.value) || Boolean(selectedHost && !pairs.some(pair => pair.host === selectedHost && modelValue(pair.model) === option.value));
+    const found = models.find(([value]) => value === option.value);
+    option.textContent = (found ? modelLabel(found[1]) : option.value === 'unknown' ? 'Unknown model' : option.textContent.replace(/ · unavailable$/, '')) + (option.disabled ? ' · unavailable' : '');
+  }
+  for (const [id, label, values] of [['machine-filter', 'All machines', options.machines], ['project-filter', 'All projects', options.projects]]) setOptions($(id), label, values.map(value => ({ value, label: value })));
 }
 function renderScope() {
   const scope = state.report.scope;
@@ -574,17 +563,19 @@ function renderScope() {
   if (scope.host) parts.push('Agent host: ' + hostLabel(scope.host));
   if (scope.machineId) parts.push('Machine: ' + scope.machineId);
   if (scope.source) parts.push((commandLabels[scope.source] || scope.source) + ' requests');
+  if (scope.modelSelection) parts.push('Model: ' + (scope.modelSelection.kind === 'unknown' ? 'Unknown model' : modelLabel(scope.modelSelection.model)));
   if (scope.modelProvider) parts.push('Model provider: ' + scope.modelProvider);
   if (scope.modelId) parts.push('Model: ' + scope.modelId);
   $('scope-summary').textContent = parts.join(' · ');
   $('scope-summary').hidden = parts.length === 0;
 }
-function renderOverview() {
+function renderMetrics() {
+  updateMetricProjection();
   const report = state.report;
   const metrics = [
     ['Successful reads', report.counts.successfulReads],
     ['Skill names read', report.skillsRead],
-    ['Session paths', report.routes.length, 'Known runs and unassigned events'],
+    ['Session paths', scopedRoutes().length, 'Known runs and unassigned events'],
     ['Read failures', report.counts.failedReads],
   ];
   $('overview-cards').replaceChildren(...metrics.map(([label, value, note]) => {
@@ -595,7 +586,8 @@ function renderOverview() {
   if (report.counts.readAttempts) $('evidence-context').append(node('span', count(report.counts.readAttempts, 'read attempt') + ' · outcome unknown'));
   if (report.counts.invocations) $('evidence-context').append(node('span', count(report.counts.invocations, 'native skill invocation')));
   for (const [label, value] of [['request', report.counts.requests], ['wrapper', report.counts.wrappers]]) $('evidence-context').append(node('span', count(value, label)));
-  renderActivity(); renderExplore(); renderRelationships(); renderCatalog();
+  renderActivity(); renderExplore(); renderRelationships(); renderCatalog(); renderSkillDetail();
+  setOptions($('route-model'), 'All models', state.pathModels.map((column, index) => ({ value: String(index), label: modelLabel(column.model) })));
   const coverage = report.coverage;
   $('evidence-context').append(node('span', count(coverage.captureGaps, 'capture gap') + ' · ' + count(coverage.droppedObservations, 'record') + ' lost · ' + count(coverage.filteredOmissions, 'record') + ' hidden by filters'));
 }
@@ -721,12 +713,28 @@ function mountTimeBrush(plot, activity, readout, onChange, onInspect) {
     paint(selected);
   };
 }
-function availableTrendNames() {
-  const activity = state.report.activity;
-  const dated = new Set(activity.kind === 'bucketed' ? activity.bins.flatMap(bin => bin.skills.map(entry => entry.name)) : []);
-  return state.report.skillGroups.filter(group => dated.has(group.name)).map(group => group.name);
+const metricUnit = () => presentation().measure === 'successfulReads' ? 'read' : measureLabels[presentation().measure].toLowerCase().replace(/s$/, '');
+const measureLabels = { successfulReads: 'Successful reads', failedReads: 'Read failures', uses: 'Skill uses', invocations: 'Native invocations', invocationFailures: 'Invocation failures', readAttempts: 'Read attempts', requests: 'Requests', wrappers: 'Wrappers' };
+function presentation() { return { measure: $('metric-measure').value, split: $('metric-split').value, display: $('metric-display').value }; }
+function updateMetricProjection() {
+  const p = presentation();
+  document.querySelector('.overview-grid').classList.toggle('matrix-layout', p.split !== 'skill');
+  $('metric-display').querySelector('[value="session-share"]').disabled = p.measure !== 'uses';
+  if (p.measure !== 'uses') $('metric-display').value = 'count';
+  state.metricView = projectMetrics(state.report, presentation());
+  const notes = { successfulReads: 'Repeated successful reads count separately.', uses: 'Successful reads, successful native invocations, and unconfirmed read attempts. Failures are excluded.', failedReads: 'Reads with a recorded error.', invocations: 'Successful native skill invocations.', invocationFailures: 'Native invocations with a recorded error.', readAttempts: 'Unconfirmed read attempts. The outcome is unknown.', requests: 'Recorded skill commands. Requests have no model attribution.', wrappers: 'Skill text found in input. Wrappers have no model attribution.' };
+  $('metric-explanation').textContent = notes[p.measure] + (p.measure !== 'successfulReads' ? ' Date selections below explore successful reads in the same interval.' : '');
 }
+function trendKey(series) { return presentation().split === 'skill' ? series.label : series.key; }
+function trendName(key) { const series = state.metricView.series.find(series => trendKey(series) === key); if (!series) return key; return presentation().split === 'agent' ? hostLabel(series.host) : presentation().split === 'agent-model' ? hostLabel(series.host) + ' · ' + (series.attribution === 'none' ? 'No model attribution' : modelLabel(series.model)) : series.label; }
+function metricActivity() {
+  const original = state.report.activity;
+  if (original.kind === 'empty') return original;
+  return { ...original, bins: state.metricView.timeline.map((bin, index) => ({ ...original.bins[index], skills: state.metricView.series.map(series => ({ name: trendKey(series), successfulReads: bin.values.find(value => value.key === series.key)?.count || 0 })), metricCount: bin.count })) };
+}
+function availableTrendNames() { return state.metricView.series.map(trendKey); }
 function displayedTrendNames() {
+  if ($('metric-split').value !== 'skill') return availableTrendNames();
   return state.trends.kind === 'top' ? availableTrendNames().slice(0, state.trends.count) : state.trends.names;
 }
 function addTrend(name) {
@@ -828,10 +836,13 @@ function mountTrendControls(target) {
     results.querySelectorAll('input').forEach(checkbox => { checkbox.checked = names.includes(checkbox.dataset.skill); });
   };
 }
+function metricEmptyText() { return 'No ' + measureLabels[presentation().measure].toLowerCase() + (hasFilters() ? ' match these filters.' : ' recorded yet.'); }
+function appendModelRecovery(target) { if (state.report.scope.modelSelection && ['requests', 'wrappers'].includes(presentation().measure)) { target.append(node('p', measureLabels[presentation().measure] + ' have no model attribution.', 'footnote'), button('Show all models', () => { $('model-filter').value = ''; loadDashboard(); })); } }
 function renderActivity() {
   const target = $('activity-chart'); target.replaceChildren(); activityView = null;
-  const report = state.report; const activity = report.activity;
-  const updateControls = mountTrendControls(target); updateControls();
+  const report = state.report; const activity = metricActivity();
+  const updateControls = $('metric-split').value === 'skill' ? mountTrendControls(target) : () => {}; updateControls();
+  if (activity.kind !== 'empty' && !state.metricView.series.length && presentation().split !== 'skill') { activityView = updateControls; target.append(empty(metricEmptyText())); appendModelRecovery(target); return; }
   if (activity.kind === 'empty') {
     activityView = updateControls;
     target.append(empty(hasFilters() ? 'No dated activity matches these filters.' : totalEvidence(report.counts) === 0 && report.routes.length === 0 ? 'No activity recorded yet.' : 'No dated activity recorded.'));
@@ -845,37 +856,37 @@ function renderActivity() {
     plot.append(svg, cursor);
     const scale = node('div', null, 'trend-scale');
     layout.append(scale, plot, chartAxis(activity));
-    const noTrends = empty('Select skills to show their reads.'); target.append(noTrends);
+    const noTrends = empty((state.metricView.series.length || state.trends.kind === 'custom' && presentation().split === 'skill') ? 'Select skills to show their activity.' : metricEmptyText()); target.append(noTrends);
     const readout = node('p', null, 'trend-readout'); const rangeReadout = node('p', null, 'brush-range');
     const announcement = node('p', null, 'sr-only'); announcement.setAttribute('role', 'status'); announcement.setAttribute('aria-live', 'polite');
-    const explanation = node('p', 'Successful skill reads · Reads per interval', 'small muted');
-    const noReads = node('p', 'No successful reads in this period.', 'footnote');
+    const explanation = node('p', measureLabels[presentation().measure] + ' per UTC interval', 'small muted');
+    const noReads = node('p', 'No ' + measureLabels[presentation().measure].toLowerCase() + ' in this period.', 'footnote');
     target.append(explanation, layout, noReads, labels, readout, rangeReadout, announcement);
     const scroll = node('div', null, 'table-wrap'); const details = disclosure('View activity data', scroll); target.append(details);
     let shown = []; let inspected = activity.bins.length - 1;
     function inspect(index, announce = false) {
       inspected = index; const bin = activity.bins[index];
       cursor.style.left = cursorOffset(activity, bin);
-      readout.textContent = intervalLabel(bin.startAt, bin.endAt) + ' · ' + count(shown.reduce((total, name) => total + (binSkills[index].get(name) || 0), 0), 'selected skill read');
+      readout.textContent = intervalLabel(bin.startAt, bin.endAt) + ' · ' + count(shown.reduce((total, name) => total + (binSkills[index].get(name) || 0), 0), metricUnit());
       labels.querySelectorAll('.trend-label').forEach((label, row) => {
         const reads = binSkills[index].get(shown[row]) || 0;
-        label.querySelector('small').textContent = count(reads, 'read');
-        label.title = shown[row] + ': ' + count(reads, 'read') + ' · ' + intervalLabel(bin.startAt, bin.endAt);
+        label.querySelector('small').textContent = count(reads, metricUnit());
+        label.title = trendName(shown[row]) + ': ' + count(reads, metricUnit()) + ' · ' + intervalLabel(bin.startAt, bin.endAt);
       });
       if (announce) announcement.textContent = readout.textContent + '. ' + Array.from(labels.querySelectorAll('.trend-label'), (label) => label.title).join('. ');
     }
     function renderData() {
-      const data = table(['UTC interval', 'Read-bearing runs', ...shown, 'Reads', 'Failures', 'Requests', 'Wrappers'], 'Successful reads by skill. Repeated successful reads count separately.'); data.className = 'activity-data';
+      const data = table(['UTC interval', ...shown.map(trendName), 'Total'], measureLabels[presentation().measure] + ' in each UTC interval.'); data.className = 'activity-data';
       pageItems(activity.bins, 'activity', 24).forEach((bin, offset) => {
         const index = state.pages.activity * 24 + offset;
         const row = node('tr'); const cell = node('td');
         const action = button(intervalLabel(bin.startAt, bin.endAt), (event) => selectActivityBin(index, event.shiftKey), 'link activity-choice');
         action.dataset.bin = index; action.setAttribute('aria-pressed', String(state.explore.interval !== null && bin.startAt >= state.explore.interval.startAt && bin.endAt <= state.explore.interval.endAt));
-        action.setAttribute('aria-label', 'Select ' + intervalLabel(bin.startAt, bin.endAt) + ' UTC'); cell.append(action); row.append(cell, node('td', bin.readRuns));
+        action.setAttribute('aria-label', 'Select ' + intervalLabel(bin.startAt, bin.endAt) + ' UTC'); cell.append(action); row.append(cell);
         for (const name of shown) {
           row.append(node('td', binSkills[index].get(name) || 0));
         }
-        [bin.counts.successfulReads, bin.counts.failedReads, bin.counts.requests, bin.counts.wrappers].forEach((value) => row.append(node('td', value)));
+        row.append(node('td', bin.metricCount));
         data.lastChild.append(row);
       });
       scroll.replaceChildren(data, pagination('activity', activity.bins.length, 24, renderData));
@@ -892,13 +903,14 @@ function renderActivity() {
         shown = names; labels.replaceChildren(); svg.replaceChildren();
         const stack = buildStack(activity, names);
         svg.setAttribute('viewBox', '0 0 ' + chartWidth + ' ' + chartHeight);
-        const title = svgNode('title', { id: 'activity-title' }); title.textContent = 'Successful skill reads';
-        const description = svgNode('desc', { id: 'activity-description' }); description.textContent = 'Stacked areas show successful reads for selected skills in each UTC interval. Repeated reads count separately. Exact counts follow in the data table.';
+        const title = svgNode('title', { id: 'activity-title' }); title.textContent = measureLabels[presentation().measure];
+        const description = svgNode('desc', { id: 'activity-description' }); description.textContent = 'Stacked areas show ' + measureLabels[presentation().measure].toLowerCase() + ' in each UTC interval. Exact counts follow in the data table.';
         svg.append(title, description);
         drawScale(scale, svg, stack.maximum);
         for (const layer of stack.layers) {
-          const color = skillColor(layer.name); const label = button('', () => selectExploreSkill(layer.name), 'trend-label');
-          label.dataset.skill = layer.name; label.style.setProperty('--skill-color', color); label.append(node('span', layer.name), node('small')); labels.append(label);
+          const series = state.metricView.series.find(series => trendKey(series) === layer.name);
+          const color = presentation().split === 'agent' && series ? hostColor(series.host) : skillColor(layer.name); const label = presentation().split === 'skill' ? button('', () => { if (presentation().measure === 'successfulReads') selectExploreSkill(layer.name); else { const row = comparisonView().skills.find(row => row.name === layer.name) || state.metricView.skills.find(row => row.name === layer.name); if (row) selectMetricSkill(row, row, null); } }, 'trend-label') : node('div', null, 'trend-label');
+          label.dataset.skill = layer.name; label.style.setProperty('--skill-color', color); label.append(node('span', trendName(layer.name)), node('small')); labels.append(label);
           svg.append(svgNode('path', { d: stepPath(activity, layer.lower, layer.upper, stack.maximum), fill: color, class: 'trend-area', 'data-skill': layer.name }));
         }
         if (details.open) renderData();
@@ -908,7 +920,7 @@ function renderActivity() {
       inspect(inspected); setRange(selection.interval);
     };
   }
-  if (report.coverage.undatedEvidence > 0) target.append(node('p', count(report.coverage.undatedEvidence, 'record') + ' without a usable timestamp. Not shown in the skill trends.', 'footnote'));
+  if (state.metricView.undatedCount > 0) target.append(node('p', count(state.metricView.undatedCount, 'matching record') + ' without a usable timestamp. Included in comparison, omitted from the trend.', 'footnote'));
 }
 function timeLabel(value) {
   return value.replace('T', ' ').replace(/\.000Z$/, '').replace(/Z$/, '');
@@ -1001,7 +1013,7 @@ function explorePaths(routeKey = null, model = undefined) {
   state.pages.routes = routeKey === null ? 0 : Math.max(0, Math.floor(paths.findIndex((entry) => entry.route.key === routeKey) / 8));
   state.pages.steps = 0; state.routeKey = routeKey;
   $('route-search').value = '';
-  $('route-model').value = model === undefined ? '' : String(state.report.models.findIndex((column) => sameModel(column.model, model)));
+  $('route-model').value = model === undefined ? '' : String(state.pathModels.findIndex((column) => sameModel(column.model, model)));
   renderPaths(); showWorkspace('paths', true);
   if (routeKey !== null) { $('chain-view').focus(); $('chain-view').scrollIntoView({ block: 'nearest' }); }
 }
@@ -1068,7 +1080,7 @@ function renderComparison() {
 function renderExplore() {
   const selection = state.explore; const active = selection.skillName !== null || selection.interval !== null;
   const panel = $('explorer-panel'); panel.hidden = !active;
-  state.pages.skills = 0; renderRanks(); updateActivitySelection();
+  state.pages.skills = 0; renderSkillComparison(); updateActivitySelection();
   $('explore-models').hidden = selection.skillName === null;
   if (state.focus.kind === 'explore') {
     if (!active) { state.focus = { kind: 'all' }; state.routeKey = null; }
@@ -1119,29 +1131,53 @@ function renderExplore() {
   renderComparison();
   $('explore-announcement').textContent = count(snapshot.paths.length, 'matching path') + ' in the exploration.';
 }
-function renderRanks() {
-  const query = $('skill-search').value.toLowerCase();
-  const active = state.explore.skillName !== null || state.explore.interval !== null;
-  const counts = active ? explorationSnapshot(state.explore.interval, state.explore.skillName).matchingReadsBySkill : null;
-  $('skills-heading').textContent = active ? 'Skills in selection' : 'Most-read skills';
-  $('skills-heading').closest('.section-heading').querySelector('.small').textContent = active ? 'Reads in matching paths' : 'Successful reads';
-  const groups = state.report.skillGroups.map((group) => ({ group, reads: counts === null ? group.counts.successfulReads : counts.get(group.name) || 0 }))
-    .filter((entry) => entry.reads > 0 && entry.group.name.toLowerCase().includes(query))
-    .sort((left, right) => right.reads - left.reads || left.group.name.localeCompare(right.group.name));
+function comparisonView() {
+  if (!state.explore.interval && !state.explore.skillName) return state.metricView;
+  const matching = state.explore.skillName && presentation().measure === 'successfulReads' ? new Set(explorationSnapshot(state.explore.interval, state.explore.skillName).paths.map(entry => entry.route.key)) : null;
+  const routes = state.report.routes.filter(route => !matching || matching.has(route.key)).map(route => ({ ...route, steps: route.steps.map(step => step.kind === 'observations' ? { ...step, items: step.items.filter(item => inInterval(item.observedAt, state.explore.interval)) } : step) }));
+  return projectMetrics({ ...state.report, routes }, presentation());
+}
+function selectMetricSkill(row, cell, series) {
+  state.skillSelection = { kind: 'metric-skill', name: row.name, routeKeys: cell.routeKeys, query: { presentation: { ...presentation() }, cellKey: series?.key ?? null, interval: state.explore.interval }, label: measureLabels[presentation().measure] + (series ? ' · ' + series.label : '') + ': ' + (presentation().display === 'session-share' ? shareText(cell.share) + ' of eligible sessions' : number(cell.count)) };
+  state.pages.identities = 0; renderSkillDetail(); showWorkspace('metrics'); $('skill-detail').tabIndex = -1; $('skill-detail').focus();
+}
+function renderSkillComparison() {
+  const query = $('skill-search').value.toLowerCase(); const p = presentation(); const view = comparisonView();
+  const share = p.display === 'session-share';
+  $('comparison-scroll-hint').hidden = p.split === 'skill';
+  const rows = view.skills.filter(row => (share ? row.sessions > 0 : row.count > 0) && row.name.toLowerCase().includes(query));
+  $('skills-heading').textContent = 'Compare skills';
+  $('comparison-note').textContent = share ? 'Sessions with this skill use / sessions with any skill use in each cohort. Models use their own session denominator. A session can appear under several models. Exact recorded skill names retain plugin prefixes.' : 'Exact recorded skill names. Select a count for matching records and paths.';
   const target = $('skill-table'); target.replaceChildren();
-  const max = groups[0]?.reads || 1;
-  pageItems(groups, 'skills', 8).forEach(({ group, reads }, index) => {
-    const selected = state.explore.skillName === group.name;
-    const row = node('div', null, 'rank-row' + (selected ? ' selected' : '')); row.append(node('span', String(state.pages.skills * 8 + index + 1).padStart(2, '0'), 'rank-number'));
-    const name = node('div'); const action = button(group.name, () => selectExploreSkill(group.name), 'link'); action.setAttribute('aria-pressed', String(selected)); name.append(action);
-    const track = node('div', null, 'rank-track'); const fill = node('div', null, 'rank-fill'); fill.style.width = reads / max * 100 + '%'; track.append(fill); name.append(track);
-    row.append(name, node('strong', number(reads))); target.append(row);
-  });
-  if (!groups.length) {
-    target.append(empty(active && !query ? 'No successful reads match this selection.' : noResults('successful reads', query)));
-    if (state.report.skillGroups.some((group) => group.cataloged)) target.append(button('View skill catalog', () => { $('catalog-context').open = true; $('catalog-context').querySelector('summary').focus(); }, 'link'));
+  const pager = $('comparison-pagination'); pager.replaceChildren();
+  if (!rows.length) { $('comparison-scroll-hint').hidden = true; target.append(empty(query ? noResults('skills', query) : metricEmptyText())); appendModelRecovery(target); if (state.report.skillGroups.some(group => group.cataloged)) target.append(button('View skill catalog', () => { $('catalog-context').open = true; $('catalog-context').querySelector('summary').focus(); }, 'link')); return; }
+  if (p.split === 'skill') {
+    const max = Math.max(1, ...rows.map(row => share ? row.share || 0 : row.count));
+    for (const [index, row] of pageItems(rows, 'skills', 8).entries()) {
+      const line = node('div', null, 'rank-row' + (state.explore.skillName === row.name ? ' selected' : '')); line.append(node('span', String(state.pages.skills * 8 + index + 1).padStart(2, '0'), 'rank-number'));
+      const name = node('div'); const action = button(row.name, () => p.measure === 'successfulReads' && !share ? selectExploreSkill(row.name) : selectMetricSkill(row, row, null), 'link'); action.setAttribute('aria-pressed', String(state.explore.skillName === row.name)); name.append(action);
+      const track = node('div', null, 'rank-track'); const fill = node('div', null, 'rank-fill'); fill.style.width = (share ? row.share || 0 : row.count) / max * 100 + '%'; track.append(fill); name.append(track);
+      const value = node('strong'); value.append(button(share ? shareText(row.share) : number(row.count), () => selectMetricSkill(row, row, null), 'link')); line.append(name, value); target.append(line);
+    }
+  } else {
+    const columns = pageItems(view.series, 'columns', 6);
+    const matrix = table(['Skill', ...columns.map(column => trendName(column.key))], (share ? 'Session share' : measureLabels[p.measure]) + ' by skill and ' + p.split.replace('-', ' + ')); matrix.className = 'matrix';
+    const max = Math.max(1, ...rows.flatMap(row => row.cells.map(cell => share ? cell.share || 0 : cell.count)));
+    for (const row of pageItems(rows, 'skills', 12)) {
+      const line = node('tr'); const heading = node('th'); heading.scope = 'row'; heading.append(button(row.name, () => selectMetricSkill(row, row, null), 'link')); line.append(heading);
+      for (const column of columns) {
+        const cell = row.cells.find(cell => cell.key === column.key) || { count: 0, sessions: 0, eligibleSessions: column.eligibleSessions, share: column.eligibleSessions ? 0 : null, routeKeys: [] };
+        const value = share ? cell.share : cell.count; const text = share ? shareText(value) : number(value);
+        const item = node('td'); const action = button(text, () => selectMetricSkill(row, cell, { ...column, label: trendName(column.key) }), 'heat-' + (value ? Math.max(1, Math.ceil(value / max * 4)) : 0));
+        action.setAttribute('aria-label', row.name + ', ' + trendName(column.key) + ': ' + (share ? text + ' of eligible sessions (' + cell.sessions + '/' + cell.eligibleSessions + ')' : count(value, measureLabels[p.measure].toLowerCase().replace(/s$/, ''))));
+        if (value === null) action.title = 'No eligible sessions'; item.append(action); line.append(item);
+      }
+      matrix.lastChild.append(line);
+    }
+    target.append(matrix);
+    if (view.series.length > 6) pager.append(pagination('columns', view.series.length, 6, renderSkillComparison));
   }
-  target.append(pagination('skills', groups.length, 8, renderRanks));
+  pager.append(pagination('skills', rows.length, p.split === 'skill' ? 8 : 12, renderSkillComparison));
 }
 function renderCatalog() {
   const groups = state.report.skillGroups.filter((group) => group.cataloged && group.name.toLowerCase().includes($('catalog-search').value.toLowerCase()));
@@ -1174,12 +1210,8 @@ function renderRelationships() {
   target.append(pagination('relationships', relationships.length, 4, renderRelationships));
 }
 function selectSkill(name) {
-  state.skillSelection = { kind: 'skill', name }; state.pages.identities = 0; renderSkillDetail(); showWorkspace('models');
+  state.skillSelection = { kind: 'skill', name }; state.pages.identities = 0; renderSkillDetail(); showWorkspace('metrics');
   $('skill-detail').tabIndex = -1; $('skill-detail').focus();
-}
-function matchingModelGroups() {
-  const query = $('model-search').value.toLowerCase();
-  return state.report.skillGroups.filter((group) => group.counts.successfulReads + group.counts.failedReads > 0 && group.name.toLowerCase().includes(query));
 }
 const resourceObservationLabels = { observed: 'Observed', 'not-observed': 'No observed agent access', unknown: 'Unknown' };
 const resourceKindLabels = { skill: 'Skill', principle: 'Principle', reference: 'Reference', script: 'Script', file: 'File' };
@@ -1252,40 +1284,17 @@ function renderResources() {
   $('resource-pagination').replaceChildren(pagination('resources', rows.length, 25, renderResources));
 }
 
-function renderModels() {
-  const report = state.report; const measure = $('model-measure').value;
-  const groups = matchingModelGroups();
-  const columns = pageItems(report.models, 'columns', 6);
-  const matrix = table(['Skill', ...columns.map((column) => modelLabel(column.model))], measure === 'successfulReads' ? 'Successful reads by skill and model' : 'Read failures by skill and model'); matrix.className = 'matrix';
-  const max = groups.reduce((value, group) => Math.max(value, ...group.models.map((model) => model[measure])), 1);
-  for (const group of pageItems(groups, 'models', 12)) {
-    const row = node('tr'); const label = node('th'); label.scope = 'row'; label.append(button(group.name, () => selectSkill(group.name), 'link')); row.append(label);
-    for (const column of columns) {
-      const value = group.models.find((entry) => sameModel(entry.model, column.model))?.[measure] || 0;
-      const cell = node('td');
-      const action = button(number(value), () => { state.skillSelection = { kind: 'model-skill', name: group.name, model: column.model }; state.pages.identities = 0; renderSkillDetail(); $('skill-detail').tabIndex = -1; $('skill-detail').focus(); }, 'heat-' + (value === 0 ? 0 : Math.max(1, Math.ceil(value / max * 4))));
-      action.setAttribute('aria-label', group.name + ', ' + modelLabel(column.model) + ': ' + count(value, measure === 'successfulReads' ? 'successful read' : 'read failure')); cell.append(action); row.append(cell);
-    }
-    matrix.lastChild.append(row);
-  }
-  $('model-matrix').replaceChildren(groups.length && columns.length ? matrix : empty(noResults('reads', $('model-search').value)));
-  $('model-pagination').replaceChildren(pagination('models', groups.length, 12, renderModels));
-  if (groups.length && report.models.length > 6) $('model-pagination').append(pagination('columns', report.models.length, 6, renderModels));
-  renderSkillDetail();
-  setOptions($('route-model'), 'All models', report.models.map((column, index) => ({ value: String(index), label: modelLabel(column.model) })));
-}
 function renderSkillDetail() {
   const target = $('skill-detail'); target.replaceChildren();
   const selection = state.skillSelection;
-  const selectedModel = selection?.kind === 'model-skill' ? selection.model : undefined;
   const group = state.report.skillGroups.find((entry) => entry.name === selection?.name);
-  target.hidden = !group && (!matchingModelGroups().length || !state.report.models.length);
-  if (!group) { if (!target.hidden) target.append(node('h2', 'Select a skill'), node('p', 'Select a skill name or count to view its records and paths.', 'footnote')); return; }
-  const heading = node('div', null, 'section-heading'); heading.append(node('h2', group.name), button('View session paths', () => { state.focus = { kind: 'skill', name: group.name }; state.pages.routes = 0; state.routeKey = null; $('route-search').value = ''; $('route-model').value = selectedModel === undefined ? '' : String(state.report.models.findIndex((column) => sameModel(column.model, selectedModel))); renderPaths(); showWorkspace('paths', true); })); target.append(heading);
-  target.append(node('p', countsText(group.counts), 'detail-counts'));
-  if (selectedModel !== undefined) { const counts = group.models.find((column) => sameModel(column.model, selectedModel)); target.append(node('p', modelLabel(selectedModel) + ': ' + count(counts?.successfulReads || 0, 'read') + ' · ' + count(counts?.failedReads || 0, 'failure'), 'footnote')); }
+  target.hidden = !group;
+  if (!group) return;
+  const heading = node('div', null, 'section-heading'); heading.append(node('h2', group.name), button('View session paths', () => { state.focus = selection?.kind === 'metric-skill' ? { kind: 'metric', name: group.name, label: selection.label, routeKeys: selection.routeKeys, query: selection.query } : { kind: 'skill', name: group.name }; state.pages.routes = 0; state.routeKey = null; $('route-search').value = ''; $('route-model').value = ''; renderPaths(); showWorkspace('paths', true); })); target.append(heading);
+  target.append(node('p', selection?.kind === 'metric-skill' ? selection.label : countsText(group.counts), 'detail-counts'));
   const identities = node('div', null, 'identity-list');
   identities.append(node('p', 'Files with the same skill name can have different content.', 'small'));
+  if (selection?.kind === 'metric-skill') identities.append(node('p', 'These files and counts cover this skill in the current report scope.', 'footnote'));
   const variants = group.skillKeys.map((key) => state.report.skills.find((entry) => entry.key === key)).filter(Boolean);
   for (const variant of pageItems(variants, 'identities', 8)) {
     const item = node('div', null, 'identity-item'); item.dataset.machine = variant.identity.machineId;
@@ -1295,181 +1304,40 @@ function renderSkillDetail() {
   identities.append(pagination('identities', variants.length, 8, renderSkillDetail));
   target.append(disclosure('Files and requests · ' + count(variants.length, 'entry', 'entries'), identities));
 }
-const useTotal = (uses) => uses.reads + uses.invocations + uses.attempts;
-const isUse = (evidence) => evidence.kind === 'read-attempt' || ((evidence.kind === 'read-result' || evidence.kind === 'skill-invocation') && evidence.outcome === 'success');
-const noUses = { uses: { reads: 0, invocations: 0, attempts: 0, failures: 0 }, sessions: 0 };
-function useParts(uses) {
-  return [[uses.reads, 'read'], [uses.invocations, 'native invocation'], [uses.attempts, 'unconfirmed read attempt']].filter(([value]) => value > 0).map(([value, label]) => count(value, label));
-}
-function hostSwatch(host) {
-  const swatch = node('span', null, 'agent-swatch'); swatch.style.setProperty('--host-color', hostColor(host)); swatch.setAttribute('aria-hidden', 'true');
-  return swatch;
-}
-function showAgent(host) {
-  $('host-filter').value = host;
-  for (const id of ['project-filter', 'model-provider-filter', 'model-id-filter']) $(id).value = '';
-  loadDashboard().then(() => {
-    const target = host ? $('show-all-agents') : $('agent-summary-heading');
-    if (!target || $('agents-workspace').hidden) return;
-    target.tabIndex = host ? 0 : -1; target.focus();
-  });
-}
-function renderAgents() {
-  const present = state.report.agents.hosts.length > 0;
-  $('agent-activity-panel').hidden = !present; $('agent-skills-panel').hidden = !present;
-  renderAgentSummary(); renderAgentActivity(); renderAgentMatrix();
-}
-function renderAgentSummary() {
-  const hosts = state.report.agents.hosts; const filtered = Boolean(state.report.scope.host);
-  $('agent-summary-actions').replaceChildren();
-  if (filtered) { const all = button('Show all agents', () => showAgent('')); all.id = 'show-all-agents'; $('agent-summary-actions').append(all); }
-  const max = Math.max(1, ...hosts.map((entry) => useTotal(entry.uses)));
-  const list = node('ul', null, 'agent-list');
-  for (const entry of hosts) {
-    const total = useTotal(entry.uses);
-    const row = node('li', null, 'agent-row'); row.dataset.host = entry.host; row.style.setProperty('--host-color', hostColor(entry.host));
-    const name = node('div', null, 'agent-name'); name.append(hostSwatch(entry.host), node('strong', hostLabel(entry.host)));
-    const uses = node('div', null, 'agent-uses'); const figure = node('p', null, 'agent-total');
-    figure.append(node('strong', number(total)), node('span', total === 1 ? 'skill use' : 'skill uses'));
-    const track = node('div', null, 'rank-track'); const fill = node('div', null, 'rank-fill'); fill.style.width = total / max * 100 + '%'; track.append(fill);
-    uses.append(figure, track, node('p', [...useParts(entry.uses), ...(entry.uses.failures ? [count(entry.uses.failures, 'failure')] : [])].join(' · '), 'small'));
-    const facts = node('div', null, 'agent-facts');
-    facts.append(node('span', count(entry.sessions, 'session')), node('span', count(entry.skills, 'skill')), node('span', entry.lastUseAt ? 'Last use: ' + date(entry.lastUseAt) : 'No dated skill use'));
-    row.append(name, uses, facts);
-    if (!filtered && hosts.length > 1) {
-      const action = button('Show only this agent', () => showAgent(entry.host)); action.setAttribute('aria-label', 'Show only this agent: ' + hostLabel(entry.host)); row.append(action);
-    }
-    list.append(row);
-  }
-  $('agent-summary').replaceChildren(hosts.length ? list : empty(noResults('skill uses')));
-}
-function renderAgentActivity() {
-  const target = $('agent-activity'); target.replaceChildren();
-  const activity = state.report.activity;
-  const hosts = state.report.agents.hosts.filter((entry) => useTotal(entry.uses) > 0).map((entry) => entry.host);
-  const bins = activity.kind === 'bucketed' ? activity.bins : [];
-  const series = hosts.map((host) => bins.map((bin) => bin.agents.find((entry) => entry.host === host)?.uses || 0));
-  const totals = bins.map((_, index) => series.reduce((sum, values) => sum + values[index], 0));
-  if (!totals.some(Boolean)) { target.append(empty(noResults('dated skill uses'))); return; }
-  const maximum = Math.max(1, ...totals);
-  const layout = node('div', null, 'trend-layout'); const scale = node('div', null, 'trend-scale'); const plot = node('div', null, 'trend-plot');
-  const svg = svgNode('svg', { role: 'img', 'aria-labelledby': 'agent-activity-title agent-activity-description', class: 'activity-svg agent-svg', viewBox: '0 0 ' + chartWidth + ' ' + chartHeight, preserveAspectRatio: 'none' });
-  const title = svgNode('title', { id: 'agent-activity-title' }); title.textContent = 'Skill use over time by agent';
-  const description = svgNode('desc', { id: 'agent-activity-description' }); description.textContent = 'Stacked areas show the skill uses of each agent in each UTC interval. Exact counts follow in the data table.';
-  svg.append(title, description); drawScale(scale, svg, maximum);
-  const labels = node('div', null, 'trend-labels');
-  let lower = bins.map(() => 0);
-  hosts.forEach((host, row) => {
-    const upper = lower.map((value, index) => value + series[row][index]);
-    svg.append(svgNode('path', { d: stepPath(activity, lower, upper, maximum), fill: hostColor(host), class: 'trend-area', 'data-host': host }));
-    const label = node('div', null, 'trend-label'); label.dataset.host = host; label.style.setProperty('--skill-color', hostColor(host));
-    label.append(node('span', hostLabel(host)), node('small')); labels.append(label);
-    lower = upper;
-  });
-  const cursor = node('div', null, 'trend-cursor'); plot.append(svg, cursor); layout.append(scale, plot, chartAxis(activity));
-  plot.tabIndex = 0; plot.setAttribute('role', 'group');
-  plot.setAttribute('aria-label', 'Skill use over time by agent. Use the Left and Right arrow keys to inspect intervals.');
-  const readout = node('p', null, 'trend-readout');
-  const announcement = node('p', null, 'sr-only'); announcement.setAttribute('role', 'status'); announcement.setAttribute('aria-live', 'polite');
-  let inspected = totals.findLastIndex(Boolean);
-  function inspect(index, announce = false) {
-    inspected = index; const bin = bins[index];
-    cursor.style.left = cursorOffset(activity, bin);
-    readout.textContent = intervalLabel(bin.startAt, bin.endAt) + ' · ' + count(totals[index], 'skill use');
-    labels.querySelectorAll('small').forEach((value, row) => { value.textContent = count(series[row][index], 'skill use'); });
-    if (announce) announcement.textContent = readout.textContent + '. ' + hosts.map((host, row) => hostLabel(host) + ': ' + count(series[row][index], 'skill use')).join('. ') + '.';
-  }
-  plot.addEventListener('pointermove', (event) => {
-    const box = plot.getBoundingClientRect(); const start = Date.parse(activity.startAt);
-    const at = start + Math.max(0, Math.min(1, (event.clientX - box.left) / box.width)) * (Date.parse(activity.endAt) - start);
-    inspect(Math.max(0, Math.min(bins.length - 1, Math.floor((at - start) / activity.binWidthMs))));
-  });
-  plot.addEventListener('keydown', (event) => {
-    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-    event.preventDefault();
-    inspect(event.key === 'Home' ? 0 : event.key === 'End' ? bins.length - 1 : Math.max(0, Math.min(bins.length - 1, inspected + (event.key === 'ArrowLeft' ? -1 : 1))), true);
-  });
-  const scroll = node('div', null, 'table-wrap'); const details = disclosure('View activity data', scroll);
-  function renderData() {
-    const data = table(['UTC interval', ...hosts.map(hostLabel), 'Total'], 'Skill uses by agent in each UTC interval.'); data.className = 'activity-data';
-    pageItems(bins, 'agentActivity', 24).forEach((bin, offset) => {
-      const index = state.pages.agentActivity * 24 + offset;
-      const row = node('tr'); const interval = node('th', intervalLabel(bin.startAt, bin.endAt)); interval.scope = 'row';
-      row.append(interval, ...series.map((values) => node('td', number(values[index]))), node('td', number(totals[index])));
-      data.lastChild.append(row);
-    });
-    scroll.replaceChildren(data, pagination('agentActivity', bins.length, 24, renderData));
-  }
-  details.addEventListener('toggle', () => { if (details.open) renderData(); });
-  target.append(node('p', 'Skill uses per interval · Reads, native invocations, and read attempts', 'small muted'), layout, labels, readout, announcement, details);
-  inspect(inspected);
-}
 function shareText(value) { return value === null ? '—' : value === 0 ? '0%' : value < 0.005 ? '<1%' : value < 1 && value >= 0.995 ? '>99%' : Math.round(value * 100) + '%'; }
-function agentSkillName(name) { return name.slice(name.lastIndexOf(':') + 1) || name; }
-function renderAgentMatrix() {
-  const { hosts, skills } = state.report.agents; const share = $('agent-measure').value === 'share';
-  const query = $('agent-search').value.toLowerCase();
-  const rows = skills.filter((row) => row.name.toLowerCase().includes(query));
-  const cellFor = (row, host) => row.cells.find((cell) => cell.host === host.host) || noUses;
-  const measure = (cell, host) => share ? (host.sessions ? cell.sessions / host.sessions : null) : useTotal(cell.uses);
-  const max = Math.max(0, ...rows.flatMap((row) => hosts.map((host) => measure(cellFor(row, host), host) || 0))) || 1;
-  const matrix = table(['Skill', ...hosts.map((host) => hostLabel(host.host))], share ? 'Agent share by skill' : 'Skill uses by skill and agent'); matrix.className = 'matrix';
-  matrix.querySelectorAll('thead th').forEach((header, index) => {
-    if (index) header.replaceChildren(hostSwatch(hosts[index - 1].host), node('span', hostLabel(hosts[index - 1].host)), node('small', count(hosts[index - 1].sessions, 'session')));
-  });
-  let unconfirmed = false;
-  for (const row of pageItems(rows, 'agentSkills', 12)) {
-    const line = node('tr'); const label = node('th', row.name); label.scope = 'row'; line.append(label);
-    for (const host of hosts) {
-      const cell = cellFor(row, host); const value = measure(cell, host); const item = node('td');
-      const attemptsOnly = cell.uses.attempts > 0 && cell.uses.reads === 0 && cell.uses.invocations === 0; unconfirmed ||= attemptsOnly;
-      const text = (share ? shareText(value) : number(value)) + (attemptsOnly ? '*' : '');
-      const heat = 'heat-' + (value ? Math.max(1, Math.ceil(value / max * 4)) : 0);
-      if (!value) item.append(node('span', text, heat));
-      else {
-        const action = button(text, () => showAgentSkill(host.host, row.name), heat);
-        action.setAttribute('aria-label', row.name + ', ' + hostLabel(host.host) + ': ' + (share ? shareText(value) + ' of agent sessions' : count(value, 'skill use')) + '. ' + useParts(cell.uses).join(', ') + '.');
-        item.append(action);
-      }
-      line.append(item);
-    }
-    matrix.lastChild.append(line);
-  }
-  $('agent-matrix').replaceChildren(rows.length ? matrix : empty(noResults(query ? 'skills' : 'skill uses', query)));
-  $('agent-pagination').replaceChildren(pagination('agentSkills', rows.length, 12, renderAgentMatrix));
-  $('agent-unconfirmed-note').hidden = !unconfirmed;
-}
-function showAgentSkill(host, name) {
-  state.focus = { kind: 'agent-skill', host, name }; state.pages.routes = 0; state.routeKey = null;
-  $('route-search').value = ''; $('route-model').value = ''; renderPaths(); showWorkspace('paths', true);
-}
 function selectRelationship(relationship) {
   state.focus = { kind: 'relationship', relationship, evidenceIndex: 0 }; state.pages.routes = 0; state.pages.evidence = 0;
   state.routeKey = relationship.evidence[0]?.routeKey || null;
   state.pages.steps = Math.floor((relationship.evidence[0]?.stepIndex ?? relationship.evidence[0]?.fromStepIndex ?? 0) / 30);
   $('route-search').value = ''; $('route-model').value = ''; renderPaths(); showWorkspace('paths', true);
 }
+function scopedRoutes() { const scope = state.report.scope; return state.report.routes.filter(route => !(scope.modelSelection || scope.modelProvider || scope.modelId || scope.source) || route.steps.some(step => step.kind === 'observations' && step.items.length > 0)); }
 function matchingRoutes() {
   const report = state.report; let keys = null;
   if (state.focus.kind === 'skill') keys = new Set(report.skillGroups.find((group) => group.name === state.focus.name)?.routeKeys || []);
   if (state.focus.kind === 'relationship') keys = new Set(state.focus.relationship.evidence.map((entry) => entry.routeKey));
   if (state.focus.kind === 'explore') keys = new Set(explorationSnapshot(state.explore.interval, state.explore.skillName).paths.map((entry) => entry.route.key));
-  if (state.focus.kind === 'agent-skill') keys = new Set(report.routes.filter((route) => (route.scope.host ?? 'unknown') === state.focus.host
-    && route.steps.some((step) => step.kind === 'observations' && step.items.some((item) => isUse(item.evidence) && agentSkillName(item.evidence.skill.name) === state.focus.name))).map((route) => route.key));
-  const query = $('route-search').value.toLowerCase(); const modelIndex = $('route-model').value; const model = modelIndex === '' ? undefined : report.models[Number(modelIndex)]?.model;
-  return report.routes.filter((route) => {
+  if (state.focus.kind === 'metric') keys = new Set(state.focus.routeKeys);
+  const query = $('route-search').value.toLowerCase(); const modelIndex = $('route-model').value; const model = modelIndex === '' ? undefined : state.pathModels[Number(modelIndex)]?.model;
+  if (model !== undefined && state.focus.kind === 'metric') {
+    const focus = state.focus;
+    const routes = report.routes.map(route => ({ ...route, steps: route.steps.map(step => step.kind === 'observations' ? { ...step, items: step.items.filter(item => 'model' in item.evidence && sameModel(item.evidence.model, model) && inInterval(item.observedAt, focus.query.interval)) } : step) }));
+    const row = projectMetrics({ ...report, routes }, focus.query.presentation).skills.find(row => row.name === focus.name);
+    const matching = new Set(focus.query.cellKey === null ? row?.routeKeys || [] : row?.cells.find(cell => cell.key === focus.query.cellKey)?.routeKeys || []);
+    keys = new Set([...keys].filter(key => matching.has(key)));
+  }
+  return scopedRoutes().filter((route) => {
     if (keys && !keys.has(route.key)) return false;
-    if (model !== undefined && !route.steps.some((step) => step.kind === 'observations' && step.items.some((item) => item.evidence.kind === 'read-result' && sameModel(item.evidence.model, model)
+    if (model !== undefined && state.focus.kind !== 'metric' && !route.steps.some((step) => step.kind === 'observations' && step.items.some((item) => 'model' in item.evidence && sameModel(item.evidence.model, model)
       && (state.focus.kind !== 'skill' || skillName(item.skillKey) === state.focus.name)
-      && (state.focus.kind !== 'agent-skill' || agentSkillName(skillName(item.skillKey)) === state.focus.name)
-      && (state.focus.kind !== 'explore' || (item.evidence.outcome === 'success' && inInterval(item.observedAt, state.explore.interval)
+      && (state.focus.kind !== 'explore' || (item.evidence.kind === 'read-result' && item.evidence.outcome === 'success' && inInterval(item.observedAt, state.explore.interval)
         && (state.explore.skillName === null || item.evidence.skill.name === state.explore.skillName)))))) return false;
     return !query || route.scope.projectCwd.toLowerCase().includes(query) || route.steps.some((step) => step.kind === 'observations' && step.items.some((item) => skillName(item.skillKey).toLowerCase().includes(query)));
   });
 }
 function renderPaths() {
   const routes = matchingRoutes();
-  const label = state.focus.kind === 'skill' ? 'Paths containing ' + state.focus.name : state.focus.kind === 'agent-skill' ? 'Paths containing ' + state.focus.name + ' in ' + hostLabel(state.focus.host) : state.focus.kind === 'relationship' ? 'Paths with this pattern' : state.focus.kind === 'explore' ? 'Paths in exploration' : 'All session paths';
+  const label = state.focus.kind === 'skill' ? 'Paths containing ' + state.focus.name : state.focus.kind === 'metric' ? 'Paths containing ' + state.focus.name + ' · ' + state.focus.label : state.focus.kind === 'relationship' ? 'Paths with this pattern' : state.focus.kind === 'explore' ? 'Paths in exploration' : 'All session paths';
   $('path-focus-label').textContent = label;
   $('back-to-explorer').hidden = state.focus.kind !== 'explore';
   $('route-count').textContent = count(routes.length, 'path');
@@ -1519,7 +1387,7 @@ function renderRouteDetail(route) {
     if (evidence?.routeKey === route.key) highlighted = 'stepIndex' in evidence ? [evidence.stepIndex] : [evidence.fromStepIndex, evidence.toStepIndex];
   }
   const modelIndex = $('route-model').value;
-  const pathModel = modelIndex === '' ? undefined : state.report.models[Number(modelIndex)]?.model;
+  const pathModel = modelIndex === '' ? undefined : state.pathModels[Number(modelIndex)]?.model;
   const timeline = node('ol', null, 'timeline'); timeline.start = state.pages.steps * 30 + 1;
   for (const [offset, step] of pageItems(route.steps, 'steps', 30).entries()) {
     const index = state.pages.steps * 30 + offset;
@@ -1557,9 +1425,9 @@ $('preview-label').hidden = new URLSearchParams(location.search).get('preview') 
 document.querySelectorAll('[data-workspace]').forEach((item) => item.addEventListener('click', () => showWorkspace(item.dataset.workspace)));
 $('filter-form').addEventListener('submit', (event) => { event.preventDefault(); loadDashboard(); });
 $('refresh-data').addEventListener('click', loadDashboard);
-$('reset-filters').addEventListener('click', () => { $('filter-form').reset(); $('time-preset').value = '7'; state.trends = { kind: 'top', count: 5 }; resetSelections(); loadDashboard(); });
-$('host-filter').addEventListener('change', () => { for (const id of ['project-filter', 'model-provider-filter', 'model-id-filter']) $(id).value = ''; loadDashboard(); });
-$('machine-filter').addEventListener('change', () => { for (const id of ['project-filter', 'model-provider-filter', 'model-id-filter']) $(id).value = ''; loadDashboard(); });
+$('reset-filters').addEventListener('click', () => { $('filter-form').reset(); $('time-preset').value = '7'; $('metric-measure').value = 'successfulReads'; $('metric-split').value = 'skill'; $('metric-display').value = 'count'; state.trends = { kind: 'top', count: 5 }; resetSelections(); loadDashboard(); });
+for (const id of ['host-filter', 'model-filter']) $(id).addEventListener('change', () => loadDashboard());
+$('machine-filter').addEventListener('change', () => loadDashboard());
 $('toggle-filters').addEventListener('click', () => { $('scope-panel').hidden = !$('scope-panel').hidden; $('toggle-filters').setAttribute('aria-expanded', String(!$('scope-panel').hidden)); });
 $('time-preset').addEventListener('change', () => {
   const preset = $('time-preset').value;
@@ -1567,17 +1435,16 @@ $('time-preset').addEventListener('change', () => {
   loadDashboard();
 });
 for (const id of ['from-filter', 'to-filter']) $(id).addEventListener('change', () => { $('time-preset').value = 'custom'; });
-for (const [id, key, render] of [['skill-search', 'skills', renderRanks], ['model-search', 'models', renderModels], ['agent-search', 'agentSkills', renderAgentMatrix], ['catalog-search', 'catalog', renderCatalog], ['route-search', 'routes', renderPaths], ['resource-search', 'resources', renderResources]]) $(id).addEventListener('input', () => { state.pages[key] = 0; if (state.report) render(); });
+for (const [id, key, render] of [['skill-search', 'skills', renderSkillComparison], ['catalog-search', 'catalog', renderCatalog], ['route-search', 'routes', renderPaths], ['resource-search', 'resources', renderResources]]) $(id).addEventListener('input', () => { state.pages[key] = 0; if (state.report) render(); });
 for (const id of ['resource-kind', 'resource-observation']) $(id).addEventListener('change', () => { state.pages.resources = 0; if (state.report) renderResources(); });
-$('model-measure').addEventListener('change', () => { if (state.report) renderModels(); });
-$('agent-measure').addEventListener('change', () => { state.pages.agentSkills = 0; if (state.report) renderAgentMatrix(); });
+for (const id of ['metric-measure', 'metric-split', 'metric-display']) $(id).addEventListener('change', () => { if (!state.report) return; state.pages.skills = 0; state.pages.columns = 0; updateMetricProjection(); renderActivity(); renderExplore(); });
 $('route-model').addEventListener('change', () => { state.pages.routes = 0; state.routeKey = null; renderPaths(); });
 $('browse-paths').addEventListener('click', () => showWorkspace('paths', true));
 $('view-explorer').addEventListener('click', () => { $('explorer-panel').focus(); $('explorer-panel').scrollIntoView({ block: 'nearest' }); });
 $('clear-explorer').addEventListener('click', () => { state.explore = { skillName: null, interval: null }; renderExplore(); focusExploration(); });
 $('explore-models').addEventListener('click', () => selectSkill(state.explore.skillName));
 $('explore-all-paths').addEventListener('click', () => explorePaths());
-$('back-to-explorer').addEventListener('click', () => { showWorkspace('overview', true); $('explorer-panel').focus(); $('explorer-panel').scrollIntoView({ block: 'nearest' }); });
+$('back-to-explorer').addEventListener('click', () => { showWorkspace('metrics', true); $('explorer-panel').focus(); $('explorer-panel').scrollIntoView({ block: 'nearest' }); });
 $('clear-path-focus').addEventListener('click', () => { state.focus = { kind: 'all' }; state.pages.routes = 0; state.routeKey = null; $('route-search').value = ''; $('route-model').value = ''; renderPaths(); });
 loadDashboard();
 `;

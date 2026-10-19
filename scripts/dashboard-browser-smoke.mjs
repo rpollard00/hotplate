@@ -6,6 +6,7 @@ import { performance } from "node:perf_hooks";
 import { startDashboardPreview } from "./dashboard-preview.mjs";
 import { withBrowser } from "./browser-smoke.mjs";
 import { openHotplateReadStore } from "../dist/src/store.js";
+import { projectMetrics } from "../dist/src/dashboard/metrics.js";
 import { buildDashboardReport } from "../dist/src/dashboard/analytics.js";
 
 const hostLabels = { pi: 'Pi', 'claude-code': 'Claude Code', codex: 'Codex', 'opencode-v1': 'OpenCode v1', 'opencode-v2': 'OpenCode v2', unknown: 'Unknown host' };
@@ -39,6 +40,7 @@ try {
   let adaptivePayload;
   let catalogOnlyPayload;
   let manySkillsPayload;
+  let invocationModelsPayload;
   const comparisonModel = payload.report.models[1].model;
   const opened = openHotplateReadStore({ databasePath: rich.databasePath });
   assert.equal(opened.kind, "ready");
@@ -97,6 +99,15 @@ try {
       ...item, observationId: 'controlled-' + ++serial, sequence: serial, observedAt: at,
       evidence: { ...item.evidence, toolCallId: 'controlled-tool-' + serial },
     })) });
+    const native = observationSteps.flatMap(step => step.items).find(item => item.evidence.kind === 'skill-invocation' && item.evidence.outcome === 'success');
+    const attempt = observationSteps.flatMap(step => step.items).find(item => item.evidence.kind === 'read-attempt');
+    assert.ok(native && attempt);
+    const invocationChains = { runs: [{ ...makoRun, segmentId: 'model-only-evidence', steps: [controlledStep([
+      { ...howRead, evidence: { ...howRead.evidence, model: comparisonModel } },
+      { ...native, evidence: { ...native.evidence, skill: howRead.evidence.skill, model: {provider:'native-provider',id:'invocation-only'} } },
+      { ...attempt, evidence: { ...attempt.evidence, skill: makoRead.evidence.skill, model: {provider:'attempt-provider',id:'attempt-only'} } },
+    ], '2025-02-21T10:00:00.000Z')] }] };
+    invocationModelsPayload = { ...payload, report: buildDashboardReport({ filter: {}, skills, chains: invocationChains }), chains: invocationChains };
     const manyChains = { runs: [...chains.runs, { ...makoRun, segmentId: 'many-skills', steps: Array.from({ length: 21 }, (_, day) => controlledStep(
       Array.from({ length: 45 }, (_, index) => ({ ...makoRead, evidence: { ...makoRead.evidence, skill: { ...makoRead.evidence.skill, name: 'chooser-' + String(index).padStart(2, '0'), canonicalPath: '/synthetic/chooser-' + index + '/SKILL.md' } } })),
       '2025-02-' + String(day + 1).padStart(2, '0') + 'T10:00:00.000Z',
@@ -190,7 +201,7 @@ try {
 
     }
     async function helpFromEveryTab() {
-      for (const workspace of ['overview', 'agents', 'models', 'paths', 'resources']) {
+      for (const workspace of ['metrics', 'paths', 'resources']) {
         await click('[data-workspace=' + workspace + ']');
         assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#dashboard-content > section:not([hidden])"), item => item.id)'), [workspace + '-workspace']);
         assert.equal(await evaluate('document.querySelectorAll("#data-help").length'), 1);
@@ -227,7 +238,7 @@ try {
     assert.equal(await evaluate('document.querySelector(".metric-value").textContent'), weekly.report.counts.successfulReads.toLocaleString('en-US'));
     assert.equal(await evaluate('document.getElementById("scope-summary").textContent'), '2025-02-14T12:00:00.000Z to 2025-02-21T12:00:00.000Z · UTC');
     assert.equal(await evaluate('document.querySelectorAll("#activity-chart tbody tr").length'), 0, 'The activity table is lazy');
-    assert.match(await evaluate('document.getElementById("activity-chart").textContent'), /Reads per interval/);
+    assert.match(await evaluate('document.getElementById("activity-chart").textContent'), /Successful reads per UTC interval/);
     await chartScreenshot('weekly-desktop.png');
     const weeklyNames = await evaluate('Array.from(document.querySelectorAll("#activity-chart .trend-label"), item => item.dataset.skill)');
     await assertStack(weekly.report.activity);
@@ -254,7 +265,7 @@ try {
     await key('Escape');
     await click('#activity-chart > details > summary'); await until('document.querySelectorAll(".activity-choice").length > 0');
     assert.equal(await evaluate('document.querySelectorAll("#activity-chart tbody tr").length'), 24, 'Hourly data table is paginated');
-    assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#activity-chart th"), item => item.textContent).slice(2, -4)'), await evaluate('Array.from(document.querySelectorAll("#activity-chart .trend-label"), item => item.dataset.skill)'), 'Table columns follow displayed names');
+    assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#activity-chart th"), item => item.textContent).slice(1, -1)'), await evaluate('Array.from(document.querySelectorAll("#activity-chart .trend-label"), item => item.dataset.skill)'), 'Table columns follow displayed names');
     await click('[aria-label="Next activity"]');
     assert.equal(await evaluate('document.querySelector(".activity-choice").dataset.bin'), '24');
     assert.match(await evaluate('document.querySelector(".activity-choice").getAttribute("aria-label")'), /12:00:00.*13:00:00.*exclusive/);
@@ -289,6 +300,7 @@ try {
     assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#activity-chart .trend-label"), item => item.dataset.skill)'), customNames, 'Custom trend names survive scope changes without substitution');
     assert.deepEqual(await colors(), originalColors, 'Colors survive filtered refresh');
     await evaluate('document.querySelector("#activity-chart .trend-label").click()');
+    assert.deepEqual(errors, [], 'No event errors before recent-period comparison');
     assert.match(await evaluate('document.getElementById("explore-comparison").textContent'), /Recent period/);
     assert.doesNotMatch(await evaluate('document.getElementById("explore-comparison").textContent'), /0 days|outside the current report/);
     await click('#explore-comparison .section-heading button');
@@ -397,7 +409,7 @@ try {
     assert.equal(await evaluate('document.querySelectorAll(".eyebrow, .activity-summary").length'), 0);
     assert.equal(await evaluate('document.querySelectorAll("#relationships-heading + p, #models-workspace .page-heading p").length'), 0, 'Read patterns and model headings have no disclaimer subtitles');
     await helpFromEveryTab();
-    await click('[data-workspace=overview]');
+    await click('[data-workspace=metrics]');
     assert.equal(await evaluate('document.querySelector(".metric-value").textContent'), payload.report.counts.successfulReads.toLocaleString("en-US"));
     assert.ok(await evaluate('document.querySelectorAll(".rank-row").length <= 8'));
     assert.ok(await evaluate('document.querySelectorAll(".route-choice").length <= 8'));
@@ -411,7 +423,7 @@ try {
     await noOverflow();
     await screenshot(join(directory, "overview-desktop.png"));
     await chartScreenshot('trends-desktop-detail.png');
-    assert.equal(await evaluate('document.getElementById("activity-heading").textContent'), 'Skill trends');
+    assert.equal(await evaluate('document.getElementById("activity-heading").textContent'), 'Over time');
     const shownSkills = await evaluate('Array.from(document.querySelectorAll("#activity-chart .trend-label"), item => item.dataset.skill)');
     assert.equal(shownSkills.length, 5, 'Five layers share one count axis');
     await assertStack(payload.report.activity);
@@ -427,7 +439,7 @@ try {
     const matching = payload.report.routes.filter(route => route.steps.some(step => step.kind === 'observations' && step.items.some(item => item.evidence.kind === 'read-result' && item.evidence.outcome === 'success' && item.evidence.skill.name === exploreSkill)));
     await click('#skill-table button.link');
     assert.equal(await evaluate('document.activeElement.id'), 'explorer-panel', 'Selection moves keyboard focus to its details');
-    assert.equal(await evaluate('document.getElementById("models-workspace").hidden'), true, 'Ranked skill opens the linked explorer');
+    assert.equal(await evaluate('document.getElementById("metrics-workspace").hidden'), false, 'Ranked skill stays in Metrics with linked explorer');
     assert.equal(await evaluate('document.getElementById("explorer-panel").hidden'), false);
     assert.equal(await evaluate('document.querySelector("#explore-totals strong").textContent'), String(matching.length));
     assert.match(await evaluate('document.getElementById("explore-comparison").textContent'), /Recent period vs previous period/);
@@ -440,14 +452,14 @@ try {
     assert.match(await evaluate('document.getElementById("explore-comparison").textContent'), new RegExp(readBearingPaths(previousStart, recentStart) + ' paths'));
     await click('#explore-models');
     assert.equal(await evaluate('document.querySelector("#skill-detail h2").textContent'), exploreSkill, 'Exploration links to existing model detail');
-    await click('[data-workspace=overview]');
+    await click('[data-workspace=metrics]');
     await click('#explore-comparison .section-heading button');
     assert.equal(await evaluate('document.querySelectorAll(".activity-choice[aria-pressed=true]").length'), 7);
     await click('#activity-chart .trend-label[aria-pressed=true]');
     assert.equal(await evaluate('document.querySelectorAll("#activity-chart .trend-label[aria-pressed=true]").length'), 0, 'A named trend toggles the linked skill selection');
     assert.equal(await evaluate('document.querySelectorAll(".activity-choice[aria-pressed=true]").length'), 7, 'Changing skills retains the selected interval');
     await evaluate(`Array.from(document.querySelectorAll("#activity-chart .trend-label")).find(item => item.dataset.skill === ${JSON.stringify(exploreSkill)}).click()`);
-    assert.equal(await evaluate('document.getElementById("skills-heading").textContent'), 'Skills in selection');
+    assert.equal(await evaluate('document.getElementById("skills-heading").textContent'), 'Compare skills');
     const intervalCounts = new Map();
     for (const route of matching) {
       if (!route.steps.some(step => step.kind === 'observations' && step.items.some(item => item.evidence.kind === 'read-result' && item.evidence.outcome === 'success' && item.evidence.skill.name === exploreSkill && Date.parse(item.observedAt) >= Date.parse(recentStart)))) continue;
@@ -491,7 +503,7 @@ try {
     await click('[data-workspace=paths]');
     assert.equal(await evaluate('document.getElementById("path-focus-label").textContent'), 'All session paths', 'Clearing exploration clears its path focus');
     assert.equal(await evaluate('document.getElementById("back-to-explorer").hidden'), true);
-    await click('[data-workspace=overview]');
+    await click('[data-workspace=metrics]');
 
     await evaluate('document.querySelector("#activity-chart .trend-plot").scrollIntoView({block:"center"})');
     const plotBox = await evaluate('(() => { const r=document.querySelector("#activity-chart .trend-plot").getBoundingClientRect(); return {x:r.x,y:r.y,width:r.width,height:r.height}; })()');
@@ -549,133 +561,98 @@ try {
     await click('#clear-explorer');
     await click('#activity-chart > details > summary');
 
-    const agents = payload.report.agents;
-    const useTotal = uses => uses.reads + uses.invocations + uses.attempts;
+    assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("[data-workspace]"), item => item.dataset.workspace)'), ['metrics', 'paths', 'resources']);
+    assert.equal(await evaluate('document.querySelectorAll("#agents-workspace, #models-workspace, #agent-activity, #model-matrix").length'), 0, 'Obsolete analytic surfaces are removed');
+    assert.equal(await evaluate('document.querySelectorAll("#metrics-workspace > .overview-grid > section").length'), 2, 'One trend and one comparison surface');
     const shareText = value => value === null ? '—' : value === 0 ? '0%' : value < 0.005 ? '<1%' : value < 1 && value >= 0.995 ? '>99%' : Math.round(value * 100) + '%';
-    const agentsFit = () => evaluate('Array.from(document.querySelectorAll("#agents-workspace *")).filter(item => !item.closest(".table-wrap") && item.getClientRects().length && item.getBoundingClientRect().right > document.documentElement.clientWidth + 0.5).length');
-    await click('[data-workspace=agents]');
-    assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("[data-workspace]"), item => item.dataset.workspace)'), ['overview', 'agents', 'models', 'paths', 'resources']);
-    assert.equal(await evaluate('document.getElementById("agents-workspace").hidden'), false);
-    assert.equal(await evaluate('document.getElementById("agents-heading").textContent'), 'Skill use by agent');
-    assert.ok(agents.hosts.length > 1 && agents.hosts.some(host => host.host === 'codex'), 'Fixture compares several agents');
-    assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#agent-summary .agent-row"), row => row.dataset.host)'), agents.hosts.map(host => host.host), 'One summary row per agent in host order');
-    for (const host of agents.hosts) {
-      const text = await evaluate(`document.querySelector('#agent-summary .agent-row[data-host=${JSON.stringify(host.host)}]').textContent`);
-      assert.ok(text.includes(hostLabels[host.host]) && text.includes(useTotal(host.uses).toLocaleString('en-US')) && text.includes(host.sessions + ' sessions'), 'Summary row for ' + host.host);
-      if (host.uses.attempts) assert.ok(text.includes(host.uses.attempts + ' unconfirmed read attempt'), 'Read attempts show as unconfirmed');
+    await click('#clear-explorer');
+    await evaluate('window.reshapeFetch = window.fetch; window.reshapeRequests = 0; window.fetch = (...args) => { window.reshapeRequests++; return window.reshapeFetch(...args); }');
+    const metricCells = () => evaluate('Array.from(document.querySelectorAll("#skill-table tbody tr"), row => [row.querySelector("th").textContent, ...Array.from(row.querySelectorAll("td"), cell => cell.textContent)])');
+    for (const measure of ['successfulReads', 'failedReads', 'uses', 'invocations', 'invocationFailures', 'readAttempts', 'requests', 'wrappers']) {
+      await change('metric-measure', measure);
+      for (const split of ['agent', 'model', 'agent-model']) {
+        await change('metric-split', split);
+        const projected = projectMetrics(payload.report, { measure, split, display: 'count' }); const expected = { ...projected, skills: projected.skills.filter(row => row.count > 0) };
+        assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#skill-table thead th"), item => item.textContent)'), expected.skills.length ? ['Skill', ...expected.series.slice(0, 6).map(series => split === 'agent' ? hostLabels[series.host] : split === 'agent-model' ? hostLabels[series.host] + ' · ' + (series.attribution === 'none' ? 'No model attribution' : series.model === null ? 'Unknown model' : series.model.provider + ' / ' + series.model.id) : series.label)] : [], measure + ' / ' + split + ' observed columns');
+        assert.deepEqual(await metricCells(), expected.skills.slice(0, 12).map(row => [row.name, ...expected.series.slice(0, 6).map(series => (row.cells.find(cell => cell.key === series.key)?.count || 0).toLocaleString('en-US'))]), 'Exact cells for ' + measure + ' / ' + split);
+        assert.equal(await evaluate('document.querySelectorAll("#activity-chart .trend-area").length'), expected.series.length, 'The same trend reshapes locally');
+        if (measure === 'uses' && split === 'agent-model') { await noOverflow(); await screenshot(join(directory, 'metrics-agent-model-desktop.png')); }
+      }
     }
-    const agentActivity = payload.report.activity;
-    const agentLayers = agents.hosts.filter(host => useTotal(host.uses) > 0).map(host => host.host);
-    assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#agent-activity .trend-area"), area => area.dataset.host)'), agentLayers, 'One stacked layer per agent with skill use');
-    assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#agent-activity .trend-label > span"), item => item.textContent)'), agentLayers.map(host => hostLabels[host]), 'Legend names every layer');
-    assert.equal(await evaluate('document.querySelectorAll("#agent-activity button.trend-label").length'), 0, 'Agent legend is not a filter');
-    assert.ok(await evaluate('document.querySelector("#agent-activity svg title").textContent.length > 0 && document.querySelector("#agent-activity svg desc").textContent.includes("Exact counts")'));
-    const agentUses = (bin, host) => bin.agents.find(entry => entry.host === host)?.uses ?? 0;
-    const legendValues = () => evaluate('Array.from(document.querySelectorAll("#agent-activity .trend-label small"), item => item.textContent)');
-    const expectedLegend = bin => agentLayers.map(host => agentUses(bin, host) + (agentUses(bin, host) === 1 ? ' skill use' : ' skill uses'));
-    await evaluate('document.querySelector("#agent-activity .trend-plot").focus()'); await key('Home');
-    assert.deepEqual(await legendValues(), expectedLegend(agentActivity.bins[0]), 'Keyboard inspection reads the first interval');
-    assert.match(await evaluate('document.querySelector("#agent-activity [role=status]").textContent'), new RegExp(hostLabels[agentLayers[0]] + ': '), 'Keyboard inspection is announced');
-    await key('ArrowRight');
-    assert.deepEqual(await legendValues(), expectedLegend(agentActivity.bins[1]));
-    await evaluate('document.querySelector("#agent-activity .trend-plot").scrollIntoView({block:"center"})');
-    const agentPlot = await evaluate('(() => { const r=document.querySelector("#agent-activity .trend-plot").getBoundingClientRect(); return {x:r.x,y:r.y,width:r.width,height:r.height}; })()');
-    const hoverBin = agentActivity.bins[Math.floor(agentActivity.bins.length / 2)];
-    const hoverAt = (Date.parse(hoverBin.startAt) + Date.parse(hoverBin.endAt)) / 2;
-    const agentStart = Date.parse(agentActivity.startAt);
-    await command('Input.dispatchMouseEvent', { type: 'mouseMoved', x: agentPlot.x + (hoverAt - agentStart) / (Date.parse(agentActivity.endAt) - agentStart) * agentPlot.width, y: agentPlot.y + agentPlot.height / 2 });
-    assert.deepEqual(await legendValues(), expectedLegend(hoverBin), 'Pointer hover inspects the interval under the cursor');
-    assert.match(await evaluate('document.querySelector("#agent-activity .trend-readout").textContent'), new RegExp(' · ' + agentLayers.reduce((sum, host) => sum + agentUses(hoverBin, host), 0) + ' skill uses$'));
-    await screenshot(join(directory, 'agents-hover-desktop.png'));
-    await click('#agent-activity details summary'); await until('document.querySelectorAll("#agent-activity tbody tr").length > 0');
-    assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#agent-activity thead th"), item => item.textContent)'), ['UTC interval', ...agentLayers.map(host => hostLabels[host]), 'Total']);
-    assert.equal(await evaluate('document.querySelectorAll("#agent-activity tbody tr").length'), Math.min(24, agentActivity.bins.length));
-    await click('#agent-activity details summary');
-    const matrixHosts = await evaluate('Array.from(document.querySelectorAll("#agent-matrix thead th"), item => item.textContent)');
-    assert.deepEqual(matrixHosts, ['Skill', ...agents.hosts.map(host => hostLabels[host.host] + host.sessions + ' sessions')], 'Matrix columns show each agent and its session count');
-    const matrixCells = () => evaluate('Array.from(document.querySelectorAll("#agent-matrix tbody tr"), row => [row.querySelector("th").textContent, ...Array.from(row.querySelectorAll("td"), cell => cell.textContent)])');
-    const expectedCells = (measure) => agents.skills.slice(0, 12).map(row => [row.name, ...agents.hosts.map(host => {
-      const cell = row.cells.find(entry => entry.host === host.host) ?? { uses: { reads: 0, invocations: 0, attempts: 0 }, sessions: 0 };
-      const marker = cell.uses.attempts > 0 && !cell.uses.reads && !cell.uses.invocations ? '*' : '';
-      return (measure === 'share' ? shareText(host.sessions ? cell.sessions / host.sessions : null) : useTotal(cell.uses).toLocaleString('en-US')) + marker;
-    })]);
-    assert.deepEqual(await matrixCells(), expectedCells('share'), 'Agent share cells equal session share from the payload');
-    assert.equal(await evaluate('document.getElementById("agent-unconfirmed-note").hidden'), false, 'Unconfirmed marker has a footnote');
-    await change('agent-measure', 'uses');
-    assert.deepEqual(await matrixCells(), expectedCells('uses'), 'Skill use cells equal payload totals');
-    await change('agent-measure', 'share');
-    await input('agent-search', agents.skills.at(-1).name.toUpperCase());
-    assert.ok((await matrixCells()).every(row => row[0].toLowerCase().includes(agents.skills.at(-1).name.toLowerCase())), 'Skill search is case-insensitive');
-    await input('agent-search', 'no-such-skill');
-    assert.match(await evaluate('document.getElementById("agent-matrix").textContent'), /No skills match this search/);
-    await input('agent-search', '');
-    await noOverflow(); assert.equal(await agentsFit(), 0);
-    await screenshot(join(directory, 'agents-desktop.png'));
-    const codexColumn = agents.hosts.findIndex(host => host.host === 'codex');
-    const codexSkill = agents.skills.slice(0, 12).find(row => row.cells.some(cell => cell.host === 'codex' && cell.sessions > 0)).name;
-    const codexPaths = payload.report.routes.filter(route => (route.scope.host ?? 'unknown') === 'codex' && route.steps.some(step => step.kind === 'observations' && step.items.some(item => (item.evidence.kind === 'read-attempt' || ((item.evidence.kind === 'read-result' || item.evidence.kind === 'skill-invocation') && item.evidence.outcome === 'success')) && item.evidence.skill.name === codexSkill)));
-    assert.ok(codexPaths.length > 0);
-    assert.match(await evaluate(`Array.from(document.querySelectorAll('#agent-matrix tbody tr')).find(row => row.querySelector('th').textContent === ${JSON.stringify(codexSkill)}).querySelectorAll('td')[${codexColumn}].querySelector('button').getAttribute('aria-label')`), new RegExp('^' + codexSkill + ', Codex: \\d+% of agent sessions\\. \\d+ unconfirmed read attempts?\\.$'));
-    await evaluate(`Array.from(document.querySelectorAll('#agent-matrix tbody tr')).find(row => row.querySelector('th').textContent === ${JSON.stringify(codexSkill)}).querySelectorAll('td')[${codexColumn}].querySelector('button').click()`);
-    assert.equal(await evaluate('document.getElementById("paths-workspace").hidden'), false, 'A matrix cell opens session paths');
-    assert.equal(await evaluate('document.getElementById("path-focus-label").textContent'), 'Paths containing ' + codexSkill + ' in Codex');
-    assert.equal(await evaluate('document.getElementById("route-count").textContent'), codexPaths.length + ' paths');
-    const listedKeys = await evaluate('Array.from(document.querySelectorAll(".route-choice"), item => item.dataset.routeKey)');
-    assert.ok(listedKeys.length > 0 && listedKeys.every(key => codexPaths.some(route => route.key === key)), 'Every listed path belongs to Codex and uses the skill');
-    await click('#clear-path-focus');
-    await click('[data-workspace=agents]');
-    await evaluate('window.smokeUrls = []; window.smokeAgentFetch = window.fetch; window.fetch = (url, options) => { window.smokeUrls.push(String(url)); return window.smokeAgentFetch(url, options); }');
-    await click('#agent-summary .agent-row[data-host=codex] button'); await until(ready);
-    assert.match(await evaluate('window.smokeUrls.at(-1)'), /[?&]host=codex(&|$)/, 'Show only this agent reloads with the host filter');
-    await evaluate('window.fetch = window.smokeAgentFetch');
-    assert.equal(await evaluate('document.getElementById("agents-workspace").hidden'), false, 'The Agents workspace stays open after reload');
-    assert.equal(await evaluate('document.getElementById("scope-summary").textContent'), 'Agent host: Codex');
+    assert.equal(await evaluate('window.reshapeRequests'), 0, 'Measures and splits reshape the loaded report without HTTP requests');
+    await evaluate('window.fetch = window.reshapeFetch');
+    await evaluate('document.querySelector("#activity-chart .trend-plot").focus()'); await key('Home'); await key('Enter');
+    const reshapeChips = await evaluate('document.getElementById("explore-chips").textContent');
+    await change('metric-measure', 'uses'); await change('metric-split', 'agent'); await change('metric-display', 'session-share');
+    assert.equal(await evaluate('document.getElementById("explore-chips").textContent'), reshapeChips, 'UTC brush survives metric, split, and display changes');
+    assert.equal(await evaluate('document.getElementById("explorer-heading").textContent'), 'Successful-read exploration');
+    await click('#clear-explorer');
+    const shareProjection = projectMetrics(payload.report, { measure: 'uses', split: 'agent', display: 'session-share' }); const shares = { ...shareProjection, skills: shareProjection.skills.filter(row => row.sessions > 0) };
+    assert.deepEqual(await metricCells(), shares.skills.slice(0, 12).map(row => [row.name, ...shares.series.slice(0, 6).map(series => shareText(row.cells.find(cell => cell.key === series.key)?.share ?? (series.eligibleSessions ? 0 : null)))]));
+    assert.match(await evaluate('document.getElementById("comparison-note").textContent'), /session denominator/);
+    await input('skill-search', shares.skills.at(-1).name.toUpperCase());
+    assert.ok((await metricCells()).every(row => row[0].toLowerCase().includes(shares.skills.at(-1).name.toLowerCase())));
+    await input('skill-search', 'no-such-skill'); assert.match(await evaluate('document.getElementById("skill-table").textContent'), /No skills match this search/); await input('skill-search', '');
+    const codex = shares.series.find(series => series.host === 'codex');
+    assert.ok(codex);
+    const codexRow = shares.skills.slice(0,12).find(row => row.cells.some(cell => cell.key === codex.key && cell.sessions));
+    const codexColumn = shares.series.indexOf(codex);
+    const codexKeys = codexRow.cells.find(cell => cell.key === codex.key).routeKeys;
+    await evaluate(`Array.from(document.querySelectorAll('#skill-table tbody tr')).find(row => row.querySelector('th').textContent === ${JSON.stringify(codexRow.name)}).querySelectorAll('td')[${codexColumn}].querySelector('button').click()`);
+    assert.equal(await evaluate('document.activeElement.id'), 'skill-detail');
+    await click('#skill-detail > .section-heading button');
+    assert.equal(await evaluate('document.getElementById("paths-workspace").hidden'), false);
+    assert.equal(await evaluate('document.getElementById("route-count").textContent'), codexKeys.length + ' paths');
+    assert.ok((await evaluate('Array.from(document.querySelectorAll(".route-choice"), item => item.dataset.routeKey)')).every(key => codexKeys.includes(key)), 'Metric cells preserve exact evidence path targets');
+    await click('#clear-path-focus'); await click('[data-workspace=metrics]');
+    await change('host-filter', 'codex'); await until(ready);
     assert.equal(await evaluate('document.querySelector("#host-filter option:checked").textContent'), 'Codex');
-    assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#agent-summary .agent-row"), row => row.dataset.host)'), ['codex']);
-    assert.equal(await evaluate('document.querySelectorAll("#agent-summary .agent-row button").length'), 0);
-    assert.equal(await evaluate('document.activeElement.id'), 'show-all-agents', 'Focus moves to the inverse action');
-    await noOverflow(); assert.equal(await agentsFit(), 0);
-    await screenshot(join(directory, 'agents-codex-desktop.png'));
-    await click('#show-all-agents'); await until(ready);
-    assert.equal(await evaluate('document.getElementById("host-filter").value'), '');
-    assert.equal(await evaluate('document.querySelectorAll("#agent-summary .agent-row").length'), agents.hosts.length);
-    for (const [width, height, name] of [[390, 844, 'agents-mobile.png'], [320, 700, 'agents-320.png']]) {
-      await command('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: true });
-      await noOverflow(); assert.equal(await agentsFit(), 0, 'Agents content fits at ' + width + 'px');
-      await screenshot(join(directory, name));
+    const codexModels = payload.filterOptions.agentModelPairs.filter(pair => pair.host === 'codex').map(pair => pair.model === null ? 'unknown' : JSON.stringify([pair.model.provider, pair.model.id]));
+    const modelOptions = await evaluate('Array.from(document.querySelectorAll("#model-filter option"), option => ({value: option.value,disabled: option.disabled}))');
+    assert.ok(modelOptions.filter(option => option.value && !option.disabled).every(option => codexModels.includes(option.value)), 'Agent slicer allows observed model tuples only');
+    await change('host-filter', ''); await until(ready);
+    for (const value of ['unknown', JSON.stringify([payload.filterOptions.agentModelPairs.find(pair => pair.model !== null).model.provider, payload.filterOptions.agentModelPairs.find(pair => pair.model !== null).model.id])]) {
+      await change('model-filter', value); await until(ready);
+      const scoped = await fetch(new URL('/api/dashboard?model=' + encodeURIComponent(value), rich.url)).then(result => result.json());
+      assert.equal(await evaluate('document.querySelector(".metric-value").textContent'), scoped.report.counts.successfulReads.toLocaleString('en-US'));
+      assert.equal(await evaluate('document.getElementById("model-filter").value'), value, 'Atomic model selection survives response');
+      const matchingPaths = scoped.report.routes.filter(route => route.steps.some(step => step.kind === 'observations' && step.items.length)).length;
+      assert.equal(await evaluate('document.querySelectorAll(".metric-value")[2].textContent'), matchingPaths.toLocaleString('en-US'), 'Explicit model path total excludes contexts without matching evidence');
+      await click('[data-workspace=paths]'); assert.equal(Number((await evaluate('document.getElementById("route-count").textContent')).split(' ')[0].replaceAll(',', '')), matchingPaths); await click('[data-workspace=metrics]');
+      assert.match(await evaluate('document.getElementById("scope-summary").textContent'), /Model:/);
+      await click('#refresh-data'); await until(ready); assert.equal(await evaluate('document.getElementById("model-filter").value'), value);
+      await change('model-filter', ''); await until(ready);
     }
-    await command('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1100, deviceScaleFactor: 1, mobile: false });
-
-    await evaluate('document.querySelector("[data-workspace=models]").focus()');
-    assert.equal(await evaluate('document.activeElement.dataset.workspace'), "models");
-    await command("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
-    await command("Input.dispatchKeyEvent", { type: "char", key: "Enter", text: "\r", unmodifiedText: "\r" });
-    await command("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
-    assert.equal(await evaluate('document.getElementById("models-workspace").hidden'), false, "Keyboard workspace navigation");
-    assert.ok(await evaluate('getComputedStyle(document.activeElement).outlineStyle !== "none"'), "Visible keyboard focus");
-    assert.ok(await evaluate('document.querySelectorAll("#model-matrix .heat-0").length > 0'), "Zeros remain visible in the model matrix");
-    const matrixCounts = await evaluate('Array.from(document.querySelectorAll("#model-matrix tbody tr"), row => ({ name: row.querySelector("th").textContent, counts: Array.from(row.querySelectorAll("td"), cell => Number(cell.textContent.replaceAll(",", ""))) }))');
-    for (const row of matrixCounts) {
-      const group = payload.report.skillGroups.find(group => group.name === row.name);
-      assert.deepEqual(row.counts, payload.report.models.map(column => group.models.find(entry => JSON.stringify(entry.model) === JSON.stringify(column.model))?.successfulReads ?? 0));
-    }
-    await click('#model-matrix tbody tr button');
-    await click('#skill-detail summary');
-    assert.ok((await evaluate('document.getElementById("skill-detail").textContent')).includes("Files with the same skill name can have different content"));
-    assert.match(await evaluate('document.querySelector("#skill-detail summary").textContent'), /Files and requests · \d+ entr/);
-    assert.match(await evaluate('document.getElementById("models-workspace").textContent'), /Skills are grouped by name/);
-    await screenshot(join(directory, "models-desktop.png"));
-    await change("model-measure", "failedReads");
-    assert.match(await evaluate('document.querySelector("#model-matrix caption").textContent'), /failures/);
-
-    await click('[data-workspace=overview]');
+    const retainedModel = JSON.stringify([payload.filterOptions.agentModelPairs.find(pair => pair.model !== null).model.provider, payload.filterOptions.agentModelPairs.find(pair => pair.model !== null).model.id]);
+    await change('model-filter', retainedModel); await until(ready);
+    await change('time-preset', 'custom'); await change('from-filter', '2020-01-01T00:00'); await change('to-filter', '2020-01-02T00:00'); await click('#filter-form button[type=submit]'); await until(ready);
+    assert.equal(await evaluate('document.getElementById("model-filter").value'), retainedModel, 'A currently unavailable model is retained');
+    assert.ok(await evaluate('document.querySelector("#model-filter option:checked").disabled'));
+    assert.match(await evaluate('document.querySelector("#model-filter option:checked").textContent'), /unavailable/);
+    assert.doesNotMatch(await evaluate('document.querySelector("#model-filter option:checked").textContent'), /^\[/, 'Retained model keeps a readable provider/model label');
+    await change('model-filter', ''); await until(ready); assert.equal(await evaluate('document.getElementById("model-filter").value'), '', 'All models can recover an unavailable selection');
+    await click('#reset-filters'); await until(ready); await change('time-preset', 'all'); await until(ready);
+    await change('project-filter', payload.filterOptions.projects[0]); await evaluate('document.getElementById("filter-form").requestSubmit()'); await until(ready);
+    await change('host-filter', 'pi'); await until(ready); assert.equal(await evaluate('document.getElementById("project-filter").value'), payload.filterOptions.projects[0], 'Agent changes preserve the project');
+    await click('#reset-filters'); await until(ready); await change('time-preset', 'all'); await until(ready);
+    await change('model-filter', 'unknown'); await until(ready); await change('metric-measure', 'requests'); await change('metric-split', 'agent-model');
+    assert.equal(await evaluate('document.querySelectorAll("#skill-table table").length'), 0, 'No zero-column matrix for a measure without model attribution');
+    assert.match(await evaluate('document.getElementById("activity-chart").textContent'), /Requests have no model attribution/);
+    await click('#activity-chart button'); await until(ready); assert.equal(await evaluate('document.getElementById("model-filter").value'), '');
+    await change('metric-display', 'count'); await change('metric-measure', 'successfulReads'); await change('metric-split', 'model');
+    await click('#skill-table tbody tr button'); await click('#skill-detail summary');
+    assert.match(await evaluate('document.getElementById("skill-detail").textContent'), /Files with the same skill name can have different content/);
+    for (const [width, height] of [[390,844],[320,700]]) { await command('Emulation.setDeviceMetricsOverride', {width,height,deviceScaleFactor:1,mobile:true}); await noOverflow(); await screenshot(join(directory, 'metrics-models-' + width + '.png')); }
+    await command('Emulation.setDeviceMetricsOverride', {width:1440,height:1100,deviceScaleFactor:1,mobile:false});
+    await change('metric-split', 'skill');
+    await click('[data-workspace=metrics]');
     await click('#catalog-context summary');
     await input("catalog-search", "<script>");
     assert.ok((await evaluate('document.getElementById("catalog-list").textContent')).includes("<script>synthetic</script>"));
     assert.equal(await evaluate('document.querySelectorAll("#dashboard-content script").length'), 0);
     await click('#catalog-list button.link');
     assert.ok((await evaluate('document.getElementById("skill-detail").textContent')).includes("0 reads · 0 failures · 0 requests · 0 wrappers"));
-    await click('[data-workspace=overview]');
+    await click('[data-workspace=metrics]');
     const selectedSkill = await evaluate('document.querySelector("#skill-table button.link").textContent');
     await click('#skill-table button.link');
     assert.match(await evaluate('document.getElementById("explore-chips").textContent'), /Skill:/);
@@ -707,7 +684,8 @@ try {
     await click('.route-choice');
     assert.equal(await evaluate('document.activeElement.id'), "chain-view");
 
-    await click('[data-workspace=overview]');
+    await click('[data-workspace=metrics]');
+    await evaluate('document.getElementById("read-patterns").open = true');
     await click('#relationship-view button.link');
     assert.equal(await evaluate('document.getElementById("paths-workspace").hidden'), false);
     assert.ok(await evaluate('document.querySelectorAll(".timeline-step.supporting").length > 0'));
@@ -774,8 +752,7 @@ try {
     await change('machine-filter', payload.filterOptions.machines[0]);
     await until(ready);
     await change('source-filter', 'rpc');
-    await change('model-provider-filter', payload.filterOptions.modelProviders[0]);
-    await change('model-id-filter', payload.filterOptions.modelIds[0]);
+    await change('model-filter', JSON.stringify([payload.filterOptions.agentModelPairs.find(pair => pair.model !== null).model.provider, payload.filterOptions.agentModelPairs.find(pair => pair.model !== null).model.id])); await until(ready);
     await change('from-filter', '2025-02-01T01:23');
     await change('to-filter', '2025-02-21T04:56');
     await click('#filter-form button[type=submit]');
@@ -783,8 +760,7 @@ try {
     const activeSummary = await evaluate('document.getElementById("scope-summary").textContent');
     assert.ok(activeSummary.includes('Machine: ' + payload.filterOptions.machines[0]));
     assert.ok(activeSummary.includes('RPC requests'));
-    assert.ok(activeSummary.includes('Model provider: ' + payload.filterOptions.modelProviders[0]));
-    assert.ok(activeSummary.includes('Model: ' + payload.filterOptions.modelIds[0]));
+    assert.ok(activeSummary.includes('Model: '));
     assert.doesNotMatch(activeSummary, /All time|All projects|All machines/);
     await noOverflow();
     await screenshot(join(directory, 'filters-mobile.png'));
@@ -792,7 +768,7 @@ try {
     await until(ready);
     await change('time-preset', 'all'); await until(ready);
     await helpFromEveryTab();
-    await click('[data-workspace=overview]');
+    await click('[data-workspace=metrics]');
     await click('#activity-chart > details > summary'); await until('document.querySelectorAll(".activity-choice").length > 0'); await click('#activity-chart > details > summary');
     await noOverflow();
     await screenshot(join(directory, "overview-mobile.png"));
@@ -823,13 +799,14 @@ try {
     await noOverflow();
     await screenshot(join(directory, 'comparison-mobile.png'));
     await click('#clear-explorer');
-    await click('[data-workspace=models]');
+    await click('[data-workspace=metrics]'); await change('metric-split', 'model');
     await noOverflow();
     await screenshot(join(directory, "models-mobile.png"));
-    const scrolledMatrix = await evaluate('(() => { const matrix = document.getElementById("model-matrix"); matrix.scrollLeft = 200; return { scroll: matrix.scrollLeft, labelLeft: document.querySelector("#model-matrix .matrix th").getBoundingClientRect().left, matrixLeft: matrix.getBoundingClientRect().left }; })()');
+    const scrolledMatrix = await evaluate('(() => { const matrix = document.getElementById("skill-table"); matrix.scrollLeft = 200; return { scroll: matrix.scrollLeft, labelLeft: document.querySelector("#skill-table .matrix th").getBoundingClientRect().left, matrixLeft: matrix.getBoundingClientRect().left }; })()');
     assert.ok(scrolledMatrix.scroll > 0);
     assert.equal(scrolledMatrix.labelLeft, scrolledMatrix.matrixLeft, 'Skill labels remain visible when model columns scroll');
     await screenshot(join(directory, "models-mobile-scroll.png"));
+    await change('metric-split', 'skill');
     await click('[data-workspace=paths]');
     assert.ok(await evaluate('document.getElementById("route-list").clientHeight <= 320'), 'Mobile route list stays bounded above detail');
     await noOverflow();
@@ -837,7 +814,7 @@ try {
 
     await evaluate('(async () => { window.smokeFetch = window.fetch; window.smokePayload = await window.fetch("/api/dashboard").then(response => response.json()); })()');
     await evaluate(`window.fetch = async () => new Response(JSON.stringify(${JSON.stringify(manySkillsPayload)})); document.getElementById('refresh-data').click();`);
-    await until(ready); await click('[data-workspace=overview]');
+    await until(ready); await click('[data-workspace=metrics]');
     await evaluate('document.querySelector(".trend-chooser summary").focus()'); await enter();
     await until('document.activeElement.type === "search"');
     await evaluate('document.activeElement.value = "chooser-"; document.activeElement.dispatchEvent(new Event("input", { bubbles: true }))');
@@ -871,7 +848,7 @@ try {
     await change('time-preset', 'all'); await until(ready);
     await evaluate(`window.fetch = async () => new Response(JSON.stringify(${JSON.stringify(repeatedPayload)})); document.getElementById('refresh-data').click();`);
     await until(ready);
-    await click('[data-workspace=overview]');
+    await click('[data-workspace=metrics]');
     await evaluate('Array.from(document.querySelectorAll("#skill-table button.link")).find(item => item.textContent === "mako").click()');
     await click('#activity-chart > details > summary');
     await evaluate('document.querySelector("#activity-chart .trend-plot").focus()'); await key('End'); await enter();
@@ -915,18 +892,25 @@ try {
     await until(ready);
     await evaluate(`window.fetch = async () => new Response(JSON.stringify(${JSON.stringify(mixedPayload)})); document.getElementById('refresh-data').click();`);
     await until(ready);
-    await click('[data-workspace=overview]');
+    await click('[data-workspace=metrics]');
     await evaluate('Array.from(document.querySelectorAll("#skill-table button.link")).find(item => item.textContent === "mako").click()');
     assert.match(await evaluate('document.getElementById("explore-chips").textContent'), /Skill: mako/);
     await click('#explore-all-paths');
     await change('route-model', String(payload.report.models.findIndex(column => JSON.stringify(column.model) === JSON.stringify(comparisonModel))));
     assert.equal(await evaluate('document.getElementById("route-count").textContent'), '0 paths', 'Model and explored skill must be the same read');
-    await click('[data-workspace=models]');
-    await change('model-measure', 'successfulReads');
+    await click('[data-workspace=metrics]');
+    await click('#clear-explorer'); await change('metric-split', 'model'); await change('metric-measure', 'successfulReads');
+    const nonzeroLabel = `mako, ${payload.report.models[0].model.provider} / ${payload.report.models[0].model.id}: `;
+    await evaluate(`Array.from(document.querySelectorAll('#skill-table button')).find(button => button.getAttribute('aria-label')?.startsWith(${JSON.stringify(nonzeroLabel)}) && button.textContent !== '0').click()`);
+    await click('#skill-detail > .section-heading button');
+    assert.equal(await evaluate('document.getElementById("route-count").textContent'), '1 path');
+    await change('route-model', String(mixedPayload.report.models.findIndex(column => JSON.stringify(column.model) === JSON.stringify(comparisonModel))));
+    assert.equal(await evaluate('document.getElementById("route-count").textContent'), '0 paths', 'A nonzero metric drilldown rejects an unrelated skill/model read in the same path');
+    await click('#clear-path-focus'); await click('[data-workspace=metrics]');
     const zeroLabel = `mako, ${comparisonModel.provider} / ${comparisonModel.id}: 0 successful reads`;
-    await evaluate(`Array.from(document.querySelectorAll('#model-matrix button')).find(button => button.getAttribute('aria-label') === ${JSON.stringify(zeroLabel)}).click();`);
+    await evaluate(`Array.from(document.querySelectorAll('#skill-table button')).find(button => button.getAttribute('aria-label') === ${JSON.stringify(zeroLabel)}).click();`);
     assert.equal(await evaluate('document.activeElement.id'), 'skill-detail');
-    await change('model-measure', 'failedReads');
+    await change('metric-measure', 'failedReads');
     assert.ok((await evaluate('document.getElementById("skill-detail").textContent')).includes(comparisonModel.id), 'Model selection survives a detail rerender');
     await click('#skill-detail > .section-heading button');
     assert.equal(await evaluate('document.getElementById("route-count").textContent'), '0 paths', 'Model and skill must match the same read, not unrelated reads in the same path');
@@ -941,9 +925,23 @@ try {
     assert.equal(await evaluate('document.getElementById("chain-view").hidden'), true);
     await noZeroPagers();
     await click('#clear-path-focus');
-    await click('[data-workspace=overview]');
+    await click('[data-workspace=metrics]'); await change('metric-measure', 'successfulReads'); await change('metric-split', 'skill');
+    await evaluate(`window.fetch = async () => new Response(JSON.stringify(${JSON.stringify(invocationModelsPayload)})); document.getElementById('refresh-data').click();`); await until(ready);
+    for (const [measure, skill, provider, id] of [['invocations','how','native-provider','invocation-only'], ['readAttempts','mako','attempt-provider','attempt-only']]) {
+      await change('metric-measure', measure); await change('metric-split', 'model');
+      await click('#skill-table tbody tr td button'); await click('#skill-detail > .section-heading button');
+      const index = await evaluate(`Array.from(document.querySelectorAll('#route-model option')).find(option => option.textContent === ${JSON.stringify(provider+' / '+id)}).value`);
+      await change('route-model', index); assert.equal(await evaluate('document.getElementById("route-count").textContent'), '1 path', 'Invocation/attempt-only model remains available and matches the selected evidence');
+      const otherIndex = await evaluate(`Array.from(document.querySelectorAll('#route-model option')).find(option => option.textContent === ${JSON.stringify(comparisonModel.provider+' / '+comparisonModel.id)}).value`);
+      await change('route-model', otherIndex); assert.equal(await evaluate('document.getElementById("route-count").textContent'), '0 paths', 'Other model evidence cannot satisfy the metric drilldown');
+      await click('#clear-path-focus'); await click('[data-workspace=metrics]');
+    }
+    await change('metric-measure', 'successfulReads'); await change('metric-split', 'skill'); await click('#skill-table button.link'); await click('#explore-all-paths');
+    const nativeIndex = await evaluate('Array.from(document.querySelectorAll("#route-model option")).find(option => option.textContent === "native-provider / invocation-only").value');
+    await change('route-model', nativeIndex); assert.equal(await evaluate('document.getElementById("route-count").textContent'), '0 paths', 'Successful-read exploration excludes same-skill native invocations');
+    await click('#clear-path-focus'); await click('[data-workspace=metrics]'); await click('#clear-explorer');
     await input('skill-search', 'no-such-skill');
-    assert.match(await evaluate('document.getElementById("skill-table").textContent'), /No successful reads match this search/);
+    assert.match(await evaluate('document.getElementById("skill-table").textContent'), /No skills match this search/);
     await click('#skill-table button.link');
     assert.equal(await evaluate('document.getElementById("catalog-context").open'), true);
     await input('catalog-search', 'no-such-catalog-entry');
@@ -980,9 +978,9 @@ try {
     measurements.largeRenderedNodes = await evaluate('document.querySelectorAll("*").length');
     assert.ok(measurements.largeRenderedNodes < 3000, "Rendering stays bounded for 1,110 paths");
     assert.equal(await evaluate('document.querySelectorAll(".route-choice").length'), 8);
-    await evaluate('window.smokeLongPayload = structuredClone(window.smokePayload); const group = window.smokeLongPayload.report.skillGroups[0]; group.name = "long-skill-".repeat(30) + "<img src=x onerror=alert(1)>"; for (const skill of window.smokeLongPayload.report.skills) { if (group.skillKeys.includes(skill.key)) skill.identity.name = group.name; } window.fetch = async () => new Response(JSON.stringify(window.smokeLongPayload)); document.getElementById("refresh-data").click();');
+    await evaluate('window.smokeLongPayload = structuredClone(window.smokePayload); const group = window.smokeLongPayload.report.skillGroups[0]; group.name = "long-skill-".repeat(30) + "<img src=x onerror=alert(1)>"; for (const skill of window.smokeLongPayload.report.skills) { if (group.skillKeys.includes(skill.key)) skill.identity.name = group.name; } for (const route of window.smokeLongPayload.report.routes) for (const step of route.steps) if (step.kind === "observations") for (const item of step.items) if (group.skillKeys.includes(item.skillKey)) { if ("skill" in item.evidence) item.evidence.skill.name = group.name; else if ("skillName" in item.evidence) item.evidence.skillName = group.name; } window.fetch = async () => new Response(JSON.stringify(window.smokeLongPayload)); document.getElementById("refresh-data").click();');
     await until(ready);
-    await click('[data-workspace=overview]');
+    await click('[data-workspace=metrics]');
     await noOverflow();
     await click('#skill-table button.link');
     await noOverflow();
@@ -1029,9 +1027,9 @@ try {
       await click('#message-panel button');
       await until(ready);
     }
-    await click('[data-workspace=models]');
-    await input('model-search', 'no-such-skill');
-    assert.match(await evaluate('document.getElementById("model-matrix").textContent'), /No reads match this search/);
+    await click('[data-workspace=metrics]'); await change('metric-measure', 'successfulReads'); await change('metric-split', 'skill');
+    await input('skill-search', 'no-such-skill');
+    assert.match(await evaluate('document.getElementById("skill-table").textContent'), /No skills match this search/);
     assert.equal(await evaluate('document.getElementById("skill-detail").hidden'), true, 'No impossible skill selection placeholder');
     await noZeroPagers();
 
@@ -1052,16 +1050,15 @@ try {
     assert.equal(await evaluate('document.getElementById("chain-view").hidden'), true);
     assert.equal(await evaluate('document.querySelectorAll("#skill-table button").length'), 0, 'No link to an empty catalog');
     await noZeroPagers();
-    await click('[data-workspace=models]');
+    await click('[data-workspace=metrics]');
     await noOverflow();
-    await click('[data-workspace=agents]');
-    assert.equal(await evaluate('document.getElementById("agent-summary").textContent'), 'No skill uses recorded yet.');
-    assert.equal(await evaluate('document.getElementById("agent-activity-panel").hidden && document.getElementById("agent-skills-panel").hidden'), true, 'Empty data shows one message, not three');
+    await change('metric-measure', 'uses'); await change('metric-split', 'agent');
+    assert.match(await evaluate('document.getElementById("skill-table").textContent'), /No skill uses recorded yet/);
     await noOverflow(); await screenshot(join(directory, 'agents-empty-mobile.png'));
     await click('[data-workspace=paths]');
     assert.match(await evaluate('document.getElementById("route-list").textContent'), /No paths recorded yet/);
     await noOverflow();
-    await click('[data-workspace=overview]');
+    await click('[data-workspace=metrics]');
     await screenshot(join(directory, "empty-mobile.png"));
     await command("Page.navigate", { url: missing.url });
     await until('document.getElementById("status-text")?.textContent === "No database"');

@@ -78,15 +78,11 @@ export function buildAgentComparison(chains: SkillChainView): AgentComparison {
   };
 }
 
-export function agentSkillName(name: string): string {
-  return name.slice(name.lastIndexOf(":") + 1) || name;
-}
-
 function skillUse(evidence: ChainObservation["evidence"]): Readonly<{ kind: UseKind; name: string }> | null {
   switch (evidence.kind) {
-    case "read-result": return { kind: evidence.outcome === "success" ? "reads" : "failures", name: agentSkillName(evidence.skill.name) };
-    case "skill-invocation": return { kind: evidence.outcome === "success" ? "invocations" : "failures", name: agentSkillName(evidence.skill.name) };
-    case "read-attempt": return { kind: "attempts", name: agentSkillName(evidence.skill.name) };
+    case "read-result": return { kind: evidence.outcome === "success" ? "reads" : "failures", name: evidence.skill.name };
+    case "skill-invocation": return { kind: evidence.outcome === "success" ? "invocations" : "failures", name: evidence.skill.name };
+    case "read-attempt": return { kind: "attempts", name: evidence.skill.name };
     case "command-intent":
     case "wrapper-observed": return null;
     default: {

@@ -211,6 +211,8 @@ function parseDashboardParams(params: URLSearchParams): { filter: DashboardFilte
   if (machineId !== null) filter.machineId = parseMachineId(machineId);
   const projectCwd = nonEmptyParam(params, "projectCwd");
   const source = nonEmptyParam(params, "source");
+  const model = params.get("model");
+  if (model !== null && model !== "") filter.modelSelection = parseModelSelection(model);
   const modelProvider = nonEmptyParam(params, "modelProvider");
   const modelId = nonEmptyParam(params, "modelId");
   const fromObservedAt = nonEmptyParam(params, "fromObservedAt");
@@ -226,6 +228,15 @@ function parseDashboardParams(params: URLSearchParams): { filter: DashboardFilte
     throw new Error("fromObservedAt must not be after toObservedAt");
   }
   return { filter, chainSkillName: nonEmptyParam(params, "chainSkill") };
+}
+
+function parseModelSelection(value: string): NonNullable<DashboardFilter["modelSelection"]> {
+  if (value === "unknown") return { kind: "unknown" };
+  let tuple: unknown;
+  try { tuple = JSON.parse(value); } catch { throw new Error("model must be unknown or a provider/model JSON pair"); }
+  if (!Array.isArray(tuple) || tuple.length !== 2 || typeof tuple[0] !== "string" || typeof tuple[1] !== "string"
+    || tuple[0].trim().length === 0 || tuple[1].trim().length === 0) throw new Error("model must be unknown or a provider/model JSON pair");
+  return { kind: "known", model: { provider: tuple[0], id: tuple[1] } };
 }
 
 function parseObservedAt(value: string, name: string): string {
@@ -296,7 +307,7 @@ function sum(values: readonly number[]): number {
 }
 
 function emptyFilterOptions(): FilterOptions {
-  return { hosts: [], machines: [], projects: [], modelProviders: [], modelIds: [], timeRange: { firstObservedAt: null, lastObservedAt: null } };
+  return { hosts: [], machines: [], projects: [], agentModelPairs: [], modelProviders: [], modelIds: [], timeRange: { firstObservedAt: null, lastObservedAt: null } };
 }
 
 function setSecurityHeaders(response: ServerResponse): void {
