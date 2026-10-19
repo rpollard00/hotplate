@@ -61,6 +61,7 @@ try {
   assert.equal(payload.resources.rows.filter(row => row.observation === "unknown").length, 2);
   await withBrowser(async ({ command, evaluate, until, screenshot, errors }) => {
     const ready = 'document.getElementById("status-text").textContent === "Ready"';
+    const resourcesReady = ready + ' && !document.getElementById("resources-workspace").hidden';
     const click = selector => evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);
     const change = (id, value, event = "change") => evaluate(`document.getElementById(${JSON.stringify(id)}).value = ${JSON.stringify(value)}; document.getElementById(${JSON.stringify(id)}).dispatchEvent(new Event(${JSON.stringify(event)}));`);
     const noOverflow = async () => assert.ok(await evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1"), "No page overflow");
@@ -71,7 +72,7 @@ try {
     await command("Emulation.setDeviceMetricsOverride", { width: 1280, height: 960, deviceScaleFactor: 1, mobile: false });
     await command("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
     await command("Page.navigate", { url: rich.url + "/?preview=1" });
-    await until(ready); await change("time-preset", "all"); await until(ready); await click('[data-workspace="resources"]');
+    await until(ready); await change("time-preset", "all"); await until(ready); await click('[data-workspace="resources"]'); await until(resourcesReady);
     assert.equal(await evaluate('document.querySelectorAll("#resource-table tbody tr").length'), 25);
     assert.match(await evaluate('document.getElementById("resource-summary").textContent'), /33 files.*29 with no observed agent access.*2 unknown/);
     assert.ok((await evaluate('document.getElementById("resource-table").textContent')).includes("<script>literal</script>"));
@@ -112,7 +113,7 @@ try {
     await click("#resource-table button");
     assert.equal(await evaluate('document.getElementById("resource-search").value'), "");
     await noOverflow(); await screenshot(join(directory, "resources-mobile.png"));
-    await command("Page.navigate", { url: empty.url }); await until(ready); await click('[data-workspace="resources"]');
+    await command("Page.navigate", { url: empty.url }); await until(ready); await click('[data-workspace="resources"]'); await until(resourcesReady);
     assert.match(await evaluate('document.getElementById("resource-table").textContent'), /No resource inventory or access has been recorded/);
     assert.equal(await evaluate('document.getElementById("resource-controls").hidden'), true);
     await noOverflow(); await screenshot(join(directory, "resources-empty-mobile.png"));
