@@ -40,11 +40,12 @@ import type {
   SkillTableView,
 } from "./domain.js";
 
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 export const MAX_DYNAMIC_SOURCES = 10_000;
 export const ENROLLMENTS_PER_MINUTE = 30;
 const DEFAULT_BUSY_TIMEOUT_MS = 25;
 const DEFAULT_BUSY_RETRIES = 3;
+const STATISTICS_INTERVAL_MS = 60 * 60 * 1000;
 
 type SqlValue = string | number | bigint | null;
 
@@ -695,6 +696,7 @@ class IngestConflict extends Error {
 class SqliteAggregateStore implements AggregateStore {
   #closed = false;
   #registrations: number[] = [];
+  readonly #statisticsTimer: NodeJS.Timeout;
   constructor(readonly db: DatabaseSync, readonly staticRegistrations: readonly StaticRegistration[]) {
     for (const entry of staticRegistrations) {
       validateNetworkIdentity(entry.source);
@@ -703,6 +705,8 @@ class SqliteAggregateStore implements AggregateStore {
       if (db.prepare("SELECT 1 FROM observations WHERE source_id = ? AND machine_id != ? UNION SELECT 1 FROM catalog_skills WHERE source_id = ? AND machine_id != ?")
         .get(entry.source.sourceId, entry.source.machineId, entry.source.sourceId, entry.source.machineId)) throw new Error("Static and historical identities conflict");
     }
+    this.#maintainStatistics();
+    this.#statisticsTimer = setInterval(() => this.#maintainStatistics(), STATISTICS_INTERVAL_MS).unref();
   }
 
   authenticate(tokenDigest: TokenDigest): SourceIdentity | undefined {
@@ -744,11 +748,15 @@ class SqliteAggregateStore implements AggregateStore {
         let accepted = 0;
         let duplicate = 0;
         const conflicts: string[] = [];
-        const existing = this.db.prepare(`SELECT id, digest FROM observations WHERE machine_id = ? AND source_id = ?
-          AND (id = ? OR (producer_id = ? AND sequence = ?))`);
+        const existingId = this.db.prepare(`SELECT id, digest FROM observations
+          WHERE machine_id = ? AND source_id = ? AND id = ?`);
+        const existingSequence = this.db.prepare(`SELECT id, digest FROM observations
+          WHERE machine_id = ? AND source_id = ? AND producer_id = ? AND sequence = ? LIMIT 2`);
         for (const observation of observations) {
           const digest = createHash("sha256").update(JSON.stringify([source.machineId, source.sourceId, serializeObservation(observation)])).digest("hex");
-          const matches = existing.all(source.machineId, source.sourceId, observation.id, observation.producerId, observation.sequence);
+          const byId = existingId.get(source.machineId, source.sourceId, observation.id);
+          const matches = existingSequence.all(source.machineId, source.sourceId, observation.producerId, observation.sequence);
+          if (byId && !matches.some(match => match.id === byId.id)) matches.push(byId);
           if (matches.length > 0) {
             if (matches.length === 1 && matches[0]?.id === observation.id && matches[0]?.digest === digest) duplicate += 1;
             else conflicts.push(observation.id);
@@ -766,7 +774,19 @@ class SqliteAggregateStore implements AggregateStore {
     }
   }
 
-  async close(): Promise<void> { if (!this.#closed) { this.#closed = true; this.db.close(); } }
+  async close(): Promise<void> {
+    if (this.#closed) return;
+    this.#closed = true;
+    clearInterval(this.#statisticsTimer);
+    this.db.close();
+  }
+
+  #maintainStatistics(): void {
+    try { this.db.exec("PRAGMA optimize = 0x10012"); }
+    catch (error) {
+      if (!isBusyError(error)) process.emitWarning("Hotplate planner statistics maintenance failed", { code: "HOTPLATE_STATISTICS_MAINTENANCE" });
+    }
+  }
 }
 
 async function retryTransaction<T>(db: DatabaseSync, operation: () => T, signal?: AbortSignal): Promise<T> {
@@ -970,17 +990,21 @@ function migrate(db: DatabaseSync, busyRetries: number): void {
       db.exec("ALTER TABLE catalog_skills RENAME TO catalog_previous");
       db.exec(`CREATE TABLE catalog_skills (host TEXT NOT NULL, machine_id TEXT NOT NULL, source_id TEXT NOT NULL, project_cwd TEXT NOT NULL, skill_name TEXT NOT NULL, skill_path TEXT NOT NULL, skill_version TEXT, first_observed_at TEXT NOT NULL, last_observed_at TEXT NOT NULL, PRIMARY KEY(host, machine_id, source_id, project_cwd, skill_name, skill_path)) STRICT; INSERT INTO catalog_skills SELECT 'unknown', * FROM catalog_previous; DROP TABLE catalog_previous; CREATE TABLE native_receipts (id TEXT PRIMARY KEY, digest TEXT NOT NULL) STRICT;`);
     }
-    const resourceSchema = requireString(db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'observations'").get()?.sql, "observation schema");
-    db.exec("ALTER TABLE observations RENAME TO observations_previous");
-    db.exec(resourceSchema.replace("'read-result',", "'read-result', 'resource-access', 'inventory-snapshot', 'observer-coverage',"));
-    db.exec(`INSERT INTO observations SELECT * FROM observations_previous; DROP TABLE observations_previous;
-      CREATE UNIQUE INDEX aggregate_sequence_idx ON observations(machine_id, source_id, producer_id, sequence) WHERE digest IS NOT NULL;
-      CREATE INDEX observations_time_idx ON observations(observed_at);
-      CREATE INDEX observations_scope_idx ON observations(host, machine_id, source_id, project_cwd, session_id, segment_id, run_id, observed_at);
-      CREATE INDEX observations_skill_idx ON observations(host, machine_id, source_id, skill_name, skill_path, evidence_kind);
-      CREATE INDEX observations_model_idx ON observations(host, machine_id, model_provider, model_id, evidence_kind);
-      CREATE INDEX observations_source_idx ON observations(source, evidence_kind);`);
-    createResourceSchema(db);
+    if (version < 5) {
+      const resourceSchema = requireString(db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'observations'").get()?.sql, "observation schema");
+      db.exec("ALTER TABLE observations RENAME TO observations_previous");
+      db.exec(resourceSchema.replace("'read-result',", "'read-result', 'resource-access', 'inventory-snapshot', 'observer-coverage',"));
+      db.exec(`INSERT INTO observations SELECT * FROM observations_previous; DROP TABLE observations_previous;
+        CREATE UNIQUE INDEX aggregate_sequence_idx ON observations(machine_id, source_id, producer_id, sequence) WHERE digest IS NOT NULL;
+        CREATE INDEX observations_time_idx ON observations(observed_at);
+        CREATE INDEX observations_scope_idx ON observations(host, machine_id, source_id, project_cwd, session_id, segment_id, run_id, observed_at);
+        CREATE INDEX observations_skill_idx ON observations(host, machine_id, source_id, skill_name, skill_path, evidence_kind);
+        CREATE INDEX observations_model_idx ON observations(host, machine_id, model_provider, model_id, evidence_kind);
+        CREATE INDEX observations_source_idx ON observations(source, evidence_kind);`);
+      createResourceSchema(db);
+    }
+    db.exec(`CREATE INDEX observations_sequence_lookup_idx ON observations(machine_id, source_id, producer_id, sequence);
+      CREATE INDEX observations_evidence_time_idx ON observations(evidence_kind, observed_at);`);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}; COMMIT;`);
   } catch (error) {
     rollbackBestEffort(db);

@@ -3,11 +3,12 @@ import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, constants } from "node:sqlite";
 import { test, type TestContext } from "node:test";
 import type { Observation } from "../src/domain.js";
+import { ingestTokenDigest } from "../src/network-protocol.js";
 import { parseCollectorOrigin, parseMachineId, parseSourceId } from "../src/observation.js";
-import { openAggregateStore, openCaptureStore, openHotplateReadStore } from "../src/store.js";
+import { openAggregateStore, openCaptureStore, openHotplateReadStore, openRelayStore } from "../src/store.js";
 
 const source = { machineId: parseMachineId("machine-a"), sourceId: parseSourceId("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa") };
 const enrollment = { sourceId: source.sourceId, collectorOrigin: parseCollectorOrigin("https://hotplate.lan") };
@@ -147,11 +148,12 @@ test("populated v5 upgrades preserve resource tables, enrollment, outbox and rec
   assert.deepEqual(storedState(db), before);
 });
 
-test("read-only opens do not migrate v5 or update current planner statistics", async t => {
+test("dashboard and relay opens require a writer upgrade without mutating v5 data", async t => {
   const databasePath = await database(t);
   await populatedV5(databasePath);
   const before = await readFile(databasePath);
   assert.throws(() => openHotplateReadStore({ databasePath }), /requires an upgrade/u);
+  assert.throws(() => openRelayStore({ databasePath, enrollment }), /requires an upgrade/u);
   assert.deepEqual(await readFile(databasePath), before);
   const capture = openCaptureStore({ databasePath, enrollment });
   await capture.close();
@@ -161,6 +163,13 @@ test("read-only opens do not migrate v5 or update current planner statistics", a
   if (read.kind === "ready") {
     assert.equal((await read.store.queryOverview({})).observationCount, 2);
     await read.store.close();
+  }
+  const relay = openRelayStore({ databasePath, enrollment });
+  assert.equal(relay.kind, "ready");
+  if (relay.kind === "ready") {
+    assert.equal((await relay.store.queryStatus()).pendingCount, 2);
+    assert.equal((await relay.store.selectPending({ maxCount: 100, maxPayloadBytes: 1024 * 1024 })).length, 2);
+    await relay.store.close();
   }
   assert.deepEqual(await readFile(databasePath), upgraded);
   const db = new DatabaseSync(databasePath, { readOnly: true });
@@ -206,4 +215,120 @@ test("concurrent writers upgrade populated v5 once", async t => {
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM resource_events").get()?.n, 1);
     assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
   } finally { db.close(); }
+});
+
+test("aggregate maintains planner statistics at startup and hourly outside transactions", async t => {
+  const databasePath = await database(t);
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const transactions: boolean[] = [];
+  const exec = DatabaseSync.prototype.exec;
+  t.mock.method(DatabaseSync.prototype, "exec", function(this: DatabaseSync, sql: string) {
+    if (sql === "PRAGMA optimize = 0x10012") transactions.push(this.isTransaction);
+    return exec.call(this, sql);
+  });
+  const initial = openAggregateStore({ databasePath });
+  assert.deepEqual(await initial.ingest({ source, observations: [observation("one", 1), observation("two", 2), observation("three", 3)] }),
+    { kind: "committed", accepted: 3, duplicate: 0 });
+  await initial.close();
+  const aggregate = openAggregateStore({ databasePath });
+  t.after(() => aggregate.close());
+  const db = new DatabaseSync(databasePath, { readOnly: true });
+  t.after(() => db.close());
+  const estimatedRows = () => Number(String(db.prepare("SELECT stat FROM sqlite_stat1 WHERE idx = 'observations_evidence_time_idx'").get()?.stat).split(" ")[0]);
+  assert.equal(estimatedRows(), 3);
+  const batch = Array.from({ length: 300 }, (_, index) => observation(`growth-${index}`, index + 4));
+  assert.deepEqual(await aggregate.ingest({ source, observations: batch }), { kind: "committed", accepted: 300, duplicate: 0 });
+  t.mock.timers.tick(3_599_999);
+  assert.equal(estimatedRows(), 3);
+  t.mock.timers.tick(1);
+  assert.equal(estimatedRows(), 303);
+  assert.deepEqual(transactions, [false, false, false]);
+  await aggregate.close();
+  await aggregate.close();
+  t.mock.timers.tick(7_200_000);
+  assert.deepEqual(transactions, [false, false, false]);
+});
+
+test("planner maintenance defers busy writes and later updates statistics", async t => {
+  const databasePath = await database(t);
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const warnings = t.mock.method(process, "emitWarning", () => {});
+  const aggregate = openAggregateStore({ databasePath });
+  t.after(() => aggregate.close());
+  const input = observation("accepted");
+  assert.deepEqual(await aggregate.ingest({ source, observations: [input] }), { kind: "committed", accepted: 1, duplicate: 0 });
+  const lock = new DatabaseSync(databasePath);
+  t.after(() => lock.close());
+  lock.exec("BEGIN IMMEDIATE");
+  try { t.mock.timers.tick(3_600_000); } finally { lock.exec("ROLLBACK"); }
+  assert.equal(warnings.mock.callCount(), 0);
+  assert.deepEqual(await aggregate.ingest({ source, observations: [input] }), { kind: "committed", accepted: 0, duplicate: 1 });
+  t.mock.timers.tick(3_600_000);
+  assert.ok(lock.prepare("SELECT stat FROM sqlite_stat1 WHERE idx = 'observations_evidence_time_idx'").get());
+});
+
+test("failed statistics maintenance warns without changing committed acknowledgments", async t => {
+  const databasePath = await database(t);
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const initial = openAggregateStore({ databasePath });
+  const input = observation("accepted");
+  assert.deepEqual(await initial.ingest({ source, observations: [input] }), { kind: "committed", accepted: 1, duplicate: 0 });
+  await initial.close();
+  const warnings = t.mock.method(process, "emitWarning", () => {});
+  const exec = DatabaseSync.prototype.exec;
+  let denyAnalysis = true;
+  t.mock.method(DatabaseSync.prototype, "exec", function(this: DatabaseSync, sql: string) {
+    if (sql !== "PRAGMA optimize = 0x10012" || !denyAnalysis) return exec.call(this, sql);
+    this.setAuthorizer(action => action === constants.SQLITE_ANALYZE ? constants.SQLITE_DENY : constants.SQLITE_OK);
+    try { return exec.call(this, sql); } finally { this.setAuthorizer(null); }
+  });
+  const aggregate = openAggregateStore({ databasePath });
+  t.after(() => aggregate.close());
+  assert.equal(warnings.mock.callCount(), 1);
+  assert.deepEqual(warnings.mock.calls[0]?.arguments, ["Hotplate planner statistics maintenance failed", { code: "HOTPLATE_STATISTICS_MAINTENANCE" }]);
+  assert.deepEqual(await aggregate.ingest({ source, observations: [input, observation("after-failure", 2)] }),
+    { kind: "committed", accepted: 1, duplicate: 1 });
+  t.mock.timers.tick(3_600_000);
+  assert.equal(warnings.mock.callCount(), 2);
+  denyAnalysis = false;
+  t.mock.timers.tick(3_600_000);
+  const db = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    assert.ok(db.prepare("SELECT stat FROM sqlite_stat1 WHERE idx = 'observations_evidence_time_idx'").get());
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM observations").get()?.n, 2);
+  } finally { db.close(); }
+});
+
+test("invalid aggregate construction starts no maintenance work", async t => {
+  const databasePath = await database(t);
+  const aggregate = openAggregateStore({ databasePath });
+  assert.deepEqual(await aggregate.ingest({ source, observations: [observation("one")] }), { kind: "committed", accepted: 1, duplicate: 0 });
+  await aggregate.close();
+  const intervals = t.mock.method(globalThis, "setInterval");
+  const queries: string[] = [];
+  const exec = DatabaseSync.prototype.exec;
+  t.mock.method(DatabaseSync.prototype, "exec", function(this: DatabaseSync, sql: string) {
+    queries.push(sql);
+    return exec.call(this, sql);
+  });
+  assert.throws(() => openAggregateStore({ databasePath, staticRegistrations: [{
+    source: { ...source, machineId: parseMachineId("other-machine") }, tokenDigest: ingestTokenDigest("t".repeat(48)),
+  }] }), /Static and historical identities conflict/u);
+  assert.equal(intervals.mock.callCount(), 0);
+  assert.ok(!queries.some(sql => /optimize/iu.test(sql)));
+});
+
+test("aggregate maintenance timer does not keep its process alive", async t => {
+  const databasePath = await database(t);
+  const code = `import {openAggregateStore} from ${JSON.stringify(storeUrl)}; openAggregateStore({databasePath:process.argv[1]});`;
+  const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null; stderr: string }>((resolve, reject) => {
+    const child = spawn(process.execPath, ["--input-type=module", "-e", code, databasePath], { stdio: ["ignore", "ignore", "pipe"], timeout: 5000 });
+    let stderr = "";
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", chunk => { stderr += chunk; });
+    child.once("error", reject);
+    child.once("close", (code, signal) => resolve({ code, signal, stderr }));
+  });
+  assert.equal(result.signal, null, result.stderr);
+  assert.equal(result.code, 0, result.stderr);
 });

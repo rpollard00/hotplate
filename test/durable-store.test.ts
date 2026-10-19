@@ -73,7 +73,7 @@ test("v1 readers require an upgrade without mutation; writer migration preserves
     assert.equal((await store.querySkillTable({})).rows[0]?.machineId, LOCAL_MACHINE_ID);
     await store.close();
     db = new DatabaseSync(databasePath);
-    assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 5);
+    assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 6);
     assert.deepEqual({ ...db.prepare("SELECT machine_id, source_id, digest FROM observations").get() }, { machine_id: LOCAL_MACHINE_ID, source_id: LOCAL_SOURCE_ID, digest: null });
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM delivery_outbox").get()?.n, 0);
     db.close();
