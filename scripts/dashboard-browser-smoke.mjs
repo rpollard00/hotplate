@@ -240,6 +240,16 @@ try {
     assert.equal(await evaluate('document.querySelectorAll("#activity-chart tbody tr").length'), 0, 'The activity table is lazy');
     assert.match(await evaluate('document.getElementById("activity-chart").textContent'), /Successful reads per UTC interval/);
     await chartScreenshot('weekly-desktop.png');
+    await change('metric-measure', 'uses');
+    for (const split of ['agent', 'agent-model']) {
+      await change('metric-split', split);
+      const expected = projectMetrics(weekly.report, { measure: 'uses', split, display: 'count' });
+      assert.equal(expected.timeline.at(-1).count, 0, 'The latest hour is empty while earlier activity remains');
+      assert.ok(expected.timeline.some(bin => bin.count > 0));
+      const legend = await evaluate('Array.from(document.querySelectorAll("#activity-chart .trend-label"), label => [label.dataset.skill, Number(label.querySelector("small").textContent.split(" ")[0].replaceAll(",", ""))])');
+      assert.deepEqual(legend, expected.series.map(series => [series.key, expected.timeline.reduce((sum, bin) => sum + (bin.values.find(value => value.key === series.key)?.count || 0), 0)]), split + ' idle legend totals the displayed period, including activity before the empty latest hour');
+    }
+    await change('metric-measure', 'successfulReads'); await change('metric-split', 'skill');
     const weeklyNames = await evaluate('Array.from(document.querySelectorAll("#activity-chart .trend-label"), item => item.dataset.skill)');
     await assertStack(weekly.report.activity);
     async function key(name, modifiers = 0) {
