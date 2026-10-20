@@ -11,6 +11,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { DatabaseSync } from "node:sqlite";
 import { createResourceSchema, recordResourceObservation, queryResources, queryResourceCoverage } from "./resource-store.js";
 import type { ResourceView, ResourceCoverageView } from "./resource-domain.js";
+import { buildContentAnalytics, type ContentFact, type ContentQuery, type ContentReport, type ContentSkillEvidence } from "./content-analytics.js";
 import type {
   HostId,
   CaptureEnrollment,
@@ -479,6 +480,42 @@ class SqliteHotplateStore implements HotplateStore {
   async queryResourceCoverage(filter: DashboardFilter): Promise<ResourceCoverageView> {
     assertOpen(this.#closed);
     return queryResourceCoverage(this.#db, filter);
+  }
+
+  async queryContentAnalytics(query: ContentQuery): Promise<ContentReport> {
+    assertOpen(this.#closed);
+    const db = this.#db;
+    const clauses: string[] = [];
+    const values: SqlValue[] = [];
+    const filter = query.filter;
+    if (filter.machineId !== undefined) { clauses.push("o.machine_id = ?"); values.push(filter.machineId); }
+    if (filter.projectCwd !== undefined) { clauses.push("o.project_cwd = ?"); values.push(filter.projectCwd); }
+    if (filter.sessionId !== undefined) { clauses.push("o.session_id IS ?"); values.push(filter.sessionId); }
+    if (filter.runId !== undefined) { clauses.push("o.run_id IS ?"); values.push(filter.runId); }
+    const where = clauses.length ? ` AND ${clauses.join(" AND ")}` : "";
+    if (!this.#readOnly) db.exec("BEGIN");
+    try {
+      const skills: ContentFact<ContentSkillEvidence>[] = query.content === "resources" ? [] : db.prepare(`SELECT o.* FROM observations o
+        WHERE o.evidence_kind IN ('read-result', 'read-attempt', 'skill-invocation', 'command-intent', 'wrapper-observed')${where}`)
+        .all(...values).map(contentSkillFact);
+      const statement = db.prepare(`SELECT e.machine_id, e.source_id, e.payload FROM observations o JOIN resource_events e
+        ON e.machine_id = o.machine_id AND e.source_id = o.source_id AND e.observation_id = o.id
+        WHERE o.evidence_kind = 'resource-access'${where}`);
+      const resources = function* () {
+        if (filter.source !== undefined) return;
+        for (const row of statement.iterate(...values)) {
+          const observation = parseObservation(JSON.parse(requireString(row.payload, "resource payload")));
+          if (observation.evidence.kind !== "resource-access") throw new Error("Invalid stored resource access");
+          yield { ...observation, evidence: observation.evidence, machineId: parseMachineId(row.machine_id), sourceId: row.source_id === "local" ? "local" : parseSourceId(row.source_id) } satisfies ContentFact;
+        }
+      };
+      const result = buildContentAnalytics(query, { skills, resources });
+      if (!this.#readOnly) db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      if (!this.#readOnly) rollbackBestEffort(db);
+      throw error;
+    }
   }
 
   async close(): Promise<void> {
@@ -1318,6 +1355,16 @@ function evidenceFromRow(row: Record<string, unknown>): ChainObservation["eviden
     };
   }
   throw new Error(`Unsupported chain evidence kind ${kind}`);
+}
+
+function contentSkillFact(row: Record<string, unknown>): ContentFact<ContentSkillEvidence> {
+  const evidence = evidenceFromRow(row);
+  const observation = parseObservation({
+    id: row.id, producerId: row.producer_id, sequence: row.sequence, host: row.host, observedAt: row.observed_at, evidence,
+    scope: { projectCwd: row.project_cwd, sessionId: row.session_id, sessionFile: row.session_file, segmentId: row.segment_id,
+      segmentReason: row.segment_reason, runId: row.run_id, turnId: row.turn_id, leafId: row.leaf_id },
+  });
+  return { ...observation, evidence, machineId: parseMachineId(row.machine_id), sourceId: row.source_id === "local" ? "local" : parseSourceId(row.source_id) };
 }
 
 function skillFromRow(row: Record<string, unknown>): SkillRef {

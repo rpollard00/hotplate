@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { startDashboardPreview } from "./dashboard-preview.mjs";
 import { withBrowser } from "./browser-smoke.mjs";
-import { openHotplateReadStore } from "../dist/src/store.js";
+import { openHotplateReadStore, openHotplateStore } from "../dist/src/store.js";
 import { projectMetrics } from "../dist/src/dashboard/metrics.js";
 import { buildDashboardReport } from "../dist/src/dashboard/analytics.js";
 
@@ -38,6 +38,7 @@ try {
   let sparsePayload;
   let oneBinPayload;
   let adaptivePayload;
+  let boundaryPayload;
   let catalogOnlyPayload;
   let manySkillsPayload;
   let invocationModelsPayload;
@@ -126,6 +127,11 @@ try {
     adaptivePayload = { ...payload, report: buildDashboardReport({ filter: { fromObservedAt: '2024-10-02T00:00:00.000Z', toObservedAt: '2025-02-21T12:00:00.000Z' }, skills, chains: repeatedChains }), chains: repeatedChains };
     const sparseChains = { runs: [...repeatedChains.runs.slice(0, 2), { ...makoRun, segmentId: 'before-gap', steps: [controlledStep([makoRead], '2025-02-19T10:00:00.000Z')] }] };
     sparsePayload = { ...payload, report: buildDashboardReport({ filter: {}, skills, chains: sparseChains }), chains: sparseChains };
+    const boundaryChains = { runs: [{ ...makoRun, segmentId: 'legend-boundaries', steps: [
+      '2025-02-21T09:00:00.000Z', '2025-02-21T10:15:00.000Z', '2025-02-21T10:30:00.000Z',
+      '2025-02-21T11:00:00.000Z', '2025-02-21T12:00:00.000Z', undefined,
+    ].map(at => controlledStep([makoRead], at)) }] };
+    boundaryPayload = { ...payload, report: buildDashboardReport({ filter: { fromObservedAt: '2025-02-21T09:30:00.000Z', toObservedAt: '2025-02-21T11:29:59.999Z' }, skills, chains: boundaryChains }), chains: boundaryChains };
   } finally { await opened.store.close(); }
 
   await withBrowser(async ({ command, evaluate, until, screenshot, errors }) => {
@@ -133,6 +139,9 @@ try {
     async function click(selector) { await evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`); }
     async function input(id, value) { await evaluate(`document.getElementById(${JSON.stringify(id)}).value = ${JSON.stringify(value)}; document.getElementById(${JSON.stringify(id)}).dispatchEvent(new Event('input', { bubbles: true }));`); }
     async function change(id, value) { await evaluate(`document.getElementById(${JSON.stringify(id)}).value = ${JSON.stringify(value)}; document.getElementById(${JSON.stringify(id)}).dispatchEvent(new Event('change', { bubbles: true }));`); }
+    const legendValues = () => evaluate('Array.from(document.querySelectorAll("#activity-chart .trend-label"), label => [label.dataset.skill, Number(label.querySelector("small").textContent.split(" ")[0].replaceAll(",", ""))])');
+    const trendReadout = () => evaluate('document.querySelector("#activity-chart .trend-readout").textContent');
+    const legendTotal = async () => (await legendValues()).reduce((sum, [, value]) => sum + value, 0);
     async function noOverflow() { assert.ok(await evaluate('document.documentElement.scrollWidth <= innerWidth'), "No page-level horizontal overflow"); }
     async function chartScreenshot(name) {
       const clip = await evaluate('(() => { const r=document.querySelector(".activity-panel").getBoundingClientRect(); return {x:r.x+scrollX,y:r.y+scrollY,width:r.width,height:r.height,scale:1}; })()');
@@ -240,6 +249,41 @@ try {
     assert.equal(await evaluate('document.querySelectorAll("#activity-chart tbody tr").length'), 0, 'The activity table is lazy');
     assert.match(await evaluate('document.getElementById("activity-chart").textContent'), /Successful reads per UTC interval/);
     await chartScreenshot('weekly-desktop.png');
+    await change('metric-measure', 'uses');
+    for (const split of ['agent', 'agent-model']) {
+      await change('metric-split', split);
+      const expected = projectMetrics(weekly.report, { measure: 'uses', split, display: 'count' });
+      assert.equal(expected.timeline.at(-1).count, 0, 'The latest hour is empty while earlier activity remains');
+      assert.ok(expected.timeline.some(bin => bin.count > 0));
+      const legend = await evaluate('Array.from(document.querySelectorAll("#activity-chart .trend-label"), label => [label.dataset.skill, Number(label.querySelector("small").textContent.split(" ")[0].replaceAll(",", ""))])');
+      assert.deepEqual(legend, expected.series.map(series => [series.key, expected.timeline.reduce((sum, bin) => sum + (bin.values.find(value => value.key === series.key)?.count || 0), 0)]), split + ' idle legend totals the displayed period, including activity before the empty latest hour');
+      assert.match(await trendReadout(), /^Displayed range/);
+      assert.equal(await evaluate('document.querySelector("#activity-chart .trend-cursor").hidden'), true);
+    }
+    const weeklyLegend = await legendValues();
+    await evaluate('document.querySelector("#activity-chart .trend-plot").scrollIntoView({block:"center"})');
+    const inspectPoint = await evaluate('(() => { const r = document.querySelector("#activity-chart .trend-plot").getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()');
+    await command('Input.dispatchMouseEvent', { type: 'mouseMoved', ...inspectPoint });
+    assert.match(await trendReadout(), /^Interval/);
+    await command('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 1, y: 1 });
+    assert.deepEqual(await legendValues(), weeklyLegend, 'Leaving pointer inspection restores the displayed totals');
+    await command('Input.dispatchMouseEvent', { type: 'mouseMoved', ...inspectPoint });
+    await evaluate('document.querySelector("#activity-chart .trend-plot").focus()'); await key('End');
+    assert.equal(await legendTotal(), 0, 'Keyboard inspection still shows the empty final hour');
+    await command('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 1, y: 1 });
+    assert.match(await trendReadout(), /^Interval/, 'Pointer exit preserves keyboard inspection');
+    assert.equal(await evaluate('document.querySelector("#activity-chart .trend-cursor").hidden'), false);
+    await evaluate('document.getElementById("metric-split").focus()');
+    assert.deepEqual(await legendValues(), weeklyLegend, 'Leaving keyboard inspection restores the displayed totals');
+    await command('Input.dispatchMouseEvent', { type: 'mouseMoved', ...inspectPoint });
+    await command('Input.dispatchMouseEvent', { type: 'mousePressed', ...inspectPoint, button: 'left', clickCount: 1 });
+    assert.match(await trendReadout(), /^Displayed range/, 'Starting a brush exits inspection before preview');
+    await key('Escape');
+    await command('Input.dispatchMouseEvent', { type: 'mouseReleased', ...inspectPoint, button: 'left', clickCount: 1 });
+    assert.deepEqual(await legendValues(), weeklyLegend, 'Cancelled brushing retains the displayed totals');
+    await command('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 1, y: 1 });
+    await chartScreenshot('agent-model-range-desktop.png');
+    await change('metric-measure', 'successfulReads'); await change('metric-split', 'skill');
     const weeklyNames = await evaluate('Array.from(document.querySelectorAll("#activity-chart .trend-label"), item => item.dataset.skill)');
     await assertStack(weekly.report.activity);
     async function key(name, modifiers = 0) {
@@ -379,10 +423,13 @@ try {
     await command('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [hourlyTouchPoint(75.8)] });
     await command('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
     assert.deepEqual(await edgeValues(), [40, 76], 'Touch brushing selects UTC hours in the weekly chart');
+    assert.match(await trendReadout(), /^Selected range/);
+    const touchLegend = await legendValues();
     await command('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [hourlyTouchPoint(55)] });
     await command('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [hourlyTouchPoint(75)] });
     await command('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] });
     assert.deepEqual(await edgeValues(), [40, 76], 'Cancelling an hourly touch move restores the committed range');
+    assert.deepEqual(await legendValues(), touchLegend, 'Touch cancellation restores selected-range totals');
     assert.equal(await evaluate('document.querySelector("#activity-chart .trend-plot").dataset.dragging'), 'false');
     await chartScreenshot('weekly-touch-320.png');
     await evaluate('document.querySelector(".trend-chooser summary").scrollIntoView({block:"center"})');
@@ -551,6 +598,12 @@ try {
     await command('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'ArrowRight', code: 'ArrowRight', windowsVirtualKeyCode: 39 });
     await command('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, modifiers: 8 });
     assert.equal((await selection()).length, 2, 'Shift+Enter extends the range');
+    assert.match(await trendReadout(), /^Selected range/);
+    const extendedLegend = await legendValues();
+    for (const [name, value] of extendedLegend) assert.equal(value, payload.report.activity.bins.slice(0, 2).reduce((sum, bin) => sum + (bin.skills.find(skill => skill.name === name)?.successfulReads || 0), 0), 'Extended selection totals use the final committed interval');
+    await key('Home'); await key('ArrowRight'); await key('Enter', 8);
+    assert.deepEqual(await legendValues(), extendedLegend, 'Committing the same extended interval exits inspection');
+    assert.match(await trendReadout(), /^Selected range/);
     await evaluate('document.querySelector(".brush-band").focus()');
     await command('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'ArrowRight', code: 'ArrowRight', windowsVirtualKeyCode: 39 });
     assert.match((await selection())[0], /Feb 2/);
@@ -576,6 +629,7 @@ try {
         assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#skill-table thead th"), item => item.textContent)'), expected.skills.length ? ['Skill', ...expected.series.slice(0, 6).map(series => split === 'agent' ? hostLabels[series.host] : split === 'agent-model' ? hostLabels[series.host] + ' · ' + (series.attribution === 'none' ? 'No model attribution' : series.model === null ? 'Unknown model' : series.model.provider + ' / ' + series.model.id) : series.label)] : [], measure + ' / ' + split + ' observed columns');
         assert.deepEqual(await metricCells(), expected.skills.slice(0, 12).map(row => [row.name, ...expected.series.slice(0, 6).map(series => (row.cells.find(cell => cell.key === series.key)?.count || 0).toLocaleString('en-US'))]), 'Exact cells for ' + measure + ' / ' + split);
         assert.equal(await evaluate('document.querySelectorAll("#activity-chart .trend-area").length'), expected.series.length, 'The same trend reshapes locally');
+        assert.deepEqual(await legendValues(), expected.series.map(series => [series.key, expected.timeline.reduce((sum, bin) => sum + (bin.values.find(value => value.key === series.key)?.count || 0), 0)]), 'Displayed legend counts for ' + measure + ' / ' + split);
         if (measure === 'uses' && split === 'agent-model') { await noOverflow(); await screenshot(join(directory, 'metrics-agent-model-desktop.png')); }
       }
     }
@@ -887,6 +941,28 @@ try {
     await evaluate(`window.fetch = async () => new Response(JSON.stringify(${JSON.stringify(adaptivePayload)})); document.getElementById('refresh-data').click();`);
     await until(ready);
     await assertStack(adaptive);
+    await key('End'); await enter();
+    await evaluate('document.querySelector(".brush-band").focus()'); await key('ArrowLeft');
+    assert.equal(await legendTotal(), 1, 'A one-day selection inside an adaptive bin counts only that day');
+    assert.match(await trendReadout(), /^Selected range/);
+
+    await click('#clear-explorer');
+    await evaluate(`window.fetch = async () => new Response(JSON.stringify(${JSON.stringify(boundaryPayload)})); document.getElementById('refresh-data').click();`);
+    await until(ready);
+    assert.equal(boundaryPayload.report.counts.successfulReads, 6);
+    assert.equal(await legendTotal(), 3, 'Displayed totals omit undated and out-of-scope context records');
+    assert.match(await evaluate('document.getElementById("activity-chart").textContent'), /1 matching record without a usable timestamp/);
+    await evaluate('Array.from(document.querySelectorAll("#activity-chart .trend-label")).find(label => label.dataset.skill === "mako").click()');
+    await click('#explore-comparison .section-heading button');
+    assert.equal(await legendTotal(), 2, 'Partial-hour selection includes its start and only matching timestamps');
+    assert.match(await trendReadout(), /Selected range.*10:30:00.*11:30:00/);
+    await evaluate('document.querySelector(".brush-band").focus()'); await key('ArrowLeft');
+    assert.equal(await legendTotal(), 1, 'Partial-hour selection excludes a record exactly at its end');
+    assert.match(await trendReadout(), /Selected range.*09:30:00.*10:30:00/);
+    assert.ok((await evaluate('Array.from(document.querySelectorAll("#activity-chart .trend-label"), label => label.title)')).every(title => title.includes('Selected range') && title.includes('10:30:00')), 'Legend titles describe the same selected range as the readout');
+    await chartScreenshot('partial-range-mobile.png');
+    await click('#clear-explorer');
+    assert.equal(await legendTotal(), 3);
 
     await evaluate('window.fetch = window.smokeFetch; document.getElementById("refresh-data").click()');
     await until(ready);
@@ -1032,6 +1108,133 @@ try {
     assert.match(await evaluate('document.getElementById("skill-table").textContent'), /No skills match this search/);
     assert.equal(await evaluate('document.getElementById("skill-detail").hidden'), true, 'No impossible skill selection placeholder');
     await noZeroPagers();
+
+    await click('#reset-filters'); await until(ready); await change('time-preset', 'all'); await until(ready);
+    const contentExpected = async (content, measure = 'activity', split = 'item', extra = {}) => {
+      const params = new URLSearchParams({ content, measure, split, ...extra });
+      const result = await fetch(new URL('/api/content-analytics?' + params, rich.url)).then(response => response.json());
+      assert.equal(result.kind, 'ready'); return result.report;
+    };
+    const contentRows = () => evaluate('Array.from(document.querySelectorAll("#skill-table [data-content-key]:not(.content-child)"), row => [row.dataset.contentKey, row.querySelector("strong > button")?.textContent || null])');
+    for (const content of ['resources', 'both']) {
+      await change('metric-content', content); await until(ready);
+      assert.equal(await evaluate('document.getElementById("metric-measure").value'), 'activity');
+      assert.equal(await evaluate('document.getElementById("metric-display").disabled'), true);
+      assert.equal(await evaluate('document.getElementById("explorer-panel").hidden'), true);
+      for (const split of ['skill', 'agent', 'model', 'agent-model']) {
+        await change('metric-split', split); await until(ready);
+        const expected = await contentExpected(content, 'activity', split === 'skill' ? 'item' : split);
+        assert.equal(await evaluate('document.querySelector("#overview-cards .metric-value").textContent'), expected.selection.count.toLocaleString('en-US'));
+        const series = split === 'skill' ? expected.displayed.series.slice(0, 5) : expected.displayed.series;
+        assert.deepEqual(await legendValues(), series.map(item => [item.key, item.datedCount]), content + ' / ' + split + ' displayed legend');
+        if (split === 'skill') assert.deepEqual(await contentRows(), expected.selection.rows.slice(0, 8).map(row => [row.key, row.count.toLocaleString('en-US')]));
+        else assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#skill-table tbody tr"), row => [row.dataset.contentKey, ...Array.from(row.querySelectorAll("td"), cell => cell.textContent)])'), expected.selection.rows.slice(0, 12).map(row => [row.key, ...expected.displayed.series.slice(0, 6).map(series => (row.cells.find(cell => cell.key === series.key)?.count || 0).toLocaleString('en-US'))]));
+      }
+    }
+    await change('metric-content', 'resources'); await until(ready); await change('metric-split', 'skill'); await until(ready);
+    await input('skill-search', 'SKILL.md');
+    assert.ok(await evaluate('new Set(Array.from(document.querySelectorAll("#skill-table .content-location"), item => item.textContent)).size >= 2'), 'Repeated entrypoint names retain visible path context');
+    await change('metric-content', 'both'); await until(ready);
+    await input('skill-search', 'playbooks/feature.md');
+    assert.equal(await evaluate('document.querySelectorAll("#skill-table .content-child").length'), 1, 'Child path search reveals its owner and matching file');
+    assert.match(await evaluate('document.getElementById("skill-table").textContent'), /playbooks\/feature\.md/);
+    await input('skill-search', '');
+    await click('#skill-table .content-toggle');
+    assert.ok(await evaluate('document.querySelectorAll("#skill-table .content-child").length > 0'));
+    assert.match(await evaluate('document.getElementById("skill-table").textContent'), /Skill evidence ·/);
+    assert.ok(await evaluate('Array.from(document.querySelectorAll("#skill-table .content-child"), row => row.textContent).every(text => !text.includes("Unresolved"))'), 'Resolved owner children do not claim unresolved location');
+    await evaluate('Array.from(document.querySelectorAll("#skill-table .content-child button.link")).find(button => button.textContent.startsWith("Skill evidence")).click()');
+    assert.match(await evaluate('document.getElementById("content-detail").textContent'), /Filesystem: Not recorded in skill evidence/);
+    await click('#content-detail > .section-heading button');
+    await click('#skill-table .content-toggle');
+    assert.equal(await evaluate('document.querySelectorAll("#skill-table .content-child").length'), 0);
+    await input('skill-search', 'owner-with-only-supporting-activity');
+    assert.match(await evaluate('document.getElementById("skill-table").textContent'), /a-long-reference-name/);
+    for (const [width, height] of [[1440,1100], [390,844], [320,700]]) {
+      await command('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: width < 500 });
+      await noOverflow(); await screenshot(join(directory, 'content-grouped-' + width + '.png'));
+    }
+    await input('skill-search', 'standalone-reference');
+    assert.match(await evaluate('document.getElementById("skill-table").textContent'), /No owning skill/);
+    await click('#skill-table strong button');
+    assert.match(await evaluate('document.getElementById("content-detail").textContent'), /Account source:|Latest evidence:/);
+    await input('skill-search', ''); await change('metric-split', 'agent-model'); await until(ready);
+    const bothMatrix = await contentExpected('both', 'activity', 'agent-model');
+    const matrixRow = bothMatrix.selection.rows[0]; const matrixColumn = bothMatrix.displayed.series[0];
+    const matrixCell = matrixRow.cells.find(cell => cell.key === matrixColumn.key);
+    await click('#skill-table tbody tr td button');
+    const detailCounts = await evaluate('Array.from(document.querySelectorAll("#content-detail .content-breakdown > div"), item => [item.lastChild.textContent, Number(item.firstChild.textContent.replaceAll(",", ""))])');
+    const labels = { successfulReads: 'Successful reads', failedReads: 'Read failures', readAttempts: 'Read attempts', fsOpens: 'Filesystem opens', fsAccesses: 'Filesystem accesses', invocations: 'Native invocations', invocationFailures: 'Invocation failures', requests: 'Requests', wrappers: 'Wrappers' };
+    assert.deepEqual(detailCounts, Object.entries(labels).map(([key, label]) => [label, matrixCell?.counts[key] || 0]), 'Cell details retain their own evidence breakdown');
+    for (const [width, height] of [[1440,1100], [390,844], [320,700]]) {
+      await command('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: width < 500 });
+      await noOverflow(); await screenshot(join(directory, 'content-cohorts-' + width + '.png'));
+    }
+    await command('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1100, deviceScaleFactor: 1, mobile: false });
+    await change('metric-content', 'resources'); await until(ready);
+    for (const measure of ['successfulReads', 'failedReads', 'readAttempts', 'fsOpens', 'fsAccesses', 'activity']) {
+      await change('metric-measure', measure); await until(ready);
+      const expected = await contentExpected('resources', measure, 'agent-model');
+      assert.equal(await evaluate('document.querySelector("#overview-cards .metric-value").textContent'), expected.selection.count.toLocaleString('en-US'));
+    }
+    await change('host-filter', 'claude-code'); await until(ready);
+    await click('[data-workspace=paths]');
+    assert.deepEqual(await evaluate('Array.from(document.getElementById("route-model").options, option => option.textContent)'), ['All models', 'Unknown model'], 'Content-mode global refresh also refreshes path model choices');
+    await change('route-model', '0');
+    assert.ok(await evaluate('document.querySelectorAll(".route-choice").length > 0'));
+    await click('[data-workspace=metrics]');
+    const claudeModel = JSON.stringify(['anthropic', 'claude-opus-4.6']);
+    assert.ok(await evaluate(`Array.from(document.getElementById('model-filter').options).some(option => option.value === ${JSON.stringify(claudeModel)} && !option.disabled)`), 'Resource-only model pair is selectable');
+    await change('model-filter', claudeModel); await until(ready);
+    assert.ok(Number((await evaluate('document.querySelector("#overview-cards .metric-value").textContent')).replaceAll(',', '')) > 0);
+    await change('model-filter', 'unknown'); await until(ready);
+    assert.match(await evaluate('document.getElementById("evidence-context").textContent'), /filesystem accesses/);
+    await change('host-filter', ''); await until(ready); await change('model-filter', ''); await until(ready);
+    await change('time-preset', 'custom'); await change('from-filter', '2025-02-21T11:00'); await change('to-filter', '2025-02-21T12:00'); await click('#filter-form button[type=submit]'); await until(ready);
+    assert.match(await evaluate('document.querySelector(".content-latest").textContent'), /11:59:00/, 'Newest-hour Claude file evidence remains visible');
+    const contentGeometry = await evaluate('Array.from(document.querySelectorAll("#activity-chart .trend-area"), item => [item.dataset.skill, item.getAttribute("d")])');
+    const exactInterval = { startAt: '2025-02-21T11:15:00.000Z', endAt: '2025-02-21T11:58:30.000Z' };
+    await evaluate(`window.brushFetch = window.fetch; window.brushRequests = 0; window.fetch = (...args) => { if (String(args[0]).startsWith('/api/content-analytics')) window.brushRequests++; return window.brushFetch(...args); }; selectExploreInterval({startAt:'2025-02-21T11:01:00.000Z',endAt:'2025-02-21T11:58:30.000Z'}); selectExploreInterval({startAt:'2025-02-21T11:10:00.000Z',endAt:'2025-02-21T11:58:30.000Z'}); selectExploreInterval(${JSON.stringify(exactInterval)});`); await until(ready);
+    assert.equal(await evaluate('window.brushRequests'), 1, 'Rapid committed selections request only the latest interval');
+    await evaluate('window.fetch = window.brushFetch');
+    const selectedContent = await contentExpected('resources', 'activity', 'agent-model', { fromObservedAt: '2025-02-21T11:00:00.000Z', toObservedAt: '2025-02-21T12:00:00.000Z', selectionFrom: exactInterval.startAt, selectionTo: exactInterval.endAt });
+    assert.deepEqual(await legendValues(), selectedContent.selection.series.map(series => [series.key, series.datedCount]), 'Partial UTC range uses exact server counts');
+    assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#activity-chart .trend-area"), item => [item.dataset.skill, item.getAttribute("d")])'), contentGeometry, 'Selection preserves full chart layers and geometry');
+    const selectedLegend = await legendValues();
+    await evaluate('window.contentFetch = window.fetch; window.contentRequests = 0; window.fetch = (...args) => { if (String(args[0]).startsWith("/api/content-analytics")) window.contentRequests++; return window.contentFetch(...args); }; document.querySelector("#activity-chart .trend-plot").focus()');
+    await key('End'); assert.equal(await legendTotal(), 0);
+    await evaluate('document.getElementById("metric-split").focus()'); assert.deepEqual(await legendValues(), selectedLegend);
+    assert.equal(await evaluate('window.contentRequests'), 0, 'Interval inspection needs no request');
+    await evaluate('window.fetch = window.contentFetch; window.fetch = async (url, options) => { if (String(url).startsWith("/api/content-analytics")) throw new TypeError("Failed to fetch"); return window.contentFetch(url, options); }; selectExploreInterval({startAt:"2025-02-21T11:00:00.000Z",endAt:"2025-02-21T11:58:00.000Z"})');
+    await until('document.getElementById("status-text").textContent === "Error"');
+    assert.equal(await evaluate('document.getElementById("overview-cards").hidden'), true, 'Failed range requests hide old selected totals');
+    assert.match(await evaluate('document.getElementById("skill-table").textContent'), /unavailable/);
+    assert.match(await trendReadout(), /Selected counts unavailable/);
+    await evaluate('window.fetch = window.contentFetch'); await click('#content-status button'); await until(ready);
+    await change('time-preset', 'all'); await until(ready);
+    const incoming = openHotplateStore({ databasePath: rich.databasePath });
+    await incoming.record({ id: 'content-arrives-during-selection', producerId: 'browser-smoke', sequence: 0, host: 'claude-code', observedAt: '2025-02-21T11:35:00.000Z',
+      scope: { projectCwd: '/preview/hotplate', sessionId: 'incoming-session', sessionFile: null, segmentId: 'incoming', segmentReason: 'startup', runId: null, turnId: null, leafId: null },
+      evidence: { kind: 'resource-access', resource: { filesystemId: 'preview:skills', canonicalPath: '/preview/skills/shared/new-cohort.md', observedPath: '/preview/skills/shared/new-cohort.md', rootPath: '/preview/skills', kind: 'reference', ownerSkillPath: null }, operationId: 'incoming-read', mechanism: 'host-tool', access: 'read', outcome: 'success', model: { provider: 'preview', id: 'new-model' }, process: null, attribution: 'session' } });
+    await incoming.close();
+    await evaluate(`selectExploreInterval(${JSON.stringify(exactInterval)})`); await until(ready);
+    const freshContent = await contentExpected('resources', 'activity', 'agent-model', { selectionFrom: exactInterval.startAt, selectionTo: exactInterval.endAt });
+    assert.deepEqual(await legendValues(), freshContent.selection.series.map(series => [series.key, series.datedCount]), 'New capture during selection refreshes chart and selection coherently');
+    assert.match(await evaluate('document.getElementById("activity-chart").textContent'), /new-model/);
+
+    await evaluate('window.fetch = (url, options) => String(url).includes("content=both") ? new Promise(resolve => { window.resolveOldContent = resolve; }) : window.contentFetch(url, options);');
+    await change('metric-content', 'both');
+    assert.equal(await evaluate('document.getElementById("status-text").textContent'), 'Loading');
+    await change('metric-content', 'resources'); await until(ready);
+    await evaluate('window.resolveOldContent(new Response(JSON.stringify({kind:"error",message:"Stale content error"}), {headers:{"Content-Type":"application/json"}})); window.fetch = window.contentFetch;');
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.equal(await evaluate('document.getElementById("status-text").textContent'), 'Ready', 'Old content responses cannot overwrite the current mode');
+    assert.equal(await evaluate('document.getElementById("metric-content").value'), 'resources');
+    await change('metric-content', 'skills');
+    assert.equal(await evaluate('document.getElementById("metric-display").disabled'), false);
+    assert.equal(await evaluate('document.getElementById("metric-measure").value'), 'successfulReads');
+    assert.equal(await evaluate('document.getElementById("content-detail").hidden'), true);
+    await click('#reset-filters'); await until(ready);
 
     await command('Page.addScriptToEvaluateOnNewDocument', { source: 'window.smokeNow = Date.parse("2026-01-01T12:00:00.000Z");' });
     await command('Page.navigate', { url: rich.url }); await until(ready);

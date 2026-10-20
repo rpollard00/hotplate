@@ -28,6 +28,12 @@ The reported project or nearest repository or worktree boundary that limits a ho
 **Resource access**:
 Evidence that a host tool attempted or completed a read, or that the filesystem reported an open or access. These evidence kinds remain separate. An access does not prove that a model received or followed the contents.
 
+**Recorded activity**:
+Evidence occurrences across the selected content, including successful reads, attempts, failures, filesystem events, native invocations, requests, and wrappers. Mirrored skill and resource facts count once in Both; the total does not measure unique content consumption or usefulness.
+
+**Owning skill**:
+The physical skill entrypoint associated with a supporting file, identified by machine, account source, filesystem namespace, and canonical path. Equal skill names do not establish shared ownership.
+
 **Inventory snapshot**:
 A metadata-only enumeration of files available in a root. A completed scan can establish presence or absence. An incomplete scan cannot establish absence. Session scope comes from host-advertised roots when available; conventional roots provide inferred scope. Roots learned from other sessions remain unassigned and establish global presence only.
 

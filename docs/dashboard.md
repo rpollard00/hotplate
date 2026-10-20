@@ -1,14 +1,14 @@
-# Skill dashboard
+# Activity dashboard
 
-The dashboard shows recorded skill evidence and session paths. It does not score skill quality.
+The dashboard shows recorded skill and file evidence, plus session paths. It does not score skill quality.
 
-- Metrics has one trend and one skill comparison. The same controls reshape both views.
+- Metrics has one trend and one comparison for Skills, Resources, or Both. The same controls apply to both views.
 - Session paths shows requests, wrappers, read groups, invocations, attempts, and gaps within recorded runs.
 - Resources shows file inventory, access evidence, attribution, and observation coverage.
 
 ## Metrics
 
-Select a Measure to show successful reads, skill uses, read failures, native invocations, invocation failures, read attempts, requests, or wrappers. Native invocations counts successful invocations. Read attempts remain unconfirmed.
+Skills is the default Content. Select a Measure to show successful reads, skill uses, read failures, native invocations, invocation failures, read attempts, requests, or wrappers. Native invocations counts successful invocations. Read attempts remain unconfirmed.
 
 Split by selects Skill / total ranking, Agent, Model, or Agent + model. The trend stacks counts for the selected measure. The comparison shows a total ranking or a matrix. Matrix columns contain observed cohorts, including Unknown model and No model attribution where applicable. It never constructs all possible agent/model combinations.
 
@@ -22,9 +22,27 @@ The unit for session share is one host session on one machine and account source
 
 The default trend shows successful reads for five skills. Open Skills to search exact names and add or remove layers. Custom names survive refreshes and filter changes without substitution. Each name keeps its color while the page remains open. Agent, Model, and Agent + model show all observed series. Exact counts follow in View activity data, with 24 intervals per page. Undated evidence stays in the comparison and is omitted from the trend.
 
+Legend counts total the displayed range, or the selected dates after a selection. Pointer hover and keyboard inspection temporarily show one interval. Leaving inspection restores range totals. The readout names the scope for these counts.
+
+## Resources and Both
+
+Select Resources to compare activity on all tracked files, including `SKILL.md`. Select Both to combine skill evidence and file activity. Supporting files appear under their physical owning skill. Expand an owner to see its entrypoint and supporting files. Associated legacy records appear as Skill evidence with their agent name. File metadata absent from those records remains unrecorded. Parent totals include children once. Unowned files and unresolved skill locations remain visible.
+
+Both counts a mirrored native skill read and resource read once. Independent filesystem opens and accesses remain separate evidence. Resources retains the original file observations. Equal file or skill names do not merge physical locations.
+
+Recorded activity is the default measure in these views. It includes failures, attempts, and filesystem events. Specific measures separate successful reads, read failures, read attempts, filesystem opens, and filesystem accesses. Both also offers the skill evidence measures. Session share remains available only in Skills. Each content mode remembers its measure.
+
+Search matches file paths and owner names. A matching supporting file appears under its owner. Pagination keeps parents with their children. Select a count to see that cell's evidence breakdown, physical location, attribution, and first/latest evidence timestamps. These details do not invent a skill session path for filesystem activity.
+
+Only files with matching activity enter the main comparison. The Resources workspace retains inventory-only files and observation coverage. Zero recorded events do not establish that a file was unused.
+
+Agent, model, machine, project, and date filters also apply to resource activity. Resource-only agent/model pairs appear in these views. Unknown and non-agent evidence retain separate attribution. A known model slice cannot claim activity with an unknown model.
+
+Resource and combined views request compact aggregates from the server when content, measures, splits, or selected dates change. The full trend remains in place during a date-selection request. Selected counts show a loading state or a retry action until the requested counts arrive. Hover and keyboard inspection remain local. Returning to Skills restores its measure, split, and display.
+
 ## Selection and paths
 
-Select a skill in the successful-read ranking or legend to explore its successful reads. A skill outside the default five adds a trend layer. Drag across the chart to select UTC dates. The comparison follows these dates. Changing Measure, Split by, or Display preserves the interval and does not fetch another report.
+Select a skill in the successful-read ranking or legend to explore its successful reads. A skill outside the default five adds a trend layer. Drag across the chart to select UTC dates. The comparison follows these dates. In Skills, changing Measure, Split by, or Display preserves the interval and does not fetch another report.
 
 The Successful-read exploration panel remains specific to successful reads, including when the trend shows another measure. Its model counts, period comparison, and matching paths use successful reads in the selected interval. Skill details opens the shared detail region in Metrics. Model and path drilldowns preserve the selected read, model, and dates. The local path Model filter also supports native invocations and read attempts. It matches the same skill and measure as the selected count.
 
@@ -54,7 +72,7 @@ npm run dashboard:preview
 
 Open the printed URL, normally `http://127.0.0.1:7346/?preview=1`.
 The preview uses synthetic data in a new temporary database. It does not use `HOTPLATE_DB` or change the default database.
-The fixture contains 21 days of activity, 174 sessions, three projects, three named models, unknown model reads, failures, and capture gaps. Its sessions come from Pi, Claude Code, Codex, OpenCode v2, and untagged records.
+The fixture contains 21 days of skill activity, three projects, three named models, unknown model reads, failures, and capture gaps. Its latest hour includes Claude file activity, a mirrored entrypoint, supporting files, unowned files, and unknown attribution. Its sessions come from Pi, Claude Code, Codex, OpenCode v2, and untagged records.
 Model counts in this fixture are examples, not measured comparisons.
 
 Press Ctrl+C to stop the server and remove its temporary database.
@@ -99,4 +117,4 @@ A larger controlled response checks bounded rendering. It is not a production st
 Hotplate does not capture task outcomes, expected skill choices, causal parent-skill links, or agent identities. Miss rates and usefulness scores require those signals.
 Model comparisons use attributed read results, native invocations, and read attempts. Unknown models remain separate from records without model attribution.
 
-The dashboard is read-only. Its filters are not access controls. The server still materializes the full filtered dataset before browser pagination.
+The dashboard is read-only. Its filters are not access controls. Skills retains its filtered report for local exploration. Resource and combined analytics send aggregate bins, rows, and cohort counts; raw resource history stays on the server.

@@ -68,5 +68,34 @@ export function dashboardFixture({ now = new Date() } = {}) {
       });
     }
   }
+  const location = (path, ownerSkillPath = null, kind = "reference") => ({
+    filesystemId: "preview:skills", canonicalPath: path, observedPath: path,
+    rootPath: "/preview/skills", kind, ownerSkillPath,
+  });
+  const mirror = observations.findLast(record => record.evidence.kind === "read-result" && record.evidence.skill.name === "mako");
+  if (mirror) observations.push({ ...mirror, id: "preview-resource-mirror", sequence: ++sequence,
+    evidence: { kind: "resource-access", resource: location(mirror.evidence.skill.canonicalPath, mirror.evidence.skill.canonicalPath, "skill"),
+      operationId: mirror.evidence.toolCallId, mechanism: "host-tool", access: "read", outcome: mirror.evidence.outcome,
+      model: mirror.evidence.model, process: null, attribution: "session" } });
+  const resource = (name, offset, file, access = "read", outcome = "success", model = models[2], attribution = "session") => {
+    observations.push({ id: "preview-resource-" + name, producerId: "hotplate-synthetic-preview", sequence: ++sequence,
+      host: "claude-code", observedAt: new Date(end - 3_600_000 + offset * 60_000).toISOString(),
+      scope: { projectCwd: projects[0], sessionId: "preview-resource-session", sessionFile: null,
+        segmentId: "preview-resource-session", segmentReason: "startup", runId: null, turnId: "resource-turn", leafId: null },
+      evidence: { kind: "resource-access", resource: file, operationId: "preview-resource-" + name,
+        mechanism: access === "open" || access === "access" ? "fanotify" : "host-tool", access, outcome,
+        model, process: null, attribution } });
+  };
+  const owner = "/preview/skills/mako/SKILL.md";
+  resource("playbook", 10, location("/preview/skills/mako/playbooks/feature.md", owner));
+  resource("repeat", 20, location("/preview/skills/mako/playbooks/feature.md", owner));
+  resource("failure", 30, location("/preview/skills/mako/references/unavailable.md", owner), "read", "error");
+  resource("attempt", 40, location("/preview/skills/mako/references/execution.md", owner), "attempt", "unknown", null);
+  resource("support-only", 50, location("/preview/skills/owner-with-only-supporting-activity/references/a-long-reference-name-for-responsive-layout-verification.md", "/preview/skills/owner-with-only-supporting-activity/SKILL.md"));
+  resource("unowned", 55, location("/preview/skills/shared/standalone-reference.md"));
+  resource("other-entrypoint", 56, location("/preview/skills/second-owner/SKILL.md", "/preview/skills/second-owner/SKILL.md", "skill"));
+  resource("open", 58, location(owner, owner, "skill"), "open", "unknown", null, "harness");
+  resource("latest", 59, location("/preview/skills/mako/references/execution.md", owner), "access", "unknown", null, "harness");
+  resource("unattributed", 57, location("/preview/skills/shared/unknown-access.md"), "access", "unknown", null, "unknown");
   return observations;
 }
