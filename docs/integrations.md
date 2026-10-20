@@ -95,8 +95,7 @@ Shell capture statically parses a command and recognizes these readers:
 `N` and `M` must be positive integers, with `M` no smaller than `N`.
 `sed` accepts one file. A reader without file operands reads `< path` as its target. Other flags and executable paths remain unsupported.
 Readers can appear in any pipeline stage and in lists joined by `&&`, `||`, `;`, or newlines.
-`#` comments, unquoted leading `NAME=value` assignments, unquoted `~` and `~/...`, and `$HOME` or `${HOME}` are supported.
-A command made only of assignments, or an assignment to `HOME` or `CDPATH`, makes the whole command opaque.
+`#` comments, leading `NAME=value` prefix assignments, unquoted `~` and `~/...`, and `$HOME` or `${HOME}` are supported.
 Literal quoting and escaped spaces are supported.
 A reader target with a `..` segment is dropped, and coverage becomes opaque `missing-input`, because the shell resolves it against the physical directory.
 Redirections apply left to right. A read requires the reader's final stdout to reach the original stdout or stderr.
@@ -113,11 +112,38 @@ Claude Bash hooks track persistent working-directory changes.
 
 The reported tool outcome applies to a reader only when every connector is `&&` and the reader is alone in its pipeline.
 Other readers produce attempts.
-`echo`, `printf`, `true`, `false`, `pwd`, `ls`, and stdin filters after a pipe (`head`, `tail`, `sed`, `grep`, `rg`, `wc`, `sort`, `uniq`, `cut`, `tr`, `nl`, `cat`, `awk`, `jq`, `less`) are understood.
-`exit` is understood only in the `cd` guard or as the final step.
+`echo`, `printf`, `true`, `false`, `pwd`, `ls`, `export`, `exit`, `return`, `[`, `test`, `[[ ... ]]`, and stdin filters after a pipe (`head`, `tail`, `sed`, `grep`, `rg`, `wc`, `sort`, `uniq`, `cut`, `tr`, `nl`, `cat`, `awk`, `jq`, `less`) are understood.
 Any other command makes coverage opaque `unsupported-syntax`, and the recognized readers still produce evidence.
-`builtin`, `command`, `eval`, `.`, `source`, `exec`, and any other `exit` make the whole command opaque without evidence.
-Other variables, command substitution, process substitution, heredocs, background `&`, `|&`, globs, subshells, braces, and shell keywords such as `if` and `for` make the whole command opaque.
+
+Opacity is per step. A step is opaque when a word holds command substitution, backticks, process substitution, `$((...))` or `$[...]`, an unknown variable, `$?` or another special parameter, `${...}` beyond `${NAME}`, `~user`, brace expansion, `**`, or a glob that cannot expand.
+Background `&` and interpreters fed a heredoc (`python3 - <<EOF`) are opaque steps.
+Hotplate models `cd`, `pushd`, `popd`, assignments, `export`, `echo`, `printf` without `-v`, `true`, `false`, `:`, `test`, `[`, `[[`, `pwd`, `exit`, `return`, `break`, `continue`, and external commands.
+Every other bash builtin (`eval`, `source`, `.`, `builtin`, `command`, `exec`, `declare`, `read`, `set`, `trap`, `alias`, `let`, `umask`, and so on), `printf -v`, a call to a function defined in the command, and an opaque command word are opaque steps. No later step emits after one runs, even when it is reached through `&&` or `||`.
+An opaque step emits nothing. Coverage becomes opaque `unsupported-syntax`, and every target in the command becomes an attempt. Other steps still emit.
+An opaque step makes the directory unknown only when it can change it: `cd`, `pushd`, `popd`, one of the forms above, or a block whose body can.
+External commands with opaque arguments keep the directory.
+`exit`, `return`, or a block that contains one ends the command when reached unconditionally. After `a || exit 1`, later steps still run.
+A function definition emits nothing and makes the directory unknown.
+Unterminated quotes, substitutions or heredocs, control characters, nesting deeper than 32 levels, and the size limits make the whole command opaque.
+
+Assignment-only steps (`S=/x/skills`, `export S=/x/skills`) define variables for later steps. Values expand `~`, `$HOME`, and known variables. An opaque value makes the variable unknown.
+Only assignments reached by `;`, a newline, or the start define a variable. Assignments after `&&` or `||`, prefix assignments, and assignments inside multi-command pipelines do not.
+`$NAME` and `${NAME}` expand known variables, unquoted or in double quotes. An unquoted value with whitespace or glob characters makes the word opaque.
+`${NAME:=...}`, `$((...))`, `$[...]`, `((...))`, `for ((...))`, array subscript assignments, and `[[ ... -eq ... ]]` make all variables unknown, also in assignment values and redirect targets.
+An assignment or `export` of `HOME`, `CDPATH`, `PWD`, `OLDPWD`, `GLOBIGNORE`, `FIGNORE`, `GLOBSORT`, `BASH_ENV`, `ENV`, `POSIXLY_CORRECT`, `SHELLOPTS` or `BASHOPTS`, and a persistent `IFS=` assignment, make the whole command opaque.
+
+Native hooks expand unquoted `*`, `?`, and `[...]` against the filesystem with bash defaults: names that start with `.` match only a pattern that starts with `.`, and results are sorted.
+Globs expand in command arguments and in `for` word lists. A reader operand without a match is dropped. A glob in a `cd` argument, a command word, or a redirect target is opaque.
+A scan over 10,000 directory entries or a result over 128 paths makes the word opaque.
+Interpreted steps, loop iterations, glob directory entries, and glob matching share one work budget per tool call. When the budget runs out, the whole command is opaque `limit` without evidence.
+
+`for NAME in WORDS; do BODY; done` runs the body once for each word, with the directory at loop entry. Loop targets are attempts.
+The loop is opaque when a word is opaque or is a glob without a match, when it has more than 128 words, when the body can change the directory or uses `break` or `continue`, or when the loop has redirections.
+`if`, `while`, `until`, `case`, `select`, `{ ... }`, `( ... )`, `((...))`, `!`, `time`, and pipelines with a compound command are opaque blocks.
+A `( ... )` subshell keeps the directory and variables. Other blocks make the directory unknown when their body can change it, and make variables unknown when their body can assign them.
+
+Heredoc bodies (`<<DELIM`, `<<-DELIM`, `<<'DELIM'`, `<<"DELIM"`) and herestrings (`<<<word`) are data. A reader whose stdin is a heredoc or herestring reads no file.
+`a |& b` is `a 2>&1 | b`.
 
 The Python parser accepts these forms:
 

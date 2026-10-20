@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { discoverResourceRoots } from "../src/resource-paths.js";
-import { captureToolReads, toolObservationIdentity, type ReadTool, type ToolReadContext } from "../src/tool-reads.js";
+import { shellGlob } from "../src/shell-glob.js";
+import { captureToolReads, toolObservationIdentity, type ReadTool, type ShellGlob, type ToolReadContext } from "../src/tool-reads.js";
 
 function fixture() {
   const directory = mkdtempSync(join(tmpdir(), "hotplate-tool-reads-"));
@@ -125,9 +126,9 @@ test("unsupported shell semantics produce only sanitized unknown execution cover
       "cat $SKILL", "cat $(pwd)/SKILL.md", "cat `pwd`/SKILL.md", "cat references/*.md", "cat references/{first,second}.md",
       "cat ~user/SKILL.md", "cat -", "python analyze.py", "# cat references/second.md", "cat 'unclosed",
       "cat --number references/second.md", "head -n 0 references/second.md", "sed -n '1p' references/second.md references/alias.md",
-      "sed -n '2,1p' references/second.md", "PRIVATE_INPUT_CANARY references/second.md", "cat <<EOF\nreferences/second.md\nEOF",
-      "cat <<< references/second.md", "for f in references/second.md; do cat $f; done", "if true; then cat references/second.md; fi",
-      "cat references/second.md &", "cat references/second.md |& head", "cat <(true)", "(cat references/second.md)",
+      "sed -n '2,1p' references/second.md", "PRIVATE_INPUT_CANARY references/second.md",
+      "if true; then cat references/second.md; fi", "cat references/second.md &", "cat <(true)", "(cat references/second.md)",
+      "cat 'a' \"b", "cat $(echo 'x", "cat <<EOF\nreferences/second.md", "f() { cat references/second.md; }", "cat references/[a-z]*.md",
       "cat references/second.md &&", "| cat references/second.md", "cat references/second.md >", "sudo cat references/second.md",
     ]) {
       const result = captureToolReads({ operationId: "opaque", context: f.context, tool: { kind: "shell", cwd: f.skill, command, outcome: success } });
@@ -202,6 +203,130 @@ test("compound shell commands follow cd, home expansion, comments, redirects and
   } finally { f.close(); }
 });
 
+test("shell steps stay independently readable around opaque words, variables, loops, globs, blocks and heredocs", () => {
+  const f = fixture();
+  try {
+    const root = dirname(f.skill);
+    const entry = join(f.skill, "SKILL.md");
+    const second = join(f.skill, "references", "second.md");
+    const other = join(root, "other", "SKILL.md");
+    mkdirSync(dirname(other));
+    writeFileSync(other, "# Other\n");
+    const lines = (start: number, count: number | null) => ({ kind: "lines", start, count }) as const;
+    const whole = { kind: "whole" } as const;
+    const unsupported = { kind: "opaque", reason: "unsupported-syntax" } as const;
+    const recognized = (resourceCount: number) => ({ kind: "recognized", resourceCount }) as const;
+    const expansions: Record<string, readonly string[]> = { "vite.config.*": [], "references/zz*.md": [], "references/s*.md": [second], [`${root}/*/SKILL.md`]: [entry, other] };
+    const fake: ShellGlob = pattern => expansions[pattern] ?? null;
+    const cases: [string, ShellGlob | undefined, [string, unknown, string][], unknown][] = [
+      [`cat vite.config.* 2>/dev/null; cat ${second} | head -80`, undefined, [[second, whole, "attempt"]], unsupported],
+      [`cat vite.config.* 2>/dev/null; cat ${second} | head -80`, fake, [[second, whole, "attempt"]], recognized(1)],
+      ["cat references/s*.md", fake, [[second, whole, "inferred-read"]], recognized(1)],
+      ["cat references/s*.md", shellGlob, [[second, whole, "inferred-read"]], recognized(1)],
+      [`for f in ${root}/*/SKILL.md; do head -n 5 "$f"; done`, fake, [[entry, lines(1, 5), "attempt"], [other, lines(1, 5), "attempt"]], recognized(2)],
+      [`for f in ${root}/*/SKILL.md; do head -n 5 "$f"; done`, undefined, [], unsupported],
+      ["cd refer*; cat second.md", fake, [], unsupported],
+      ["ls *.md; cat SKILL.md", undefined, [[entry, whole, "attempt"]], unsupported],
+      [`S=${root}; cat -n $S/example/SKILL.md | sed -n '1,46p'`, undefined, [[entry, whole, "attempt"]], recognized(1)],
+      [`export S=${root}; head -n 3 "\${S}/other/SKILL.md"`, undefined, [[other, lines(1, 3), "attempt"]], recognized(1)],
+      [`L=~/.agents/skills; cat "$L/example/SKILL.md"`, undefined, [[entry, whole, "attempt"]], recognized(1)],
+      [`S=${root}; T=$S/example; cat $T/SKILL.md`, undefined, [[entry, whole, "attempt"]], recognized(1)],
+      [`cat $X/SKILL.md; cat ${second}`, undefined, [[second, whole, "attempt"]], unsupported],
+      [`X=${root} cat $X/example/SKILL.md`, undefined, [], unsupported],
+      [`S=${root}; S=$(pwd); cat $S/example/SKILL.md`, undefined, [], unsupported],
+      [`S=${root}; read S; cat $S/example/SKILL.md`, undefined, [], unsupported],
+      [`true && S=${root}; cat $S/example/SKILL.md`, undefined, [], unsupported],
+      [`S="${root} x"; cat $S/example/SKILL.md`, undefined, [], unsupported],
+      [`for f in ${entry} ${other}; do head -n 5 "$f"; done`, undefined, [[entry, lines(1, 5), "attempt"], [other, lines(1, 5), "attempt"]], recognized(2)],
+      ["for f in references/second.md\ndo\n  cat $f\ndone", undefined, [[second, whole, "attempt"]], recognized(1)],
+      ["for i in $(seq 1 3); do cat SKILL.md; done; cat references/second.md", undefined, [[second, whole, "attempt"]], unsupported],
+      ["for d in references; do cd $d; done; cat second.md", undefined, [], unsupported],
+      ["for f in SKILL.md references/second.md; do cat $f; break; done", undefined, [], unsupported],
+      ["while read d; do cd $d; done < dirs; cat SKILL.md", undefined, [], unsupported],
+      [`curl -fsS -H "Authorization: $(cat ~/.token)" https://example.test/x; cat SKILL.md`, undefined, [[entry, whole, "attempt"]], unsupported],
+      ["jj log -T 'commit_id ++ \"\\n\"' -r $REV && cat SKILL.md", undefined, [[entry, whole, "attempt"]], unsupported],
+      ['npm test; echo "exit=${PIPESTATUS[0]} $?"; cat SKILL.md', undefined, [[entry, whole, "attempt"]], unsupported],
+      ['echo "$(cat SKILL.md)"', undefined, [], unsupported],
+      ["git commit -m \"$(cat <<'EOF'\nDon't stop; cat SKILL.md\nEOF\n)\" && cat references/second.md", undefined, [[second, whole, "attempt"]], unsupported],
+      ["cat > SKILL.md <<'EOF'\n# Title\n; cat references/second.md\nEOF", undefined, [], recognized(0)],
+      ["cat <<EOF\nreferences/second.md\nEOF", undefined, [], recognized(0)],
+      ["cat <<-EOF\n\treferences/second.md\n\tEOF\ncat SKILL.md", undefined, [[entry, whole, "attempt"]], recognized(1)],
+      ["cat <<< references/second.md", undefined, [], recognized(0)],
+      ["python3 - <<EOF\nprint(open('SKILL.md').read())\nEOF\ncat references/second.md", undefined, [[second, whole, "attempt"]], unsupported],
+      ["if [ -f x ]; then cat SKILL.md; fi; cat references/second.md", undefined, [[second, whole, "attempt"]], unsupported],
+      ["[ -f SKILL.md ] || { echo missing; exit 1; }; cat SKILL.md", undefined, [[entry, whole, "attempt"]], unsupported],
+      ["if [ ! -f SKILL.md ]; then exit 1; fi; cat SKILL.md", undefined, [], unsupported],
+      ["[[ -f SKILL.md && -d references ]] && cat SKILL.md", undefined, [[entry, whole, "inferred-read"]], recognized(1)],
+      ["case x in a|b) cd references;; *) true;; esac; cat SKILL.md", undefined, [], unsupported],
+      ["( cd references && cat second.md ); cat SKILL.md", undefined, [[entry, whole, "attempt"]], unsupported],
+      ["{ cd references; }; cat SKILL.md", undefined, [], unsupported],
+      ["f(){ cd references; }; f; cat SKILL.md", undefined, [], unsupported],
+      [`cat(){ echo; }; cat ${entry}`, undefined, [], unsupported],
+      ["exit 1; cat SKILL.md", undefined, [], unsupported],
+      ["cd references && exit 0 && cat second.md", undefined, [], unsupported],
+      ["IFS=: ; cat SKILL.md", undefined, [], unsupported],
+      ["unset S; cat SKILL.md", undefined, [], unsupported],
+      ["cat references/second.md |& head", undefined, [[second, whole, "attempt"]], recognized(1)],
+      ["X=references; echo $[X=1]; cat $X/second.md", undefined, [], unsupported],
+      ["X=references; Y=$((X=1)); cat $X/second.md", undefined, [], unsupported],
+      ["X=references; (( X=1 )); cat $X/second.md", undefined, [], unsupported],
+      ["X=references; for ((X=0; X<1; X++)); do :; done; cat $X/second.md", undefined, [], unsupported],
+      ["X=references; a[X=1]=2; cat $X/second.md", undefined, [], unsupported],
+      ["X=references; echo ${a[X=1]}; cat $X/second.md", undefined, [], unsupported],
+      ["X=references; [[ X=1 -eq 1 ]]; cat $X/second.md", undefined, [], unsupported],
+      ["X=references; echo hi > /dev/null$((X=1)); cat $X/second.md", undefined, [], unsupported],
+      ...["eval true", "source env.sh", ". env.sh", "builtin true", "command -v jq", "exec true", "declare X=1", "typeset X=1", "local X=1", "readonly X=1",
+        "read X", "mapfile X < list", "readarray X < list", "printf -v X y", "printf -vX y", "wait -p X", "getopts a X", "trap 'cd /' DEBUG", "set -e", "shopt -s nullglob",
+        "unset X", "alias cat=true", "enable -n echo", "hash -r", "let X=1", "ulimit -n 64", "umask 077", "test -f x && source env.sh", "[ -f x ] || builtin cd /",
+        "if true; then source env.sh; fi", "true | true && kill $$"].map(prefix =>
+        [`${prefix}; cat ${entry}`, undefined, [], unsupported] as [string, ShellGlob | undefined, [string, unknown, string][], unknown]),
+      [`f() { g; }; g() { exit; }; f; cat ${entry}`, undefined, [], unsupported],
+      [`f() { :; }; true && f; cat ${entry}`, undefined, [], unsupported],
+      ...["GLOBIGNORE=x", "FIGNORE=x", "GLOBSORT=name", "BASH_ENV=x", "ENV=x", "POSIXLY_CORRECT=1", "SHELLOPTS=x", "BASHOPTS=x", "export GLOBIGNORE=x"].map(prefix =>
+        [`${prefix}; cat ${entry}`, undefined, [], unsupported] as [string, ShellGlob | undefined, [string, unknown, string][], unknown]),
+      [`GLOBIGNORE=x cat ${entry}`, undefined, [], unsupported],
+      [`for f in references/zz*.md; do cat $f; done; cat ${entry}`, fake, [[entry, whole, "attempt"]], unsupported],
+      [`for f in ${entry} references/zz*.md; do cat $f; done`, fake, [], unsupported],
+      ["printf '%s' x; echo; true; :; pwd; cat SKILL.md", undefined, [[entry, whole, "attempt"]], recognized(1)],
+    ];
+    for (const [command, glob, expected, recognition] of cases) {
+      const context: ToolReadContext = glob ? { ...f.context, glob } : f.context;
+      const evidence = captureToolReads({ operationId: "steps", context, tool: { kind: "shell", cwd: f.skill, command, outcome: success } });
+      const reads = evidence.filter(item => item.kind === "resource-access");
+      assert.deepEqual(reads.map(item => [item.resource.canonicalPath, item.toolRead?.requested, item.access]), expected, command);
+      assert.deepEqual(evidence.at(-1)?.kind === "tool-coverage" ? evidence.at(-1) : null, { kind: "tool-coverage", operationId: "steps", family: "shell",
+        outcome: "success", model: f.context.model, recognition }, command);
+    }
+  } finally { f.close(); }
+});
+
+test("adversarial loops, globs and step counts exhaust one shared work budget quickly", () => {
+  const f = fixture();
+  try {
+    const tree = join(f.directory, "tree");
+    for (let outer = 0; outer < 60; outer += 1) {
+      mkdirSync(join(tree, `d${outer}`), { recursive: true });
+      for (let inner = 0; inner < 60; inner += 1) writeFileSync(join(tree, `d${outer}`, `f${inner}`), "");
+    }
+    const words = (count: number) => Array.from({ length: count }, (_, index) => `w${index}`).join(" ");
+    const entry = join(f.skill, "SKILL.md");
+    const commands = [
+      `for a in 1 2 3; do for b in ${words(100)}; do for c in ${words(100)}; do true; done; done; done; cat ${entry}`,
+      `for a in ${words(100)}; do for b in ${words(100)}; do cat ${tree}/*/* references/*; done; done; cat ${entry}`,
+      `for a in ${words(39)}; do for b in ${words(39)}; do ls ${tree}/*/*; done; done; cat ${entry}`,
+      `for a in ${words(128)}; do for b in ${words(128)}; do true; true; done; done; cat ${entry}`,
+    ];
+    let worst = 0;
+    for (const command of commands) {
+      const started = performance.now();
+      const evidence = captureToolReads({ operationId: "budget", context: { ...f.context, glob: shellGlob }, tool: { kind: "shell", cwd: f.skill, command, outcome: success } });
+      worst = Math.max(worst, performance.now() - started);
+      assert.deepEqual(evidence.map(item => item.kind === "tool-coverage" ? item.recognition : item.kind), [{ kind: "opaque", reason: "limit" }], command.slice(0, 80));
+    }
+    assert.ok(worst < 250, `${worst} ms`);
+  } finally { f.close(); }
+});
+
 test("Python recognizes only complete literal read expressions and known imports", () => {
   const f = fixture();
   try {
@@ -238,6 +363,9 @@ test("coverage does not retain unrelated paths, and oversized input is bounded",
     const tools: ReadTool[] = [
       { kind: "shell", command: "cat /tmp/PRIVATE_PATH_CANARY", cwd: f.skill, outcome: success },
       { kind: "shell", command: "x".repeat(32_769), cwd: f.skill, outcome: success },
+      { kind: "shell", command: `echo ${"$(".repeat(10_000)}`, cwd: f.skill, outcome: success },
+      { kind: "shell", command: `${"( ".repeat(10_000)}true`, cwd: f.skill, outcome: success },
+      { kind: "shell", command: `${"! ".repeat(10_000)}true`, cwd: f.skill, outcome: success },
     ];
     for (const tool of tools) {
       const result = captureToolReads({ operationId: "no-resource", context: f.context, tool });
