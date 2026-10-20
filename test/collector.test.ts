@@ -1,7 +1,7 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createAssistantMessageEventStream, type Api, type AssistantMessage, type Model, type SimpleStreamOptions, type TranscriptContext } from "@earendil-works/pi-ai";
@@ -108,6 +108,37 @@ test("pi SDK records failed SKILL.md reads without storing error bodies", async 
     assert.equal(missing?.failedReadCount, 1);
 
     await open.store.close();
+  } finally {
+    restoreHotplateDb(previousDb);
+    await rm(fixture.rootDir, { recursive: true, force: true });
+  }
+});
+
+test("pi SDK captures shell and Python reference reads, failures, and opaque scripts", async () => {
+  const fixture = await createFixture();
+  const previousDb = process.env.HOTPLATE_DB;
+  process.env.HOTPLATE_DB = fixture.databasePath;
+  try {
+    const session = await createSession(fixture);
+    try { await session.prompt("Read references through general tools.", { source: "interactive" }); }
+    finally { await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }); session.dispose(); }
+    const open = openHotplateReadStore({ databasePath: fixture.databasePath });
+    assert.equal(open.kind, "ready");
+    if (open.kind !== "ready") return;
+    try {
+      const report = await open.store.queryContentAnalytics({ filter: { projectCwd: fixture.projectDir }, content: "resources",
+        measure: "toolActivity", split: "model", selection: { kind: "all" } });
+      assert.equal(report.overall.count, 4);
+      assert.equal(report.overall.counts.successfulReads, 1);
+      assert.equal(report.overall.counts.inferredReads, 2);
+      assert.equal(report.overall.counts.readAttempts, 1);
+      assert.equal(report.coverage.overall.observedOperations, 5);
+      assert.equal(report.coverage.overall.opaqueOperations, 1);
+      assert.equal(report.coverage.overall.outcomes.error, 1);
+      assert.ok(report.selection.series.every((series) => series.model?.id === fakeModel.id));
+      assert.equal((await open.store.queryOverview({})).successfulReadCount, 0);
+    } finally { await open.store.close(); }
+    assert.equal((await readFile(fixture.databasePath)).includes(Buffer.from("GENERAL_TOOL_OUTPUT_CANARY")), false);
   } finally {
     restoreHotplateDb(previousDb);
     await rm(fixture.rootDir, { recursive: true, force: true });
@@ -233,6 +264,11 @@ async function createFixture() {
     `---\nname: test-skill\ndescription: Use for collector tests.\n---\n\n# Test skill\n\nRead this file during the test.\n`,
     "utf8",
   );
+  const referenceDir = join(skillDir, "references");
+  const referencePath = join(referenceDir, "guide with spaces.md");
+  await mkdir(referenceDir);
+  await writeFile(referencePath, "GENERAL_TOOL_OUTPUT_CANARY\nsecond\nthird\nfourth\n");
+  await writeFile(join(skillDir, "analyze.py"), `open(${JSON.stringify(referencePath)}).read()\n`);
 
   return {
     rootDir,
@@ -259,10 +295,12 @@ async function createSession(fixture: Awaited<ReturnType<typeof createFixture>>,
     agentDir: fixture.agentDir,
     skillsOverride: () => ({ skills: [skill], diagnostics: [] }),
     extensionFactories: [fakeProviderExtension(fixture.skillPath, fixture.missingSkillPath), (pi) => {
-      const names = ["XDG_DATA_HOME", "HOTPLATE_CONFIG"] as const;
+      const names = ["XDG_DATA_HOME", "HOTPLATE_CONFIG", "HOTPLATE_PROCESS_REGISTRY", "HOTPLATE_RESOURCE_REGISTRY"] as const;
       const previous = names.map(name => process.env[name]);
       try {
         process.env.XDG_DATA_HOME = join(fixture.rootDir, "account-data");
+        process.env.HOTPLATE_PROCESS_REGISTRY = join(fixture.rootDir, "process-registry");
+        process.env.HOTPLATE_RESOURCE_REGISTRY = join(fixture.rootDir, "resource-registry");
         delete process.env.HOTPLATE_CONFIG;
         hotplateExtension(pi);
       } finally {
@@ -283,7 +321,7 @@ async function createSession(fixture: Awaited<ReturnType<typeof createFixture>>,
     settingsManager: SettingsManager.inMemory({ retry: { enabled: false } }),
     model: fakeModel,
     thinkingLevel: "off",
-    tools: ["read"],
+    tools: ["read", "bash"],
   });
   await session.bindExtensions({});
   return session;
@@ -326,6 +364,7 @@ function fakeStream(
       await options?.onResponse?.({ status: 200, headers: {} }, model);
       const message = context.messages.some((entry) => entry.role === "toolResult")
         ? assistantTextMessage("The skill file was read.")
+        : lastUserText(context).includes("general tools") ? assistantGeneralToolMessage(skillPath)
         : assistantReadMessage(lastUserText(context).includes("missing") ? missingSkillPath : skillPath);
       stream.push({ type: "start", partial: { ...message, content: [], stopReason: "pending" } });
       stream.push({ type: "done", reason: message.stopReason === "toolUse" ? "toolUse" : "stop", message });
@@ -346,6 +385,21 @@ function assistantReadMessage(path: string): AssistantMessage {
     usage: zeroUsage,
     stopReason: "toolUse",
     timestamp: Date.now(),
+  };
+}
+
+function assistantGeneralToolMessage(skillPath: string): AssistantMessage {
+  const reference = join(dirname(skillPath), "references", "guide with spaces.md");
+  return {
+    role: "assistant", api: fakeModel.api, provider: fakeModel.provider, model: fakeModel.id,
+    usage: zeroUsage, stopReason: "toolUse", timestamp: Date.now(),
+    content: [
+      { type: "toolCall", id: "read-reference", name: "read", arguments: { path: reference, offset: 2, limit: 2 } },
+      { type: "toolCall", id: "shell-reference", name: "bash", arguments: { command: `sed -n '2,3p' '${reference}'` } },
+      { type: "toolCall", id: "python-reference", name: "bash", arguments: { command: `python3 -c "print(open('${reference}').read())"` } },
+      { type: "toolCall", id: "opaque-script", name: "bash", arguments: { command: `python3 '${join(dirname(skillPath), "analyze.py")}'` } },
+      { type: "toolCall", id: "failed-shell", name: "bash", arguments: { command: `cat '${join(dirname(reference), "missing.md")}'` } },
+    ],
   };
 }
 

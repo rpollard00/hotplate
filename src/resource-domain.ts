@@ -11,16 +11,42 @@ export type ResourceLocation = {
   ownerSkillPath: string | null;
 };
 
-export type ResourceAccessEvidence = {
+type ResourceAccessIdentity = {
   kind: "resource-access";
   resource: ResourceLocation;
   operationId: string;
-  mechanism: "host-tool" | "fanotify";
-  access: "attempt" | "read" | "open" | "access";
-  outcome: "success" | "error" | "unknown";
   model: ModelRef;
   process: ProcessIdentity | null;
   attribution: "session" | "harness" | "non-agent" | "unknown";
+};
+
+
+export type ReadPortion = { kind: "unknown" } | { kind: "whole" }
+  | { kind: "lines"; start: number; count: number | null };
+export type ReadDelivery = { kind: "unknown" }
+  | { kind: "known"; returned: ReadPortion; truncated: boolean };
+export type ToolReadMetadata = {
+  kind: "structured-read" | "literal-command";
+  requested: ReadPortion;
+  delivery: ReadDelivery;
+  revision: { kind: "unknown" } | { kind: "known"; value: string };
+};
+export type ResourceAccessEvidence = ResourceAccessIdentity & (
+  | { mechanism: "fanotify"; access: "open" | "access"; outcome: "unknown"; toolRead?: never }
+  | ({ mechanism: "host-tool" } & (
+    | { access: "read"; outcome: "success" | "error"; toolRead?: ToolReadMetadata & { kind: "structured-read" } }
+    | { access: "attempt"; outcome: "unknown"; toolRead?: ToolReadMetadata }
+    | { access: "inferred-read"; outcome: "success"; toolRead: ToolReadMetadata & { kind: "literal-command" } }
+  ))
+);
+export type ToolCoverageEvidence = {
+  kind: "tool-coverage";
+  operationId: string;
+  family: "file" | "shell" | "python" | "other";
+  outcome: "success" | "error" | "unknown";
+  model: ModelRef;
+  recognition: { kind: "recognized"; resourceCount: number }
+    | { kind: "opaque"; reason: "unsupported-syntax" | "missing-input" | "unsupported-tool" | "limit" };
 };
 
 export type InventoryOrigin = "configured" | "conventional" | "host";
@@ -54,7 +80,7 @@ export type ObserverCoverageEvidence = {
   | { status: "unavailable" | "overflow"; reason: ObserverCoverageReason }
 );
 
-export type ResourceEvidence = ResourceAccessEvidence | InventorySnapshotEvidence | ObserverCoverageEvidence;
+export type ResourceEvidence = ResourceAccessEvidence | InventorySnapshotEvidence | ObserverCoverageEvidence | ToolCoverageEvidence;
 
 export type ResourceRow = {
   resourceId: string;
@@ -68,6 +94,7 @@ export type ResourceRow = {
   lastAccessAt: string | null;
   attemptCount: number;
   successfulReadCount: number;
+  inferredReadCount: number;
   failedReadCount: number;
   openCount: number;
   accessCount: number;

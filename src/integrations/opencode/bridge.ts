@@ -1,12 +1,13 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { isAbsolute } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import type { CaptureFact } from "../../capture.js";
 import type { Evidence, ModelRef, ObservationScope } from "../../domain.js";
-import type { ResourceLocation } from "../../resource-domain.js";
+import type { ReadDelivery, ResourceLocation } from "../../resource-domain.js";
 import type { ResourceRoot } from "../../resource-paths.js";
 import type { SessionInventoryRequest } from "../../resource-session.js";
-import { skillAtResource } from "../common.js";
+import type { ReadTool, ToolOutcome } from "../../tool-reads.js";
+import { exitOutcome, positiveInteger, requestedLines, skillAtResource, toolReadFacts } from "../common.js";
 
 export type OpenCodeContext = { projectCwd: string; observedAt?: string; model?: ModelRef; env?: NodeJS.ProcessEnv; roots?: readonly ResourceRoot[] };
 
@@ -27,6 +28,46 @@ export function toolEvidence(tool: unknown, input: unknown, callId: string, outc
   if (tool !== "read") return null;
   const skill = skillAtResource(resource);
   return skill ? { kind: "read-result", skill, toolCallId: callId, outcome, model: context.model ?? null } : null;
+}
+
+export function openCodeToolFacts(fact: Omit<CaptureFact, "evidence">, input: {
+  version: 1 | 2;
+  name: unknown;
+  args: Record<string, unknown>;
+  result: Record<string, unknown> | null;
+  failed: boolean;
+}, context: OpenCodeContext, roots: readonly ResourceRoot[]): CaptureFact[] {
+  const outcome: ToolOutcome = { kind: input.failed ? "failed" : "succeeded" };
+  let tool: ReadTool;
+  if (input.name === "read") {
+    const path = input.version === 1 ? input.args.filePath : input.args.path;
+    tool = typeof path === "string"
+      ? { kind: "file", path, requested: requestedLines(input.args.offset, input.args.limit), outcome,
+        delivery: input.version === 2 && !input.failed ? readDelivery(input.result?.output) : { kind: "unknown" } }
+      : { kind: "opaque", family: "file", outcome, reason: "missing-input" };
+  } else if (input.name === "bash" || (input.version === 2 && input.name === "shell")) {
+    const metadata = object(input.result?.metadata);
+    const output = object(input.result?.output);
+    const shellOutcome: ToolOutcome = input.failed || output?.timeout === true || metadata?.timeout === true
+      ? { kind: "failed" }
+      : output?.status === "running" || metadata?.status === "running"
+        ? { kind: "unreported" }
+        : exitOutcome(input.version === 2 && output ? output.exit : metadata?.exit);
+    tool = typeof input.args.command === "string"
+      ? { kind: "shell", command: input.args.command, outcome: shellOutcome,
+        cwd: typeof input.args.workdir === "string" ? resolve(context.projectCwd, input.args.workdir) : context.projectCwd }
+      : { kind: "opaque", family: "shell", outcome: shellOutcome, reason: "missing-input" };
+  } else {
+    return [];
+  }
+  return toolReadFacts(fact, tool, roots, context.model ?? null);
+}
+
+function readDelivery(value: unknown): ReadDelivery {
+  const output = object(value);
+  if (output?.type !== "text-page" || output.truncated !== true || !positiveInteger(output.offset)
+    || !positiveInteger(output.next) || output.next <= output.offset) return { kind: "unknown" };
+  return { kind: "known", returned: { kind: "lines", start: output.offset, count: output.next - output.offset }, truncated: true };
 }
 
 export function toolScope(sessionId: string, context: OpenCodeContext, turnId: string | null): ObservationScope {

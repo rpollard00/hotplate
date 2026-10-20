@@ -6,11 +6,13 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { Evidence, GapReason, HotplateStore, ModelRef, Observation, ObservationScope, SegmentReason } from "../domain.js";
 import { openHotplateStore } from "../store.js";
-import { buildSkillCatalog, commandIntentSkillName, resourceFromReadPath, skillCatalogAdvertisements, skillFromResource, skillWrappersFromPrompt, type SkillCatalog } from "./skills.js";
+import { buildSkillCatalog, commandIntentSkillName, skillCatalogAdvertisements, skillFromResource, skillWrappersFromPrompt, type SkillCatalog } from "./skills.js";
 import { discoverResourceRoots, resourceFilesystemId, type ResourceRoot } from "../resource-paths.js";
 import { publishResourceRoots } from "../resource-root-registry.js";
 import { inventoryResources } from "../resource-inventory.js";
 import { registerHarnessProcess, unregisterHarnessProcess, type ProcessRegistration } from "../process-attribution.js";
+import { normalizePiTool } from "../integrations/pi.js";
+import { captureToolReads, toolObservationIdentity } from "../tool-reads.js";
 
 const MAX_QUEUE = 1_000;
 const SHUTDOWN_DEADLINE_MS = 500;
@@ -46,6 +48,7 @@ export class HotplateCollector {
   #warned = false;
   #context: CollectorContext | null = null;
   #toolCallModels = new Map<string, ModelRef>();
+  #seenToolResults = new Set<string>();
   #scope: ObservationScope = {
     projectCwd: process.cwd(), sessionId: null, sessionFile: null,
     segmentId: randomUUID(), segmentReason: "unknown", runId: null, turnId: null, leafId: null,
@@ -131,7 +134,7 @@ export class HotplateCollector {
       } else if (event.message.role === "assistant") {
         const model = { provider: event.message.provider, id: event.message.responseModel ?? event.message.model };
         for (const block of event.message.content) {
-          if (block.type === "toolCall" && block.name === "read") this.#toolCallModels.set(block.id, model);
+          if (block.type === "toolCall") this.#toolCallModels.set(block.id, model);
         }
       }
     });
@@ -139,15 +142,27 @@ export class HotplateCollector {
 
   toolResult(event: ToolResultEvent, ctx: CollectorContext): void {
     this.#safe(() => {
-      const model = this.#toolCallModels.get(event.toolCallId) ?? null;
-      this.#toolCallModels.delete(event.toolCallId);
-      if (event.toolName !== "read" || typeof event.input.path !== "string") return;
-      const resource = resourceFromReadPath(event.input.path, ctx.cwd, this.#roots);
-      const skill = skillFromResource(resource, this.#catalog);
-      if (skill) this.#enqueue({ kind: "read-result", skill, toolCallId: event.toolCallId, outcome: event.isError ? "error" : "success", model });
-      if (resource) this.#enqueue({ kind: "resource-access", resource, operationId: event.toolCallId, mechanism: "host-tool",
-        access: "read", outcome: event.isError ? "error" : "success", model, process: this.#registration?.process ?? null,
-        attribution: this.#scope.sessionId === null ? "harness" : "session" });
+      const tool = normalizePiTool(event, ctx.cwd);
+      if (!tool) return;
+      const operation = JSON.stringify([this.#scope.sessionId ?? this.#scope.segmentId, event.toolCallId]);
+      if (this.#seenToolResults.has(operation)) return;
+      if (this.#seenToolResults.size >= 4096) {
+        const oldest = this.#seenToolResults.values().next().value;
+        if (oldest !== undefined) this.#seenToolResults.delete(oldest);
+      }
+      this.#seenToolResults.add(operation);
+      const parent = "parentToolCallId" in event && typeof event.parentToolCallId === "string" ? event.parentToolCallId : null;
+      const model = this.#toolCallModels.get(event.toolCallId) ?? (parent ? this.#toolCallModels.get(parent) : null) ?? null;
+      const evidence = captureToolReads({ operationId: event.toolCallId, tool, context: {
+        cwd: ctx.cwd, roots: this.#roots, model, process: this.#registration?.process ?? null,
+        attribution: this.#scope.sessionId === null ? "harness" : "session",
+      } });
+      if (tool.kind === "file") {
+        const read = evidence.find((item) => item.kind === "resource-access");
+        const skill = skillFromResource(read?.kind === "resource-access" ? read.resource : null, this.#catalog);
+        if (skill) this.#enqueue({ kind: "read-result", skill, toolCallId: event.toolCallId, outcome: event.isError ? "error" : "success", model });
+      }
+      for (const item of evidence) this.#enqueue(item);
     });
   }
 
@@ -193,6 +208,11 @@ export class HotplateCollector {
   }
 
   #fact(evidence: Evidence, scope = this.#scope): Observation {
+    if (evidence.kind === "tool-coverage" || evidence.kind === "read-result"
+      || (evidence.kind === "resource-access" && evidence.toolRead)) {
+      return { ...toolObservationIdentity({ host: "pi", scope, evidence }), host: "pi",
+        observedAt: this.#now().toISOString(), scope: { ...scope }, evidence };
+    }
     this.#sequence += 1;
     return { host: "pi", id: `${this.#producerId}:${this.#sequence}`, producerId: this.#producerId,
       sequence: this.#sequence, observedAt: this.#now().toISOString(), scope: { ...scope }, evidence };

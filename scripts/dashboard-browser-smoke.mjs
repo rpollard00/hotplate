@@ -272,10 +272,10 @@ try {
     }
     const firstRequests = await assertAppliedRange('4h', '2025-02-21T08:17:43.567Z', '2025-02-21T12:17:43.567Z');
     assert.equal(firstRequests[1].searchParams.get('content'), 'both');
-    assert.equal(firstRequests[1].searchParams.get('measure'), 'activity');
+    assert.equal(firstRequests[1].searchParams.get('measure'), 'toolActivity');
     assert.equal(await evaluate('document.getElementById("metric-content").value'), 'both');
-    assert.equal(await evaluate('document.getElementById("metric-measure").value'), 'activity');
-    assert.equal(await evaluate('document.getElementById("metric-measure").selectedOptions[0].textContent'), 'Recorded activity');
+    assert.equal(await evaluate('document.getElementById("metric-measure").value'), 'toolActivity');
+    assert.equal(await evaluate('document.getElementById("metric-measure").selectedOptions[0].textContent'), 'Tool activity');
     assert.equal(await evaluate('document.getElementById("metrics-heading").textContent'), 'Skill and resource metrics');
     assert.equal(await evaluate('document.getElementById("skills-heading").textContent'), 'Compare skills and resources');
     assert.equal(await evaluate('document.getElementById("metric-display").disabled'), true);
@@ -351,19 +351,19 @@ try {
     await click('#reset-filters'); await until(ready);
     const resetRequests = await assertAppliedRange('4h', '2025-02-21T08:17:43.567Z', '2025-02-21T12:17:43.567Z');
     assert.equal(resetRequests[1].searchParams.get('content'), 'both');
-    assert.equal(resetRequests[1].searchParams.get('measure'), 'activity');
+    assert.equal(resetRequests[1].searchParams.get('measure'), 'toolActivity');
     for (const url of resetRequests) for (const key of ['selectionFrom', 'selectionTo', 'host', 'model', 'projectCwd']) assert.equal(url.searchParams.has(key), false);
     assert.equal(await evaluate('document.getElementById("metric-content").value'), 'both');
-    assert.equal(await evaluate('document.getElementById("metric-measure").value'), 'activity');
+    assert.equal(await evaluate('document.getElementById("metric-measure").value'), 'toolActivity');
     assert.equal(await evaluate('document.getElementById("metric-split").value'), 'skill');
     assert.equal(await evaluate('document.getElementById("metric-display").value'), 'count');
     assert.equal(await evaluate('document.getElementById("metric-display").disabled'), true);
     assert.equal(await evaluate('document.querySelector(".brush-band")?.hidden ?? true'), true);
     assert.deepEqual((await legendValues()).map(([name]) => name), defaultContentNames, 'Reset restores the default content trends');
     await change('metric-content', 'resources'); await until(ready);
-    assert.equal(await evaluate('document.getElementById("metric-measure").value'), 'activity', 'Reset restores the remembered Resources default');
+    assert.equal(await evaluate('document.getElementById("metric-measure").value'), 'toolActivity', 'Reset restores the remembered Resources default');
     await change('metric-content', 'both'); await until(ready);
-    assert.equal(await evaluate('document.getElementById("metric-measure").value'), 'activity', 'Reset restores the remembered Both default');
+    assert.equal(await evaluate('document.getElementById("metric-measure").value'), 'toolActivity', 'Reset restores the remembered Both default');
     await change('metric-content', 'skills');
     assert.equal(await evaluate('document.getElementById("metric-measure").value'), 'successfulReads');
     assert.equal(await evaluate('document.getElementById("metric-split").value'), 'skill');
@@ -1246,7 +1246,8 @@ try {
     const contentRows = () => evaluate('Array.from(document.querySelectorAll("#skill-table [data-content-key]:not(.content-child)"), row => [row.dataset.contentKey, row.querySelector("strong > button")?.textContent || null])');
     for (const content of ['resources', 'both']) {
       await change('metric-content', content); await until(ready);
-      assert.equal(await evaluate('document.getElementById("metric-measure").value'), 'activity');
+      assert.equal(await evaluate('document.getElementById("metric-measure").value'), 'toolActivity');
+      await change('metric-measure', 'activity'); await until(ready);
       assert.equal(await evaluate('document.getElementById("metric-display").disabled'), true);
       assert.equal(await evaluate('document.getElementById("explorer-panel").hidden'), true);
       for (const split of ['skill', 'agent', 'model', 'agent-model']) {
@@ -1292,7 +1293,7 @@ try {
     const matrixCell = matrixRow.cells.find(cell => cell.key === matrixColumn.key);
     await click('#skill-table tbody tr td button');
     const detailCounts = await evaluate('Array.from(document.querySelectorAll("#content-detail .content-breakdown > div"), item => [item.lastChild.textContent, Number(item.firstChild.textContent.replaceAll(",", ""))])');
-    const labels = { successfulReads: 'Successful reads', failedReads: 'Read failures', readAttempts: 'Read attempts', fsOpens: 'Filesystem opens', fsAccesses: 'Filesystem accesses', invocations: 'Native invocations', invocationFailures: 'Invocation failures', requests: 'Requests', wrappers: 'Wrappers' };
+    const labels = { successfulReads: 'Confirmed reads', inferredReads: 'Inferred reads', failedReads: 'Read failures', readAttempts: 'Read attempts', fsOpens: 'Filesystem opens', fsAccesses: 'Filesystem accesses', invocations: 'Native invocations', invocationFailures: 'Invocation failures', requests: 'Requests', wrappers: 'Wrappers' };
     assert.deepEqual(detailCounts, Object.entries(labels).map(([key, label]) => [label, matrixCell?.counts[key] || 0]), 'Cell details retain their own evidence breakdown');
     for (const [width, height] of [[1440,1100], [390,844], [320,700]]) {
       await command('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: width < 500 });

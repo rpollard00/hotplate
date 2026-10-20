@@ -1,7 +1,7 @@
 import { readNativeAccountConfiguration } from "./integrations/native-settings.js";
 import { createHash } from "node:crypto";
 import type { CaptureWriteSummary, Evidence, NativeHostId, ObservationScope } from "./domain.js";
-import { parseObservation, validateObservationMetadata } from "./observation.js";
+import { parseObservation, requiresToolProtocol4, validateObservationMetadata } from "./observation.js";
 import { openCaptureStore, openHotplateStore, resolveHotplateDatabasePath } from "./store.js";
 
 export type CaptureFact = {
@@ -11,7 +11,7 @@ export type CaptureFact = {
   occurrenceId: string;
   observedAt: string;
   scope: ObservationScope;
-  evidence: Extract<Evidence, { kind: "command-intent" | "read-attempt" | "read-result" | "skill-invocation" | "catalog-snapshot" | "resource-access" }>;
+  evidence: Extract<Evidence, { kind: "command-intent" | "read-attempt" | "read-result" | "skill-invocation" | "catalog-snapshot" | "resource-access" | "tool-coverage" }>;
 };
 
 export function parseCaptureFact(value: unknown): CaptureFact {
@@ -27,8 +27,8 @@ export function parseCaptureFact(value: unknown): CaptureFact {
   const observation = parseObservation({ id: "validation", producerId: "validation", sequence: 0, host, observedAt: value.observedAt, scope: value.scope, evidence: value.evidence });
   validateObservationMetadata(observation, observation);
   const evidence = observation.evidence;
-  if (evidence.kind !== "read-attempt" && evidence.kind !== "command-intent" && evidence.kind !== "read-result" && evidence.kind !== "skill-invocation" && evidence.kind !== "catalog-snapshot" && evidence.kind !== "resource-access") throw new Error("Invalid native evidence");
-  if (value.sessionId === null && evidence.kind !== "resource-access") throw new Error("Invalid native session");
+  if (evidence.kind !== "read-attempt" && evidence.kind !== "command-intent" && evidence.kind !== "read-result" && evidence.kind !== "skill-invocation" && evidence.kind !== "catalog-snapshot" && evidence.kind !== "resource-access" && evidence.kind !== "tool-coverage") throw new Error("Invalid native evidence");
+  if (value.sessionId === null && evidence.kind !== "resource-access" && evidence.kind !== "tool-coverage") throw new Error("Invalid native session");
   if (observation.scope.sessionId !== value.sessionId) throw new Error("Invalid capture scope");
   const fact: CaptureFact = { host, sessionId: value.sessionId, actorId: value.actorId, occurrenceId: value.occurrenceId, observedAt: observation.observedAt, scope: observation.scope, evidence };
   if (Buffer.byteLength(JSON.stringify(fact)) > 512 * 1024) throw new Error("Capture metadata too large");
@@ -42,15 +42,21 @@ export async function captureFact(args: { fact: CaptureFact; env?: NodeJS.Proces
   if (env.HOTPLATE_DISABLED === "1" || env.HOTPLATE_DISABLED === "true") return { kind: "disabled" };
   const fact = parseCaptureFact(args.fact);
   const identity = [fact.host, fact.sessionId, fact.actorId, fact.occurrenceId, fact.evidence.kind];
-  if (fact.evidence.kind === "resource-access") identity.push(fact.evidence.resource.filesystemId, fact.evidence.resource.canonicalPath, fact.evidence.resource.observedPath);
+  const toolEvidence = requiresToolProtocol4(fact.evidence);
+  if (toolEvidence) identity.push("tool-v4");
+  if (fact.evidence.kind === "resource-access") {
+    identity.push(fact.evidence.resource.filesystemId, fact.evidence.resource.canonicalPath);
+    if (!toolEvidence) identity.push(fact.evidence.resource.observedPath);
+  }
   const receipt = createHash("sha256").update(JSON.stringify(identity)).digest("hex");
   const configuration = readNativeAccountConfiguration(env);
   const store = configuration
     ? openCaptureStore(configuration)
     : openHotplateStore({ databasePath: resolveHotplateDatabasePath({ env }) });
   try {
+    const id = toolEvidence ? `native:tool:${receipt}` : `native:${receipt}`;
     return { kind: "recorded", ...await store.record({
-      id: `native:${receipt}`, producerId: `native:${receipt}`, sequence: 0, host: fact.host,
+      id, producerId: id, sequence: 0, host: fact.host,
       observedAt: fact.observedAt, scope: fact.scope, evidence: fact.evidence,
     }) };
   } finally { await store.close(); }

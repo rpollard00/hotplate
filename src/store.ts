@@ -10,7 +10,7 @@ import { homedir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import { DatabaseSync } from "node:sqlite";
 import { createResourceSchema, recordResourceObservation, queryResources, queryResourceCoverage } from "./resource-store.js";
-import type { ResourceView, ResourceCoverageView } from "./resource-domain.js";
+import type { ResourceView, ResourceCoverageView, ToolCoverageEvidence } from "./resource-domain.js";
 import { buildContentAnalytics, type ContentFact, type ContentQuery, type ContentReport, type ContentSkillEvidence } from "./content-analytics.js";
 import type {
   HostId,
@@ -41,7 +41,7 @@ import type {
   SkillTableView,
 } from "./domain.js";
 
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 export const MAX_DYNAMIC_SOURCES = 10_000;
 export const ENROLLMENTS_PER_MINUTE = 30;
 const DEFAULT_BUSY_TIMEOUT_MS = 25;
@@ -509,7 +509,18 @@ class SqliteHotplateStore implements HotplateStore {
           yield { ...observation, evidence: observation.evidence, machineId: parseMachineId(row.machine_id), sourceId: row.source_id === "local" ? "local" : parseSourceId(row.source_id) } satisfies ContentFact;
         }
       };
-      const result = buildContentAnalytics(query, { skills, resources });
+      const coverageStatement = db.prepare(`SELECT e.machine_id, e.source_id, e.payload FROM observations o JOIN resource_events e
+        ON e.machine_id = o.machine_id AND e.source_id = o.source_id AND e.observation_id = o.id
+        WHERE o.evidence_kind = 'tool-coverage'${where}`);
+      const coverage = function* (): Iterable<ContentFact<ToolCoverageEvidence>> {
+        if (filter.source !== undefined) return;
+        for (const row of coverageStatement.iterate(...values)) {
+          const observation = parseObservation(JSON.parse(requireString(row.payload, "tool coverage payload")));
+          if (observation.evidence.kind !== "tool-coverage") throw new Error("Invalid stored tool coverage");
+          yield { ...observation, evidence: observation.evidence, machineId: parseMachineId(row.machine_id), sourceId: row.source_id === "local" ? "local" : parseSourceId(row.source_id) };
+        }
+      };
+      const result = buildContentAnalytics(query, { skills, resources, coverage });
       if (!this.#readOnly) db.exec("COMMIT");
       return result;
     } catch (error) {
@@ -535,7 +546,11 @@ class SqliteHotplateStore implements HotplateStore {
     }
     for (const observation of observations) {
       if (observation.id.startsWith("native:")) {
-        const digest = createHash("sha256").update(serializeObservation({ ...observation, observedAt: "" })).digest("hex");
+        const canonical = observation.id.startsWith("native:tool:") && observation.evidence.kind === "resource-access"
+          ? { ...observation, evidence: { ...observation.evidence, resource: { ...observation.evidence.resource, observedPath: observation.evidence.resource.canonicalPath } } }
+          : observation;
+        const receiptValue = canonical.host === "pi" && canonical.id.startsWith("native:tool:") ? piToolReceipt(canonical) : canonical;
+        const digest = createHash("sha256").update(serializeObservation({ ...receiptValue, observedAt: "" })).digest("hex");
         const receipt = this.#db.prepare("SELECT digest FROM native_receipts WHERE id = ?").get(observation.id);
         if (receipt) {
           if (receipt.digest !== digest) throw new Error("Conflicting native occurrence");
@@ -559,6 +574,26 @@ class SqliteHotplateStore implements HotplateStore {
     secureDatabaseFiles(this.#databasePath);
     return { accepted, duplicate, dropped: 0 };
   }
+}
+
+function piToolReceipt(observation: Observation): Observation {
+  let evidence: Observation["evidence"];
+  switch (observation.evidence.kind) {
+    case "resource-access":
+      if (observation.evidence.mechanism !== "host-tool") return observation;
+      evidence = { ...observation.evidence, model: null, process: null };
+      break;
+    case "read-result":
+    case "read-attempt":
+    case "tool-coverage":
+      evidence = { ...observation.evidence, model: null };
+      break;
+    default: return observation;
+  }
+  return { ...observation, evidence, scope: {
+    ...observation.scope, sessionFile: null, segmentId: observation.scope.sessionId ?? observation.scope.segmentId,
+    segmentReason: "unknown", runId: null, turnId: null, leafId: null,
+  } };
 }
 
 function insertObservation(db: DatabaseSync, source: SourceIdentity | typeof LOCAL_IDENTITY, observation: Observation, digest: string | null): boolean {
@@ -912,6 +947,7 @@ function flattenObservation(observation: Observation): FlattenedObservation {
     case "inventory-snapshot":
     case "observer-coverage":
       return { values: [...base, null, null, null, null, null, null, null, null, null, null, null] };
+    case "tool-coverage":
     case "resource-access":
       return { values: [...base, null, null, null, null, null, observation.evidence.operationId,
         observation.evidence.outcome === "unknown" ? null : observation.evidence.outcome,
@@ -1045,8 +1081,21 @@ function migrate(db: DatabaseSync, busyRetries: number): void {
         CREATE INDEX observations_source_idx ON observations(source, evidence_kind);`);
       createResourceSchema(db);
     }
-    db.exec(`CREATE INDEX observations_sequence_lookup_idx ON observations(machine_id, source_id, producer_id, sequence);
-      CREATE INDEX observations_evidence_time_idx ON observations(evidence_kind, observed_at);`);
+    if (version < 7) {
+      const schema = requireString(db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'observations'").get()?.sql, "observation schema");
+      const resourceSchema = requireString(db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'resource_events'").get()?.sql, "resource event schema");
+      const indexes = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'observations' AND sql IS NOT NULL").all()
+        .map(row => requireString(row.sql, "observation index"));
+      db.exec("ALTER TABLE resource_events RENAME TO resource_events_previous; ALTER TABLE observations RENAME TO observations_previous");
+      db.exec(schema.replace("'observer-coverage'", "'observer-coverage', 'tool-coverage'"));
+      db.exec("INSERT INTO observations SELECT * FROM observations_previous");
+      db.exec(resourceSchema);
+      db.exec(`INSERT INTO resource_events SELECT * FROM resource_events_previous;
+        DROP TABLE resource_events_previous; DROP TABLE observations_previous;`);
+      for (const index of indexes) db.exec(index);
+    }
+    db.exec(`CREATE INDEX IF NOT EXISTS observations_sequence_lookup_idx ON observations(machine_id, source_id, producer_id, sequence);
+      CREATE INDEX IF NOT EXISTS observations_evidence_time_idx ON observations(evidence_kind, observed_at);`);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}; COMMIT;`);
   } catch (error) {
     rollbackBestEffort(db);

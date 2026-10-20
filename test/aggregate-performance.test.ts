@@ -53,6 +53,13 @@ async function populatedV5(databasePath: string): Promise<void> {
   } finally { await capture.close(); }
   const db = new DatabaseSync(databasePath);
   try {
+    const schema = String(db.prepare("SELECT sql FROM sqlite_master WHERE name = 'observations'").get()?.sql);
+    const indexes = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'observations' AND sql IS NOT NULL").all();
+    db.exec("PRAGMA foreign_keys = OFF");
+    db.exec(schema.replace(/CREATE TABLE "?observations"?/, "CREATE TABLE observations_v5").replace(", 'tool-coverage'", ""));
+    db.exec("INSERT INTO observations_v5 SELECT * FROM observations; DROP TABLE observations; ALTER TABLE observations_v5 RENAME TO observations");
+    for (const index of indexes) db.exec(String(index.sql));
+    db.exec("PRAGMA foreign_keys = ON");
     db.exec("DROP INDEX IF EXISTS observations_sequence_lookup_idx; DROP INDEX IF EXISTS observations_evidence_time_idx; PRAGMA user_version = 5");
     db.prepare("INSERT INTO registered_sources VALUES (?, ?, ?)").run(source.sourceId, source.machineId, "a".repeat(64));
     db.exec("UPDATE observations SET digest = 'preserved-receipt' WHERE id = 'native:resource'");
@@ -135,9 +142,13 @@ test("populated v5 upgrades preserve resource tables, enrollment, outbox and rec
   const tables = db.prepare("SELECT name, rootpage, sql FROM sqlite_master WHERE type = 'table' ORDER BY name").all();
   const capture = openCaptureStore({ databasePath, enrollment });
   await capture.close();
-  assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 6);
+  assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 7);
   assert.deepEqual(storedState(db), before);
-  assert.deepEqual(db.prepare("SELECT name, rootpage, sql FROM sqlite_master WHERE type = 'table' ORDER BY name").all(), tables);
+  const upgradedTables = db.prepare("SELECT name, rootpage, sql FROM sqlite_master WHERE type = 'table' ORDER BY name").all();
+  assert.deepEqual(upgradedTables.map(table => table.name), tables.map(table => table.name));
+  const unchanged = (table: (typeof tables)[number]) => table.name !== "observations" && table.name !== "resource_events";
+  assert.deepEqual(upgradedTables.filter(unchanged), tables.filter(unchanged));
+  assert.match(String(upgradedTables.find(table => table.name === "observations")?.sql), /'tool-coverage'/u);
   assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name IN ('observations_sequence_lookup_idx', 'observations_evidence_time_idx')").get()?.n, 2);
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -192,7 +203,7 @@ test("v5 migration rolls back both new indexes when the second index cannot be c
   db.exec("DROP TABLE observations_evidence_time_idx");
   const capture = openCaptureStore({ databasePath, enrollment });
   await capture.close();
-  assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 6);
+  assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 7);
   assert.deepEqual(storedState(db), before);
 });
 
@@ -211,7 +222,7 @@ test("concurrent writers upgrade populated v5 once", async t => {
   for (const result of results) assert.equal(result.code, 0, result.stderr);
   const db = new DatabaseSync(databasePath, { readOnly: true });
   try {
-    assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 6);
+    assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 7);
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM resource_events").get()?.n, 1);
     assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
   } finally { db.close(); }

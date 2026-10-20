@@ -1,10 +1,9 @@
 import { basename, dirname, isAbsolute } from "node:path";
 import type { CaptureFact } from "../../capture.js";
 import { registerHarnessProcess } from "../../process-attribution.js";
-import { resourceFact } from "../common.js";
 import { discoverResourceRoots, qualifyResource, resourceFilesystemId, type ResourceAdvertisement } from "../../resource-paths.js";
 import { publishResourceRoots } from "../../resource-root-registry.js";
-import { object, reportOpenCodeUnavailable, sendOpenCodeFacts, toolEvidence, toolScope, validContext, type OpenCodeContext } from "./bridge.js";
+import { object, openCodeToolFacts, reportOpenCodeUnavailable, sendOpenCodeFacts, toolEvidence, toolScope, validContext, type OpenCodeContext } from "./bridge.js";
 
 type V2Context = OpenCodeContext & { skills?: readonly { id: string; name: string; path: string | null }[] };
 
@@ -17,16 +16,17 @@ export function extractOpenCodeV2Facts(input: unknown, context: V2Context): read
   if (!event || !validContext(context) || typeof event.sessionID !== "string" || typeof event.id !== "string" || (event.status !== "completed" && event.status !== "error")) return [];
   if (event.status === "completed" ? !object(event.result) : !object(event.error)) return [];
   const args = object(event.input);
+  if (!args) return [];
   const skill = context.skills?.find((entry) => entry.id === args?.id);
-  const normalized = event.tool === "read" ? { filePath: args?.path } : { name: skill?.name ?? args?.id };
   const fact = { host: "opencode-v2", sessionId: event.sessionID, actorId: event.sessionID, occurrenceId: event.id, observedAt: context.observedAt ?? new Date().toISOString(), scope: toolScope(event.sessionID, context, typeof event.messageID === "string" ? event.messageID : null) } satisfies Omit<CaptureFact, "evidence">;
   const roots = context.roots ?? discoverResourceRoots({ cwd: context.projectCwd, project: { host: "opencode-v2", boundary: { kind: "infer" } },
     advertisements: catalogAdvertisements(context.skills ?? [], event.sessionID), ...(context.env ? { env: context.env } : {}) });
-  const resource = event.tool === "read" ? resourceFact(fact, normalized.filePath, { access: "read", outcome: event.status === "completed" ? "success" : "error", roots }) : null;
-  const evidence = toolEvidence(event.tool, normalized, event.id, event.status === "completed" ? "success" : "error", context, resource?.evidence.resource ?? null);
+  const facts = openCodeToolFacts(fact, { version: 2, name: event.tool, args, result: object(event.result), failed: event.status === "error" }, context, roots);
+  const resource = facts.find((entry) => entry.evidence.kind === "resource-access")?.evidence;
+  const normalized = event.tool === "skill" ? { name: skill?.name ?? args.id } : args;
+  const evidence = toolEvidence(event.tool, normalized, event.id, event.status === "completed" ? "success" : "error", context, resource?.kind === "resource-access" ? resource.resource : null);
   if (evidence?.kind === "skill-invocation" && skill?.path) evidence.skill.canonicalPath = qualifyResource({ path: skill.path, cwd: context.projectCwd, roots })?.canonicalPath ?? null;
-  const facts: CaptureFact[] = evidence ? [{ ...fact, evidence }] : [];
-  if (resource) { resource.evidence.model = context.model ?? null; facts.push(resource); }
+  if (evidence) facts.unshift({ ...fact, evidence });
   return facts;
 }
 

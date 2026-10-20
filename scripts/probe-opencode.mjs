@@ -24,11 +24,14 @@ const root = await mkdtemp(join(tmpdir(), `hotplate-opencode-${major}-`));
 const project = join(root, "project");
 const skillPath = join(project, ".opencode/skills/hotplate-probe/SKILL.md");
 const referencePath = join(skillPath, "..", "references", "guide.md");
+const longLinePath = join(referencePath, "..", "long-line.md");
 const missingPath = join(skillPath, "..", "..", "missing", "SKILL.md");
 const outsidePath = join(project, "source", "uninstalled", "SKILL.md");
 const database = join(root, "hotplate.sqlite");
 const canary = "HOTPLATE_SYNTHETIC_CONTENT_CANARY";
 const referenceCanary = "HOTPLATE_SYNTHETIC_REFERENCE_CANARY";
+const longLineCanary = "HOTPLATE_SYNTHETIC_LONG_LINE_CANARY";
+const longLineTail = "HOTPLATE_SYNTHETIC_LONG_LINE_TAIL";
 let output = "";
 let modelRequests = 0;
 let emittedTools = false;
@@ -36,6 +39,7 @@ let host;
 let runner;
 let modelServer;
 let timedOut = false;
+let sawNativeLineTruncation = false;
 const env = { ...process.env, HOME: join(root, "home"), XDG_CONFIG_HOME: join(root, "config"), XDG_DATA_HOME: join(root, "data"),
   XDG_CACHE_HOME: join(root, "cache"), XDG_STATE_HOME: join(root, "state"), XDG_RUNTIME_DIR: join(root, "runtime"),
   CODEX_HOME: join(root, "codex-home"), CLAUDE_CONFIG_DIR: join(root, "claude-home"), HOTPLATE_DB: database,
@@ -59,6 +63,7 @@ try {
   execFileSync("git", ["init", "--quiet", project]);
   await writeFile(skillPath, `---\nname: hotplate-probe\ndescription: Synthetic capability probe\n---\n${canary}\n`);
   await writeFile(referencePath, `${referenceCanary}\n`);
+  if (major === "2") await writeFile(longLinePath, longLineCanary.padEnd(3000 - longLineTail.length, "x") + longLineTail);
   await mkdir(join(outsidePath, ".."), { recursive: true });
   await writeFile(outsidePath, "HOTPLATE_SYNTHETIC_OUTSIDE_CANARY\n");
   await writeFile(env.HOTPLATE_RESOURCES_CONFIG, JSON.stringify({ version: 1, roots: [] }));
@@ -66,6 +71,10 @@ try {
     let raw = "";
     for await (const chunk of request) raw += chunk;
     const body = JSON.parse(raw);
+    if (JSON.stringify(body.messages).includes("... (line truncated to 2000 chars)")) {
+      sawNativeLineTruncation = true;
+      assert.equal(JSON.stringify(body.messages).includes(longLineTail), false, "The native long-line result retained its omitted tail");
+    }
     modelRequests++;
     const hasTools = body.tools?.some((tool) => tool.function?.name === "read");
     const readArgs = (path) => major === "1" ? { filePath: path } : { path };
@@ -76,6 +85,10 @@ try {
       { name: "read", args: readArgs(referencePath) },
       { name: "read", args: readArgs(outsidePath) },
       { name: "skill", args: major === "1" ? { name: "hotplate-probe" } : { id: "hotplate-probe" } },
+      ...(major === "2" ? [
+        { name: "read", args: { path: longLinePath } },
+        { name: "read", args: { path: longLinePath, offset: 1, limit: 1 } },
+      ] : []),
     ] : [];
     if (hasTools) emittedTools = true;
     const delta = calls.length
@@ -163,6 +176,10 @@ try {
     assert.equal(reference.successfulReadCount, 1);
     assert.equal(skill.successfulReadCount, 2);
     if (major === "2") assert.equal(missing?.failedReadCount, 1, "The in-scope missing skill did not produce failed-read evidence");
+    if (major === "2") {
+      assert.equal(sawNativeLineTruncation, true, "The real OpenCode output did not exercise its long-line cap");
+      assert.equal(resources.find(row => row.resource.canonicalPath === longLinePath)?.successfulReadCount, 2);
+    }
     assert.equal(resources.some(row => row.resource.canonicalPath === outsidePath), false, "An out-of-scope read produced resource evidence");
     assert.notEqual(reference.lastInventoriedAt, null, "Reference was not inventoried");
     assert.notEqual(skill.lastInventoriedAt, null, "Skill was not inventoried");
@@ -176,10 +193,19 @@ try {
     assert.equal(persisted.includes(referenceCanary), false, "Raw reference content leaked into capture");
     assert.equal(persisted.includes(outsidePath), false, "An out-of-scope read produced legacy evidence");
     assert.equal(persisted.includes("HOTPLATE_SYNTHETIC_OUTSIDE_CANARY"), false);
+    assert.equal(persisted.includes(longLineCanary), false);
+    assert.equal(persisted.includes(longLineTail), false);
+    if (major === "2") {
+      const reads = persistedDb.prepare("SELECT payload FROM resource_events WHERE json_extract(payload, '$.evidence.kind') = 'resource-access'").all()
+        .map(row => JSON.parse(row.payload).evidence).filter(evidence => evidence.resource.canonicalPath === longLinePath);
+      assert.equal(reads.length, 2);
+      assert.ok(reads.every(read => read.toolRead?.delivery.kind === "unknown"), "Native long-line metadata overclaimed delivery");
+    }
   } finally { persistedDb.close(); }
   const report = { host: `opencode-v${major}`, version: execFileSync(binary, ["--version"], { encoding: "utf8" }).trim(), installedPlugin: true, modelRequests,
     observations: rows.map(({ host, evidence_kind, outcome, skill_path }) => ({ host, kind: evidence_kind, outcome, hasPath: skill_path !== null })),
-    resources: resources.map(row => ({ kind: row.resource.kind, successfulReads: row.successfulReadCount, inventoried: row.lastInventoriedAt !== null })), completeInventories, canaryAbsent: true };
+    resources: resources.map(row => ({ kind: row.resource.kind, successfulReads: row.successfulReadCount, inventoried: row.lastInventoriedAt !== null })), completeInventories,
+    ...(major === "2" ? { nativeLineTruncation: true, longLineDelivery: "unknown" } : {}), canaryAbsent: true };
   await mkdir(".audit/probe-opencode", { recursive: true });
   await writeFile(`.audit/probe-opencode/verified-v${major}.json`, `${JSON.stringify(report, null, 2)}\n`);
   console.log(JSON.stringify(report, null, 2));

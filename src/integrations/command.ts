@@ -99,6 +99,7 @@ function qualifyLocalFact(fact: CaptureFact, roots: readonly ResourceRoot[]): Ca
   const evidence = fact.evidence;
   switch (evidence.kind) {
     case "command-intent": return fact;
+    case "tool-coverage": return fact;
     case "read-attempt":
     case "read-result": {
       const skill = skillAtPath(evidence.skill.canonicalPath, fact.scope.projectCwd, roots);

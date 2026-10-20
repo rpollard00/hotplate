@@ -200,9 +200,9 @@ async function readContentPayload(databasePath: string, params: URLSearchParams)
 
 function parseContentParams(params: URLSearchParams): ContentQuery {
   const { filter } = parseDashboardParams(params);
-  const content = params.get("content") ?? "resources";
+  const content = params.get("content") ?? "both";
   if (content !== "resources" && content !== "both") throw new Error("content must be resources or both");
-  const measure = params.get("measure") ?? "activity";
+  const measure = params.get("measure") ?? "toolActivity";
   if (!isContentMeasure(measure)) throw new Error("Invalid content measure");
   const split = params.get("split") ?? "item";
   if (split !== "item" && split !== "agent" && split !== "model" && split !== "agent-model") throw new Error("split must be item, agent, model, or agent-model");

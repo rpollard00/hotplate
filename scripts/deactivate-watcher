@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+fail() { printf '%s\n' "$*" >&2; exit 1; }
+if (( $# == 1 )) && [[ $1 == --help ]]; then
+  printf '%s\n' 'Usage: scripts/deactivate-watcher' 'Stop and disable the managed Linux filesystem watcher for the current account. Run without sudo.' 'Keep the service unit, installed helper, saved roots, and history.' 'Foreground watchers and custom services are outside this script.'
+  exit 0
+fi
+(( $# == 0 )) || fail 'Usage: scripts/deactivate-watcher [--help]. No other arguments are supported.'
+[[ $(uname -s) == Linux && $(id -u) != 0 ]] || fail 'Run as the capturing Linux user, without sudo.'
+for tool in systemctl head realpath; do
+  command -v "$tool" >/dev/null || fail "Required command missing: $tool"
+done
+systemctl --user show-environment >/dev/null || fail 'A systemd user manager is required. Start a normal login session and retry.'
+service=hotplate-resources.service
+unit=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$service
+marker='# Managed by Hotplate activate-watcher; resources service v1'
+[[ $unit == /* ]] || fail 'The user configuration directory must be an absolute path.'
+state=$(systemctl --user show "$service" --property=LoadState,FragmentPath,ActiveState --no-pager) || fail "Cannot inspect $service. Check the systemd user manager and retry."
+load_state=
+fragment=
+active_state=
+while IFS='=' read -r name value; do
+  case $name in
+    LoadState) load_state=$value ;;
+    FragmentPath) fragment=$value ;;
+    ActiveState) active_state=$value ;;
+  esac
+done <<< "$state"
+case $load_state in
+  not-found)
+    [[ -z $fragment && $active_state == inactive && ! -e $unit && ! -L $unit ]] || fail "Cannot verify that $service is absent. Inspect it with: systemctl --user show $service"
+    printf '%s\n' "$service is not installed and is inactive." 'Foreground watchers and custom services are outside this script.'
+    exit 0
+    ;;
+  loaded) ;;
+  *) fail "Cannot verify ownership of $service (LoadState=${load_state:-unknown}). No service was changed." ;;
+esac
+[[ -f $unit && ! -L $unit && -f $fragment && ! -L $fragment ]] || fail "Refusing to change an unrelated or symlinked $service. Expected a regular managed unit at: $unit"
+expected_unit=$(realpath -e -- "$unit") || fail "Cannot resolve the managed unit path: $unit"
+loaded_unit=$(realpath -e -- "$fragment") || fail "Cannot resolve the loaded unit path: $fragment"
+first_line=$(head -n 1 -- "$fragment") || fail "Cannot read the loaded unit: $fragment"
+[[ $loaded_unit == "$expected_unit" && $first_line == "$marker" ]] || fail "Refusing to change an unrelated $service. The loaded unit must match the managed unit at: $unit"
+systemctl --user stop "$service" || fail "Could not stop $service. Inspect service errors with: journalctl --user -u $service"
+systemctl --user disable "$service" || fail "Could not disable $service. It can start again at login. Inspect it with: systemctl --user is-enabled $service"
+active_status=0
+active_state=$(systemctl --user is-active "$service") || active_status=$?
+[[ $active_status == 3 && $active_state == inactive ]] || fail "Cannot verify that $service stopped (state=${active_state:-unknown}, exit=$active_status). Inspect it with: systemctl --user status $service"
+enabled_status=0
+enabled_state=$(systemctl --user is-enabled "$service") || enabled_status=$?
+[[ $enabled_status == 1 && $enabled_state == disabled ]] || fail "Cannot verify that $service is disabled (state=${enabled_state:-unknown}, exit=$enabled_status). Inspect it with: systemctl --user is-enabled $service"
+printf '%s\n' "$service is inactive and disabled." 'The service unit, installed helper, saved roots, and history are preserved.' 'Foreground watchers and custom services are outside this script.'

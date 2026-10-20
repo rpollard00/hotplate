@@ -69,7 +69,7 @@ export function queryResources(db: DatabaseSync, filter: DashboardFilter): Resou
   const scans = new Map<string, Scan>();
   for (const { source, observation } of readEvents(db, filter, "exclude-coverage")) {
     const evidence = observation.evidence;
-    if (evidence.kind === "observer-coverage") continue;
+    if (evidence.kind === "observer-coverage" || evidence.kind === "tool-coverage") continue;
     if (evidence.kind === "inventory-snapshot") {
       if (!scopeMatches(observation, filter)) continue;
       const key = JSON.stringify([source.machineId, source.sourceId, evidence.filesystemId, evidence.rootPath, evidence.scanId]);
@@ -115,6 +115,7 @@ export function queryResources(db: DatabaseSync, filter: DashboardFilter): Resou
     row.lastAccessAt = latest(row.lastAccessAt, observation.observedAt);
     if (evidence.access === "attempt") row.attemptCount += 1;
     else if (evidence.access === "read" && evidence.outcome === "success") row.successfulReadCount += 1;
+    else if (evidence.access === "inferred-read") row.inferredReadCount += 1;
     else if (evidence.access === "read" && evidence.outcome === "error") row.failedReadCount += 1;
     else if (evidence.access === "open") row.openCount += 1;
     else if (evidence.access === "access") row.accessCount += 1;
@@ -199,7 +200,7 @@ export function queryResourceCoverage(db: DatabaseSync, filter: DashboardFilter)
 }
 
 function* readEvents(db: DatabaseSync, filter: DashboardFilter, selection: "exclude-coverage" | "coverage-history" | "latest-coverage"): Generator<StoredEvent> {
-  const clauses = [selection === "exclude-coverage" ? "o.evidence_kind != 'observer-coverage'" : "o.evidence_kind = 'observer-coverage'"];
+  const clauses = [selection === "exclude-coverage" ? "o.evidence_kind IN ('resource-access', 'inventory-snapshot')" : "o.evidence_kind = 'observer-coverage'"];
   const values: (string | number)[] = [];
   if (filter.machineId !== undefined) { clauses.push("e.machine_id = ?"); values.push(filter.machineId); }
   if (filter.toObservedAt !== undefined && selection !== "coverage-history") {
@@ -274,7 +275,7 @@ function resourceState(resources: Map<string, ResourceState>, source: StoredSour
   if (!state) {
     state = { latestLocationAt: observedAt, roots: new Map(), row: {
       resourceId: id, ...source, resource, rootPaths: [], presence: "unknown", firstInventoriedAt: null, lastInventoriedAt: null,
-      lastAccessAt: null, attemptCount: 0, successfulReadCount: 0, failedReadCount: 0, openCount: 0, accessCount: 0,
+      lastAccessAt: null, attemptCount: 0, successfulReadCount: 0, inferredReadCount: 0, failedReadCount: 0, openCount: 0, accessCount: 0,
       attributedAccessCount: 0, unattributedAccessCount: 0, nonAgentAccessCount: 0, observation: "unknown", coverageFrom: null, coverageTo: null,
     } };
     resources.set(id, state);

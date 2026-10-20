@@ -100,7 +100,7 @@ export function integrationStatus(options: Options) {
   return {
     host: options.host, configurationPath: wrapper?.path ?? location.path, installed, version: version(options),
     jsoncPresent: location.jsonc !== null && existsSync(location.jsonc),
-    coverage: options.host === "codex" ? "literal cat and sed resource attempts; shell outcome unavailable; automatic session inventory" : options.host === "claude-code" ? "Read resource and Skill success and failure; automatic session inventory" : "native resource read and skill completion; automatic session inventory",
+    coverage: options.host === "codex" ? "literal shell and Python read attempts; shell outcome unavailable; opaque execution coverage; automatic session inventory" : options.host === "claude-code" ? "Read and Skill success and failure; literal shell and Python read attempts; opaque execution coverage; automatic session inventory" : "native reads and skills; literal shell and Python inferred reads with verified exit status; opaque execution coverage; automatic session inventory",
     trust: options.host === "codex" ? "Review and trust the installed definition with /hooks before capture can run." : null,
     lastSuccessfulCapture: null,
   };

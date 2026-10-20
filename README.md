@@ -4,7 +4,7 @@ Hotplate records metadata about skill use in live Pi, Codex, Claude Code, and Op
 By default, each OS account writes SQLite locally and serves a read-only dashboard on loopback.
 Managed Pi connections automatically relay newly captured observations to an authenticated Docker aggregate server while Pi sessions run. Explicit manual capture and relay configuration remains available.
 For native coding agents, `hotplate setup --relay <enrolled-origin>` installs the available integrations and enables an account relay service. Use `hotplate setup --status` to inspect installations and the delivery backlog. See the [integration guide](docs/integrations.md).
-There is no transcript import or automatic discovery.
+Hotplate does not import or discover historical transcripts.
 
 Node.js 24.19.0 or later is required.
 See [LAN aggregation](#lan-aggregation) for explicit network enrollment.
@@ -81,6 +81,10 @@ The server binds to `127.0.0.1:7345` by default.
 It rejects non-loopback hosts and unexpected origins.
 It does not enable CORS.
 
+The default Metrics view shows **Both** skills and resources with **Tool activity**.
+It counts tool reads, attempts, failures, and native skill invocations.
+Filesystem events remain available under **All recorded activity**, **Filesystem opens**, and **Filesystem accesses**.
+
 Create a demo database at a new, explicit path:
 
 ```bash
@@ -110,6 +114,15 @@ pi remove /path/to/hotplate
 
 Run `/reload` after a package change.
 
+To stop the optional filesystem watcher, run this command from the checkout as the capturing account:
+
+```bash
+scripts/deactivate-watcher
+```
+
+The script stops and disables the managed user service. It preserves captured history, saved roots, the helper, and the relay service.
+See [watcher deactivation](docs/resources.md#deactivate-the-filesystem-watcher) for its scope.
+
 ## What Hotplate records
 
 Hotplate records observations.
@@ -119,20 +132,27 @@ Hotplate records these facts:
 
 - A `/skill:name` command intent and its pi input source.
 - A skill wrapper in a delivered user message, including queued input.
-- A `SKILL.md` read result from the model tool call.
+- Structured tool reads of `SKILL.md` and supporting files, including reported outcomes and portions.
+- Inferred reads from recognized literal shell or Python commands with a successful tool outcome.
+- Read attempts when the outcome remains unknown, and native skill invocation results.
+- Tool coverage for recognized operations and operations with unresolved file access.
 - A catalog snapshot from pi skill commands.
 - A capture gap when Hotplate knows that it dropped observations.
 - Resource read attempts and results, filesystem opens and accesses, inventory snapshots, and observer coverage.
 
 Hotplate does not persist raw prompts, full tool outputs, credentials, or error bodies.
+Tool capture also discards shell commands and Python source after extraction.
 
 ## Observations are not compliance proof
 
 A command intent is not proof that pi loaded a skill.
 An observed wrapper is not proof that a human requested it.
-A successful `SKILL.md` read is an observed successful tool result.
+A confirmed read is an observed successful structured read result.
 The result can contain only part of the file, and another extension can change it.
 It is not proof that the model obeyed the skill.
+An inferred read has a recognized literal command and a successful tool outcome.
+Hotplate keeps inferred reads separate from confirmed reads.
+Requested portions and reported returned portions stay separate. Missing delivery information remains unknown.
 
 RPC source is not human proof.
 Queued wrappers and matched command plus wrapper pairs are not upgraded to proven user loads.
@@ -142,7 +162,11 @@ Repeated reads and unique activations have separate counts.
 
 Hotplate captures supported live Pi, Codex, Claude Code, and OpenCode integrations.
 It does not import old transcripts.
-The optional Linux filesystem observer can capture shell and loader access within registered roots. It requires a privileged helper and cannot observe cached content or every memory-mapped read.
+Tool capture recognizes a bounded command grammar. Arbitrary scripts, dynamic paths, and unsupported syntax produce unresolved coverage instead of invented file reads.
+See [supported reads](docs/integrations.md#supported-tool-reads) for the exact forms and host limits.
+The optional Linux filesystem observer records diagnostic opens and accesses within registered roots.
+Catalog polling and background loaders can produce these events without an agent tool read.
+The observer requires a privileged helper and cannot observe cached content or every memory-mapped read.
 A process crash can lose queued observations.
 
 Chains split by machine, account source, session, segment, and run.
@@ -159,7 +183,11 @@ Shutdown cancels retries after a 500 ms drain budget. A synchronous SQLite call 
 
 ## References, principles, and other skill files
 
-Resource tracking works without Skills Explorer or a prebuilt index. Register custom roots with `hotplate resources add-root <directory>`, inventory them with `hotplate resources scan`, and inspect them with `hotplate resources list`. `hotplate resources watch` runs inventory reconciliation and the optional Linux access observer.
+Tool capture records qualified supporting files without a separate skill invocation or an entrypoint read.
+Resource tracking works without Skills Explorer, a prebuilt index, or an active filesystem watcher.
+Register custom roots with `hotplate resources add-root <directory>`.
+Inventory them with `hotplate resources scan` and inspect them with `hotplate resources list`.
+`hotplate resources watch` runs inventory reconciliation and the optional Linux access observer.
 
 See [resource capture and inventory](docs/resources.md) for setup, T3 process attribution, coverage semantics, and the required aggregate upgrade.
 

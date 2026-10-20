@@ -133,9 +133,9 @@ try {
     await media("reduce");
     await command("Page.navigate", { url: preview.url });
     await until(ready);
+    await change("metric-content", "skills");
     assert.equal(await evaluate("matchMedia('(prefers-reduced-motion: reduce)').matches"), true);
     assert.equal(await evaluate("document.getAnimations().length"), 0, "Reduced motion suppresses effects at initial load");
-    await change("metric-content", "skills");
     await change("time-preset", "all");
     await until(ready);
     await click("[data-workspace=resources]");
@@ -385,6 +385,7 @@ try {
     await media("no-preference");
     await command("Page.navigate", { url: preview.url });
     await until(ready);
+    await change("metric-content", "skills");
     await change("time-preset", "all");
     await until(ready);
     await settle();

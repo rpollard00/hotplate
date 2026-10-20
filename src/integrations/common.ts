@@ -1,8 +1,9 @@
 import { basename, dirname, isAbsolute } from "node:path";
 import type { CaptureFact } from "../capture.js";
-import type { NativeHostId, SkillRef } from "../domain.js";
-import type { ResourceAccessEvidence, ResourceLocation } from "../resource-domain.js";
+import type { ModelRef, NativeHostId, SkillRef } from "../domain.js";
+import type { ReadPortion, ResourceLocation } from "../resource-domain.js";
 import { qualifyResource, type ResourceRoot } from "../resource-paths.js";
+import { captureToolReads, type ReadTool, type ToolOutcome } from "../tool-reads.js";
 
 export function object(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? Object.fromEntries(Object.entries(value)) : null;
@@ -10,6 +11,33 @@ export function object(value: unknown): Record<string, unknown> | null {
 
 export function text(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 && value.length <= 4096 && !/[\u0000-\u001f]/u.test(value) ? value : null;
+}
+
+export function requestedLines(offset: unknown, limit: unknown): ReadPortion {
+  const start = offset === undefined ? 1 : offset;
+  const count = limit === undefined ? null : limit;
+  if (!positiveInteger(start) || (count !== null && !positiveInteger(count))) return { kind: "unknown" };
+  return { kind: "lines", start, count };
+}
+
+export function positiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+export function nonnegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+export function exitOutcome(exitCode: unknown): ToolOutcome {
+  return typeof exitCode === "number" && Number.isSafeInteger(exitCode)
+    ? { kind: exitCode === 0 ? "succeeded" : "failed" } : { kind: "unreported" };
+}
+
+export function toolReadFacts(context: Omit<CaptureFact, "evidence">, tool: ReadTool, roots: readonly ResourceRoot[], model: ModelRef = null): CaptureFact[] {
+  return captureToolReads({ operationId: context.occurrenceId, tool, context: {
+    cwd: context.scope.projectCwd, roots, model, process: null,
+    attribution: context.sessionId === null ? "harness" : "session",
+  } }).map((evidence) => ({ ...context, evidence }));
 }
 
 export function skillAtPath(path: unknown, cwd: string, roots: readonly ResourceRoot[]): SkillRef | null {
@@ -39,20 +67,4 @@ export function hookContext(input: unknown, host: NativeHostId, observedAt: stri
       segmentReason: "unknown", runId: turnId, turnId, leafId: null,
     },
   };
-}
-
-export function resourceFact(context: Omit<CaptureFact, "evidence">, path: unknown, options: {
-  access: "read" | "attempt";
-  outcome: ResourceAccessEvidence["outcome"];
-  roots: readonly ResourceRoot[];
-}): (Omit<CaptureFact, "evidence"> & { evidence: ResourceAccessEvidence }) | null {
-  const value = text(path);
-  if (!value) return null;
-  const resource = qualifyResource({ path: value, cwd: context.scope.projectCwd, roots: options.roots });
-  if (!resource) return null;
-  return { ...context, evidence: {
-    kind: "resource-access", resource, operationId: context.occurrenceId,
-    mechanism: "host-tool", access: options.access, outcome: options.outcome, model: null, process: null,
-    attribution: context.sessionId === null ? "harness" : "session",
-  } };
 }
