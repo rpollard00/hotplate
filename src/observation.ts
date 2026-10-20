@@ -245,7 +245,7 @@ function isToolReadMetadata(value: unknown): value is ToolReadMetadata {
     && (value.revision.kind === "unknown" || (value.revision.kind === "known" && typeof value.revision.value === "string" && /^sha256:[a-f0-9]{64}$/u.test(value.revision.value)));
 }
 
-function isResourceLocation(value: unknown): value is ResourceLocation {
+export function isResourceLocation(value: unknown): value is ResourceLocation {
   return isRecord(value) && metadataString(value.filesystemId) && absolutePath(value.canonicalPath)
     && absolutePath(value.observedPath) && absolutePath(value.rootPath)
     && (value.ownerSkillPath === null || absolutePath(value.ownerSkillPath))

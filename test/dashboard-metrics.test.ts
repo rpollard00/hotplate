@@ -68,6 +68,72 @@ test("projection serialized into browser source needs no module dependencies", (
   assert.deepEqual(JSON.parse(JSON.stringify(browserResult)), projectMetrics(report, presentation));
 });
 
+test("visible skill timelines conserve each measure and cohort without adding count-view data", () => {
+  const measures: MetricMeasure[] = ["successfulReads", "failedReads", "uses", "invocations", "invocationFailures", "readAttempts", "requests", "wrappers"];
+  for (const measure of measures) for (const split of ["skill", "agent", "model", "agent-model"] as const) {
+    const presentation: MetricsPresentation = { measure, split, display: "timeline" };
+    const counts = projectMetrics(report, presentation);
+    assert.deepEqual(counts.rowTimelines, []);
+    const projection = { skillNames: [skill.name], cohortKeys: split === "skill" ? [] : counts.series.map(series => series.key) };
+    const result = projectMetrics(report, presentation, projection);
+    assert.ok(result.rowTimelines.length > 0);
+    assert.equal(result.rowTimelines.reduce((sum, row) => sum + row.count, 0), counts.totals[measure]);
+    for (const row of result.rowTimelines) {
+      assert.equal(row.name, skill.name);
+      assert.equal(row.values.length, result.timeline.length);
+      assert.equal(row.values.reduce((sum, count) => sum + count, 0), row.datedCount);
+      assert.equal(row.datedCount + row.undatedCount, row.count);
+      const expected = split === "skill" ? counts.skills[0]?.count : counts.skills[0]?.cells.find(cell => cell.key === row.cohortKey)?.count;
+      assert.equal(row.count, expected);
+    }
+    const browserResult: unknown = runInNewContext(`(${projectMetrics.toString()})(report, presentation, projection)`, { report, presentation, projection });
+    assert.deepEqual(JSON.parse(JSON.stringify(browserResult)), result);
+  }
+});
+
+test("skill timelines retain undated evidence and bound their visible names and cohorts", () => {
+  const undated = run([read(null)]);
+  const steps = undated.steps.map(step => step.kind === "observations" ? { ...step, items: step.items.map(item => ({ ...item, observedAt: "invalid" })) } : step);
+  const undatedReport = buildDashboardReport({ filter: {}, skills: { rows: [] }, chains: { runs: [{ ...undated, steps }] } });
+  const result = projectMetrics(undatedReport, { measure: "successfulReads", display: "timeline", split: "skill" }, { skillNames: [skill.name], cohortKeys: [] });
+  assert.deepEqual(result.rowTimelines, [{ name: skill.name, cohortKey: null, count: 1, datedCount: 0, undatedCount: 1, values: [] }]);
+  const names = Array.from({ length: 20 }, (_, index) => "skill-" + index);
+  const input = buildDashboardReport({ filter: {}, skills: { rows: [] }, chains: { runs: [run(names.map(name => ({ kind: "read-result", skill: { ...skill, name }, model: one, outcome: "success", toolCallId: name })))] } });
+  const bounded = projectMetrics(input, { measure: "successfulReads", display: "timeline", split: "skill" }, { skillNames: names, cohortKeys: [] });
+  assert.equal(bounded.rowTimelines.length, 12);
+  assert.deepEqual(bounded.rowTimelines.map(row => row.name), names.slice(0, 12));
+  const cohorts = Array.from({ length: 10 }, (_, index) => ({ provider: "provider", id: "model-" + index }));
+  const cohortReport = buildDashboardReport({ filter: {}, skills: { rows: [] }, chains: { runs: [run(cohorts.map(model => read(model)))] } });
+  const view = projectMetrics(cohortReport, { measure: "successfulReads", display: "timeline", split: "model" });
+  assert.equal(projectMetrics(cohortReport, view.presentation, { skillNames: [skill.name], cohortKeys: view.series.map(series => series.key) }).rowTimelines.length, 6);
+  assert.deepEqual(projectMetrics(report, presentation, { skillNames: ["missing"], cohortKeys: [] }).rowTimelines, []);
+});
+
+test("brushed skill timelines preserve the displayed UTC axis and leave excluded intervals empty", () => {
+  const timed = ["2026-01-01T10:00:00.000Z", at, "2026-01-01T14:00:00.000Z"].map((timestamp, index) => {
+    const entry = run([read(one)], { runId: "timed-" + index });
+    return { ...entry, steps: entry.steps.map(step => step.kind === "observations" ? { ...step, items: step.items.map(item => ({ ...item, observedAt: timestamp })) } : step) };
+  });
+  const input = buildDashboardReport({ filter: {}, skills: { rows: [] }, chains: { runs: timed } });
+  const routes = input.routes.map(route => ({ ...route, steps: route.steps.map(step => step.kind === "observations" ? { ...step, items: step.items.filter(item => item.observedAt === at) } : step) }));
+  const result = projectMetrics({ ...input, routes }, { measure: "successfulReads", display: "timeline", split: "skill" }, { skillNames: [skill.name], cohortKeys: [] });
+  assert.equal(result.rowTimelines[0]?.count, 1);
+  assert.equal(result.rowTimelines[0]?.datedCount, 1);
+  assert.equal(result.rowTimelines[0]?.values.filter(value => value > 0).length, 1);
+  assert.equal(result.rowTimelines[0]?.values.length, input.activity.kind === "bucketed" ? input.activity.bins.length : 0);
+  assert.deepEqual(result.timeline.map(bin => [bin.startAt, bin.endAt]), input.activity.kind === "bucketed" ? input.activity.bins.map(bin => [bin.startAt, bin.endAt]) : []);
+});
+
+test("maximum JavaScript dates remain undated when a UTC bucket end is not representable", () => {
+  const entry = run([read(null)]);
+  const steps = entry.steps.map(step => step.kind === "observations" ? { ...step, items: step.items.map(item => ({ ...item, observedAt: "+275760-09-13T00:00:00.000Z" })) } : step);
+  const input = buildDashboardReport({ filter: {}, skills: { rows: [] }, chains: { runs: [{ ...entry, steps }] } });
+  assert.equal(input.coverage.undatedEvidence, 1);
+  const result = projectMetrics(input, { measure: "successfulReads", split: "skill", display: "timeline" }, { skillNames: [skill.name], cohortKeys: [] });
+  assert.equal(result.undatedCount, 1);
+  assert.deepEqual(result.rowTimelines, [{ name: skill.name, cohortKey: null, count: 1, datedCount: 0, undatedCount: 1, values: [] }]);
+});
+
 test("undated observations contribute to totals without acquiring a timeline date", () => {
   const undated = run([read(null)]);
   const steps = undated.steps.map(step => step.kind === "observations" ? { ...step, items: step.items.map(item => ({ ...item, observedAt: "invalid" })) } : step);

@@ -1,5 +1,11 @@
 import { DatabaseSync } from "node:sqlite";
 
+export function removeAnalyticsProjectionSchema(db: DatabaseSync): void {
+  db.exec(`DROP TABLE IF EXISTS filesystem_access_buckets; DROP TABLE IF EXISTS resource_access_facts;
+    DROP TABLE IF EXISTS observer_coverage_facts; DROP TABLE IF EXISTS inventory_scan_facts;
+    DROP TABLE IF EXISTS inventory_location_buckets; DROP TABLE IF EXISTS inventory_location_variants;`);
+}
+
 export function createLegacyDatabase(databasePath: string): void {
   const db = new DatabaseSync(databasePath);
   try {

@@ -19,6 +19,7 @@ import { ENROLLMENTS_PER_MINUTE, MAX_DYNAMIC_SOURCES, openAggregateStore, openRe
 import { runRelay } from "../src/relay.js";
 import { SessionConnection } from "../src/connection.js";
 import { createFixture, createSessionFromLocalPackage } from "./fixtures/sdk-session.js";
+import { removeAnalyticsProjectionSchema } from "./fixtures/legacy-database.js";
 
 async function fixture(t: TestContext) {
   const root = await mkdtemp(join(tmpdir(), "hotplate-connect-"));
@@ -248,6 +249,7 @@ test("v2 migration is additive and registry capacity excludes exact retries", as
   await store.ingest({ source: staticSource, observations: [old] });
   await store.close();
   let db = new DatabaseSync(f.configuration.databasePath);
+  removeAnalyticsProjectionSchema(db);
   db.exec(`
     DROP TABLE resource_events;
     DROP TABLE resource_locations;

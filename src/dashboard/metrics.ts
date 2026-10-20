@@ -3,20 +3,23 @@ import type { DashboardReport } from "./analytics.js";
 
 export type MetricMeasure = "successfulReads" | "failedReads" | "uses" | "invocations" | "invocationFailures" | "readAttempts" | "requests" | "wrappers";
 export type MetricsPresentation = Readonly<{ split: "skill" | "agent" | "model" | "agent-model" } & (
-  | { measure: MetricMeasure; display: "count" }
+  | { measure: MetricMeasure; display: "count" | "timeline" }
   | { measure: "uses"; display: "session-share" }
 )>;
 export type MetricCounts = Readonly<Record<MetricMeasure, number>>;
 export type MetricCell = Readonly<{ key: string; count: number; counts: MetricCounts; sessions: number; eligibleSessions: number; share: number | null; routeKeys: readonly string[] }>;
 export type MetricSeries = Readonly<{ key: string; label: string; host: HostId | null; model: ModelRef; attribution: "known" | "unknown" | "none"; count: number; counts: MetricCounts; sessions: number; eligibleSessions: number; routeKeys: readonly string[] }>;
+export type MetricTimelineProjection = Readonly<{ skillNames: readonly string[]; cohortKeys: readonly string[] }>;
+export type MetricRowTimeline = Readonly<{ name: string; cohortKey: string | null; count: number; datedCount: number; undatedCount: number; values: readonly number[] }>;
 export type MetricsView = Readonly<{
   presentation: MetricsPresentation; totals: MetricCounts; undatedCount: number;
   series: readonly MetricSeries[];
   timeline: readonly Readonly<{ startAt: string; endAt: string; count: number; values: readonly Readonly<{ key: string; count: number }>[] }>[];
+  rowTimelines: readonly MetricRowTimeline[];
   skills: readonly Readonly<{ name: string; count: number; counts: MetricCounts; sessions: number; eligibleSessions: number; share: number | null; skillKeys: readonly string[]; routeKeys: readonly string[]; cells: readonly MetricCell[] }>[];
 }>;
 
-export function projectMetrics(report: DashboardReport, presentation: MetricsPresentation): MetricsView {
+export function projectMetrics(report: DashboardReport, presentation: MetricsPresentation, projection?: MetricTimelineProjection): MetricsView {
   type Counts = { -readonly [K in keyof MetricCounts]: number };
   type Tally = { counts: Counts; sessions: Set<string>; routes: Set<string> };
   type Cohort = Tally & { key: string; label: string; host: HostId | null; model: ModelRef; attribution: MetricSeries["attribution"] };
@@ -28,6 +31,9 @@ export function projectMetrics(report: DashboardReport, presentation: MetricsPre
   const skills = new Map<string, Tally & { name: string; skillKeys: Set<string>; cells: Map<string, Tally> }>();
   const timeline = report.activity.kind === "bucketed" ? report.activity.bins.map(bin => ({ startAt: bin.startAt, endAt: bin.endAt, count: 0, values: new Map<string, number>() })) : [];
   const activity = report.activity;
+  const projectedNames = new Set(projection?.skillNames.slice(0, 12));
+  const projectedCohorts = new Set(projection?.cohortKeys.slice(0, 6));
+  const rowTimelines = new Map<string, { name: string; cohortKey: string | null; count: number; undatedCount: number; values: number[] }>();
   const first = report.scope.fromObservedAt === undefined ? -Infinity : Date.parse(report.scope.fromObservedAt);
   const last = report.scope.toObservedAt === undefined ? Infinity : Date.parse(report.scope.toObservedAt);
   let undatedCount = 0;
@@ -68,13 +74,24 @@ export function projectMetrics(report: DashboardReport, presentation: MetricsPre
         }
         skill.skillKeys.add(item.skillKey);
         skill.cells.set(key, cell); skills.set(name, skill); cohorts.set(key, cohort);
-        const time = Date.parse(item.observedAt);
-        if (selected && !Number.isFinite(time)) undatedCount += 1;
-        if (!selected || !Number.isFinite(time) || time < first || time > last || activity.kind !== "bucketed") continue;
+        const parsedTime = Date.parse(item.observedAt);
+        const time = Number.isFinite(parsedTime) && Number.isFinite(new Date(Math.floor(parsedTime / 86_400_000) * 86_400_000 + 86_400_000).getTime()) ? parsedTime : null;
+        let rowTimeline: ReturnType<typeof rowTimelines.get>;
+        if (selected && projectedNames.has(name) && (projectedCohorts.size === 0 || projectedCohorts.has(key))) {
+          const cohortKey = projectedCohorts.size === 0 ? null : key;
+          const rowKey = JSON.stringify([name, cohortKey]);
+          rowTimeline = rowTimelines.get(rowKey) ?? { name, cohortKey, count: 0, undatedCount: 0, values: timeline.map(() => 0) };
+          rowTimeline.count += 1;
+          if (time === null) rowTimeline.undatedCount += 1;
+          rowTimelines.set(rowKey, rowTimeline);
+        }
+        if (selected && time === null) undatedCount += 1;
+        if (!selected || time === null || time < first || time > last || activity.kind !== "bucketed") continue;
         const index = Math.floor((time - Date.parse(activity.startAt)) / activity.binWidthMs);
         const bin = timeline[index];
         if (bin === undefined || time >= Date.parse(bin.endAt)) continue;
         bin.count += 1; bin.values.set(key, (bin.values.get(key) ?? 0) + 1);
+        if (rowTimeline) rowTimeline.values[index] = (rowTimeline.values[index] ?? 0) + 1;
       }
     }
   }
@@ -85,6 +102,7 @@ export function projectMetrics(report: DashboardReport, presentation: MetricsPre
     presentation, totals, undatedCount,
     series: ordered.map(cohort => ({ key: cohort.key, label: cohort.label, host: cohort.host, model: cohort.model, attribution: cohort.attribution, ...value(cohort, cohort.sessions.size) })),
     timeline: timeline.map(bin => ({ startAt: bin.startAt, endAt: bin.endAt, count: bin.count, values: ordered.map(cohort => ({ key: cohort.key, count: bin.values.get(cohort.key) ?? 0 })) })),
+    rowTimelines: [...rowTimelines.values()].map(row => ({ ...row, datedCount: row.values.reduce((sum, value) => sum + value, 0) })),
     skills: [...skills.values()].map(skill => ({ name: skill.name, ...value(skill, sessions.size), skillKeys: [...skill.skillKeys].sort(), cells: ordered.map(cohort => ({ key: cohort.key, ...value(skill.cells.get(cohort.key) ?? tally(), cohort.sessions.size) })) }))
       .sort((left, right) => right.count - left.count || left.name.localeCompare(right.name)),
   };

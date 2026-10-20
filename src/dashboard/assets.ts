@@ -47,7 +47,7 @@ export const dashboardHtml = `<!doctype html>
           <div class="metric-controls"><label>Content<select id="metric-content" form="filter-form"><option value="skills">Skills</option><option value="resources">Resources</option><option value="both" selected>Both</option></select></label><label>Measure<select id="metric-measure"><option value="successfulReads">Successful reads</option><option value="uses">Skill uses</option><option value="failedReads">Read failures</option><option value="invocations">Native invocations</option><option value="invocationFailures">Invocation failures</option><option value="readAttempts">Read attempts</option><option value="requests">Requests</option><option value="wrappers">Wrappers</option></select></label><label>Split by<select id="metric-split"><option value="skill">Skill / total ranking</option><option value="agent">Agent</option><option value="model">Model</option><option value="agent-model">Agent + model</option></select></label></div><p id="metric-explanation" class="footnote"></p><details id="tool-coverage" class="footnote"><summary id="tool-coverage-summary">Tool coverage</summary><div id="tool-coverage-content"></div></details><div id="content-status" class="content-status" role="status" hidden></div>
           <div class="overview-grid">
             <section class="panel activity-panel" aria-labelledby="activity-heading"><div class="section-heading"><div><h2 id="activity-heading">Over time</h2></div><div class="activity-actions"><span class="small muted">UTC</span><button id="view-explorer" class="quiet" type="button" hidden>View selection</button></div></div><div id="activity-chart"></div></section>
-            <section class="panel" aria-labelledby="skills-heading"><div class="section-heading"><h2 id="skills-heading">Compare skills</h2><label class="inline-label">Display<select id="metric-display"><option value="count">Count</option><option value="session-share">Session share</option></select></label></div><label class="search-label"><span class="sr-only">Find a skill</span><input id="skill-search" type="search" placeholder="Find a skill…"></label><div id="skill-table" class="table-wrap" tabindex="0" role="region" aria-label="Skill comparison"></div><p id="comparison-scroll-hint" class="matrix-scroll-hint footnote" hidden>Scroll horizontally to compare all columns.</p><div id="comparison-pagination"></div><p id="comparison-note" class="footnote"></p></section>
+            <section class="panel" aria-labelledby="skills-heading"><div class="section-heading"><h2 id="skills-heading">Compare skills</h2><label class="inline-label">Display<select id="metric-display"><option value="count">Count</option><option value="timeline">Timeline</option><option value="session-share">Session share</option></select></label></div><label class="search-label"><span class="sr-only">Find a skill</span><input id="skill-search" type="search" placeholder="Find a skill…"></label><div id="skill-table" class="table-wrap" tabindex="0" role="region" aria-label="Skill comparison"></div><p id="comparison-scroll-hint" class="matrix-scroll-hint footnote" hidden>Scroll horizontally to compare all columns.</p><div id="comparison-pagination"></div><p id="comparison-note" class="footnote"></p></section>
           </div>
           <section id="explorer-panel" class="panel explorer-panel" aria-labelledby="explorer-heading" tabindex="-1" hidden>
             <div class="section-heading"><div><p class="small muted">Within the current filters</p><h2 id="explorer-heading">Successful-read exploration</h2></div><div class="explorer-actions"><button id="explore-models" class="quiet" type="button" hidden>Skill details</button><button id="clear-explorer" class="quiet" type="button">Clear selection</button></div></div>
@@ -219,11 +219,34 @@ p { color: var(--muted); }
 .overview-grid.matrix-layout { grid-template-columns: minmax(0,1fr); }
 .matrix th { overflow-wrap: anywhere; }
 .content-status { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; font-size: 12px; }
-.content-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.content-name { display: flex; align-items: center; min-width: 0; }
 .content-name .link { overflow-wrap: anywhere; text-align: left; min-width: 0; }
-.content-label { min-width: 0; }
-.content-toggle { flex: 0 0 36px; width: 36px; min-height: 40px; padding: 4px; }
-.content-child .content-name { padding-left: 22px; }
+.content-label { display: flex; flex-wrap: wrap; align-items: center; gap: 0 12px; min-width: 0; }
+.content-name .content-title { min-height: 32px; color: var(--ink); }
+.content-name .content-files { min-height: 32px; font-size: 10px; white-space: nowrap; }
+.content-child .content-name { padding-left: 16px; }
+.rank-row.content-rank-row { grid-template-columns: minmax(0,1fr) max-content; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.content-rank-row > strong > button { min-height: 36px; min-width: 32px; text-align: right; }
+.content-rank-row .rank-track { margin-top: 2px; }
+.content-rank-row .content-kind { color: var(--quiet); font-size: 10px; }
+.content-files-pagination { flex-wrap: wrap; }
+.content-diagnostics { margin-top: 16px; }
+.content-diagnostics summary { padding: 8px 0; }
+.mini-total-row { display: grid; grid-template-columns: minmax(0,.85fr) minmax(140px,1.35fr); gap: 12px; align-items: center; min-height: 52px; padding: 7px 0; border-bottom: 1px solid var(--line); }
+.mini-total-row > .link { min-height: 36px; color: var(--ink); }
+button.mini-timeline { display: grid; grid-template-columns: minmax(0,1fr) max-content; align-items: center; gap: 10px; width: 100%; min-height: 38px; padding: 3px 0; border: 0; background: transparent; text-align: right; }
+button.mini-timeline:hover:enabled { background: var(--soft); }
+.mini-timeline svg { display: block; width: 100%; height: 32px; overflow: visible; }
+.mini-timeline rect { fill: var(--teal); }
+.mini-timeline .mini-baseline { stroke: var(--line); stroke-width: 1; }
+.mini-timeline .mini-value { min-width: 24px; color: var(--ink); font-size: 12px; font-variant-numeric: tabular-nums; }
+.mini-timeline .mini-missing { text-align: left; color: var(--quiet); font-size: 10px; }
+.mini-timeline small { display: block; font-size: 9px; color: var(--quiet); font-weight: 400; white-space: nowrap; }
+.matrix.mini-matrix { min-width: 740px; }
+.matrix.mini-matrix td { padding: 5px 10px; }
+.matrix.mini-matrix td button { min-height: 38px; padding: 3px 0; }
+.matrix.mini-matrix th:first-child { width: 210px; }
+.mini-axis { display: flex; justify-content: space-between; gap: 12px; margin-top: 10px; color: var(--quiet); font-size: 10px; }
 .content-latest { display: block; font-size: 15px; line-height: 1.6; overflow-wrap: anywhere; margin-top: 10px; }
 .content-location { overflow-wrap: anywhere; color: var(--muted); font-size: 11px; line-height: 1.6; }
 .content-breakdown { display: flex; flex-wrap: wrap; gap: 10px 24px; margin: 14px 0; }
@@ -430,6 +453,8 @@ body:has(#status-text[data-kind=error]) .message { border-left-color: var(--bad)
 }
 @media (max-width: 760px) {
   .matrix th:first-child { width: 150px; }
+  .matrix.mini-matrix th:first-child { width: 150px; }
+  .mini-total-row { grid-template-columns: minmax(0,.9fr) minmax(125px,1.1fr); gap: 10px; }
   .matrix-scroll-hint { display: block; }
   .resource-scroll-hint { display: block; margin-bottom: 12px; }
   #route-list { max-height: 320px; overflow-y: auto; }
@@ -446,8 +471,9 @@ const state = {
   focus: { kind: 'all' }, routeKey: null, skillSelection: null,
   explore: { skillName: null, interval: null },
   trends: { kind: 'top', count: 5 },
-  content: { kind: 'unrequested' }, contentRequestId: 0, contentInterval: null, contentExpanded: new Set(), contentDetail: null, contentTrends: { kind: 'top', count: 5 },
-  contentMeasures: { ...defaultContentMeasures }, skillPresentation: { measure: 'successfulReads', split: 'skill', display: 'count' }, filterOptions: null,
+  content: { kind: 'unrequested' }, contentRequestId: 0, contentInterval: null, contentExpanded: new Set(), contentChildPages: new Map(), contentDetail: null, contentTrends: { kind: 'top', count: 5 },
+  contentTimelines: { kind: 'unrequested' }, timelineRequestId: 0,
+  contentMeasures: { ...defaultContentMeasures }, contentDisplay: 'count', skillPresentation: { measure: 'successfulReads', split: 'skill', display: 'count' }, filterOptions: null,
   pages: { activity: 0, skills: 0, columns: 0, relationships: 0, routes: 0, steps: 0, catalog: 0, identities: 0, evidence: 0, resources: 0 },
 };
 let activityView = null;
@@ -1044,8 +1070,9 @@ function configureContentControls() {
   const selected = content ? state.contentMeasures[contentMode()] : state.skillPresentation.measure;
   $('metric-measure').replaceChildren(...options.map(({ value, label }) => { const option = node('option', label); option.value = value; return option; }));
   $('metric-measure').value = selected;
-  $('metric-display').value = content ? 'count' : state.skillPresentation.display;
-  $('metric-display').disabled = content;
+  $('metric-display').value = content ? state.contentDisplay : state.skillPresentation.display;
+  $('metric-display').disabled = false;
+  $('metric-display').querySelector('[value="session-share"]').disabled = content || selected !== 'uses';
   $('tool-coverage').hidden = !content || state.content.kind !== 'ready';
   $('metric-split').querySelector('[value="skill"]').textContent = content ? 'Item / total ranking' : 'Skill / total ranking';
   $('metrics-heading').textContent = contentMode() === 'skills' ? 'Skill metrics' : contentMode() === 'resources' ? 'Resource metrics' : 'Skill and resource metrics';
@@ -1061,6 +1088,11 @@ function configureContentControls() {
 function cancelContentRequest() {
   if (state.content.kind === 'loading') state.content.controller.abort();
   state.contentRequestId += 1;
+  cancelContentTimelines();
+}
+function cancelContentTimelines() {
+  if (state.contentTimelines.kind === 'loading') state.contentTimelines.controller.abort();
+  state.timelineRequestId += 1; state.contentTimelines = { kind: 'unrequested' };
 }
 function contentParams() {
   const params = new URLSearchParams(state.filterQuery);
@@ -1163,52 +1195,201 @@ function contentRowName(row, child = false) {
 }
 function contentRowAction(row, child = false) {
   const name = node('div', null, 'content-name');
+  const title = node('div', null, 'content-label'); title.append(button(contentRowName(row, child), () => selectContentDetail(row), 'link content-title'));
   if (row.children.length) {
     const expanded = state.contentExpanded.has(row.key) || Boolean($('skill-search').value.trim());
-    const toggle = button(expanded ? '▾' : '▸', () => { if (state.contentExpanded.has(row.key)) state.contentExpanded.delete(row.key); else state.contentExpanded.add(row.key); renderContentComparison(); }, 'quiet content-toggle');
+    const childLabel = row.children.some(child => child.identity.kind === 'skill') ? 'Files & evidence' : count(row.children.length, 'file');
+    const toggle = button(childLabel, () => { if (state.contentExpanded.has(row.key)) state.contentExpanded.delete(row.key); else state.contentExpanded.add(row.key); renderContentComparison(); Array.from($('skill-table').querySelectorAll('[data-content-key]')).find(element => element.dataset.contentKey === row.key)?.querySelector('.content-files')?.focus(); }, 'link content-files');
     toggle.disabled = Boolean($('skill-search').value.trim());
-    toggle.setAttribute('aria-label', (expanded ? 'Collapse ' : 'Expand ') + row.label); toggle.setAttribute('aria-expanded', String(expanded)); name.append(toggle);
-  }
-  const title = node('div', null, 'content-label'); title.append(button(contentRowName(row, child), () => selectContentDetail(row), 'link'));
-  if (!child) {
-    const identity = row.identity; const location = identity.kind === 'skill' ? identity : identity.location;
-    const duplicate = contentReport().selection.rows.some(other => other.key !== row.key && other.label === row.label);
-    const context = identity.kind === 'skill' ? ['Unresolved file association', hostLabel(identity.host), ...(location.canonicalPath ? [location.canonicalPath] : [])] : [location.canonicalPath];
-    if (duplicate) context.push(location.machineId, location.sourceId);
-    title.append(node('div', context.join(' · '), 'content-location'));
+    toggle.setAttribute('aria-label', (expanded ? 'Hide files for ' : 'Show files for ') + row.label); toggle.setAttribute('aria-expanded', String(expanded)); title.append(toggle);
   }
   name.append(title); return name;
 }
+function visibleContentRows(page, query) {
+  const expanded = page.filter(row => row.children.length && (state.contentExpanded.has(row.key) || query));
+  const size = presentation().display === 'timeline' ? Math.max(1, Math.floor((24 - page.length) / Math.max(1, expanded.length))) : 12;
+  return page.flatMap(row => {
+    const visible = [{ row, child: false, pager: null }];
+    if (!expanded.includes(row)) return visible;
+    const children = row.children.filter(child => !query || contentRowMatches(row, query) || contentRowMatches(child, query));
+    const current = Math.min(state.contentChildPages.get(row.key) || 0, Math.max(0, Math.ceil(children.length / size) - 1));
+    state.contentChildPages.set(row.key, current);
+    visible.push(...children.slice(current * size, (current + 1) * size).map(child => ({ row: child, child: true, pager: null })));
+    if (children.length > size) visible[visible.length - 1].pager = { row, current, size, total: children.length };
+    return visible;
+  });
+}
+function contentFilesPager(page) {
+  const target = node('div', null, 'pagination content-files-pagination'); target.dataset.ownerKey = page.row.key;
+  const change = (next, direction) => {
+    state.contentChildPages.set(page.row.key, next); renderContentComparison();
+    const pager = Array.from($('skill-table').querySelectorAll('[data-owner-key]')).find(element => element.dataset.ownerKey === page.row.key);
+    const buttons = Array.from(pager?.querySelectorAll('button:not(:disabled)') || []); (buttons.find(button => button.textContent === direction) || buttons[0])?.focus();
+  };
+  const previous = button('Previous files', () => change(page.current - 1, 'Previous files'));
+  const next = button('Next files', () => change(page.current + 1, 'Next files'));
+  previous.setAttribute('aria-label', 'Previous files for ' + page.row.label); next.setAttribute('aria-label', 'Next files for ' + page.row.label);
+  previous.disabled = page.current === 0; next.disabled = (page.current + 1) * page.size >= page.total;
+  target.append(node('span', number(page.current * page.size + 1) + '–' + number(Math.min((page.current + 1) * page.size, page.total)) + ' of ' + count(page.total, 'file'), 'small'), previous, next);
+  return target;
+}
+function miniTimeline(series, activity, maximum, label, value, action, pending = '') {
+  const target = button('', action, 'mini-timeline');
+  const undated = series?.undatedCount || 0;
+  const values = series?.values || (activity.kind === 'bucketed' ? activity.bins.map(() => 0) : []);
+  const peak = Math.max(0, ...values); const active = values.filter(value => value > 0).length;
+  const distribution = peak && activity.kind === 'bucketed' ? ', ' + count(active, 'active interval') + ', peak ' + metricCount(peak) + ' at ' + timeLabel(activity.bins[values.indexOf(peak)].startAt) + ' UTC' : pending ? ', ' + pending : ', no dated activity';
+  target.setAttribute('aria-label', label + ': ' + metricCount(value) + distribution + (undated ? ', ' + count(undated, 'record') + ' without a timestamp' : '') + '. View details.');
+  target.dataset.timelineCount = value; target.dataset.timelineDated = series?.datedCount || 0; target.dataset.timelineUndated = undated;
+  if (pending || activity.kind === 'empty' || !series?.datedCount && undated) target.append(node('span', pending || 'No dated activity', 'mini-missing'));
+  else {
+    const svg = svgNode('svg', { viewBox: '0 0 240 32', preserveAspectRatio: 'none', 'aria-hidden': 'true' });
+    svg.append(svgNode('line', { x1: 0, x2: 240, y1: 31, y2: 31, class: 'mini-baseline' }));
+    const width = 240 / Math.max(1, values.length);
+    values.forEach((count, index) => {
+      if (!count) return;
+      const height = Math.max(2, count / maximum * 28);
+      const bar = svgNode('rect', { x: index * width + Math.min(1, width / 6), y: 31 - height, width: Math.max(.5, width - Math.min(2, width / 3)), height });
+      const title = svgNode('title', {}); title.textContent = intervalLabel(activity.bins[index].startAt, activity.bins[index].endAt) + ' UTC: ' + metricCount(count); bar.append(title); svg.append(bar);
+    });
+    target.append(svg);
+  }
+  const total = node('span', null, 'mini-value'); total.append(node('strong', number(value)));
+  if (undated) total.append(node('small', number(undated) + ' undated'));
+  target.append(total); return target;
+}
+function miniAxis(activity) {
+  const axis = activity.kind === 'empty' ? node('div') : chartAxis(activity); axis.className = 'mini-axis';
+  if (axis.lastChild) axis.lastChild.textContent += ' UTC';
+  return axis;
+}
+function contentTimelineProjection(visible, columns) {
+  const params = contentParams();
+  for (const { row } of visible) params.append('rowKey', row.key);
+  for (const column of columns) params.append('cohortKey', column.key);
+  const key = params.toString();
+  if (state.contentTimelines.kind === 'unrequested' || state.contentTimelines.key !== key) void loadContentTimelines(params, key);
+  return state.contentTimelines;
+}
+async function loadContentTimelines(params, key) {
+  cancelContentTimelines(); const requestId = state.timelineRequestId; const controller = new AbortController();
+  const report = contentReport(); const queryVersion = state.contentRequestId;
+  state.contentTimelines = { kind: 'loading', key, controller };
+  try {
+    const response = await fetch('/api/content-timelines?' + params, { signal: controller.signal, headers: { Accept: 'application/json' } });
+    if (!response.ok) throw new Error('Timeline request failed (HTTP ' + response.status + ').');
+    const payload = await response.json();
+    if (requestId !== state.timelineRequestId || queryVersion !== state.contentRequestId || !isContentView() || presentation().display !== 'timeline') return;
+    if (payload.kind === 'error') throw new Error(payload.message);
+    const timelines = payload.timelines;
+    const axis = report.displayed.activity;
+    if (payload.kind !== 'ready' || !timelines || !['empty', 'bucketed'].includes(timelines.kind) || !Array.isArray(timelines.rows)
+      || timelines.kind !== axis.kind || timelines.rows.length > 144
+      || timelines.kind === 'bucketed' && (timelines.startAt !== axis.startAt || timelines.endAt !== axis.endAt || timelines.binWidthMs !== axis.binWidthMs || timelines.binCount !== axis.bins.length || timelines.binCount > 256)
+      || !timelines.rows.every(row => typeof row.rowKey === 'string' && (row.cohortKey === null || typeof row.cohortKey === 'string') && [row.count, row.datedCount, row.undatedCount].every(value => Number.isSafeInteger(value) && value >= 0) && Array.isArray(row.values) && row.values.length === (axis.kind === 'empty' ? 0 : axis.bins.length) && row.values.every(value => Number.isSafeInteger(value) && value >= 0))) throw new Error('The timeline report is unavailable.');
+    state.contentTimelines = { kind: 'ready', key, timelines };
+  } catch (error) {
+    if (requestId !== state.timelineRequestId || queryVersion !== state.contentRequestId) return;
+    state.contentTimelines = { kind: 'error', key };
+  }
+  if (requestId === state.timelineRequestId && state.content.kind === 'ready') renderContentComparison();
+}
+function renderContentTimelines(target, visible, columns) {
+  const projection = contentTimelineProjection(visible, columns); const activity = contentReport().displayed.activity;
+  const rows = projection.kind === 'ready' ? projection.timelines.rows : [];
+  const maximum = Math.max(1, ...rows.flatMap(row => row.values));
+  const pending = projection.kind === 'ready' ? '' : projection.kind === 'error' ? 'Unavailable' : 'Loading…';
+  const timelineFor = (row, column = null) => rows.find(value => value.rowKey === row.key && value.cohortKey === (column?.key || null));
+  const tableTarget = columns.length ? table(['Item', ...columns.map(column => trendName(column.key))], measureLabels[presentation().measure] + ' over time by item and ' + presentation().split.replace('-', ' + ')) : null;
+  if (tableTarget) { tableTarget.className = 'matrix mini-matrix'; tableTarget.style.minWidth = 210 + columns.length * 180 + 'px'; }
+  for (const { row, child, pager } of visible) {
+    const line = node(tableTarget ? 'tr' : 'div', null, (tableTarget ? '' : 'mini-total-row ') + (child ? 'content-child' : ''));
+    line.dataset.contentKey = row.key; line.dataset.motionKey = row.key;
+    const name = tableTarget ? node('th') : contentRowAction(row, child);
+    if (tableTarget) { name.scope = 'row'; name.append(contentRowAction(row, child)); }
+    line.append(name);
+    if (tableTarget) for (const column of columns) {
+      const cell = node('td'); const timeline = timelineFor(row, column); const value = timeline?.count ?? row.cells.find(cell => cell.key === column.key)?.count ?? 0;
+      cell.append(miniTimeline(timeline, activity, maximum, row.label + ', ' + trendName(column.key), value, () => selectContentDetail(row, column), pending)); line.append(cell);
+    }
+    else { const timeline = timelineFor(row); line.append(miniTimeline(timeline, activity, maximum, row.label, timeline?.count ?? row.count, () => selectContentDetail(row), pending)); }
+    if (tableTarget) tableTarget.tBodies[0].append(line); else target.append(line);
+    if (pager) {
+      if (tableTarget) { const line = node('tr'); const cell = node('td'); cell.colSpan = columns.length + 1; cell.append(contentFilesPager(pager)); line.append(cell); tableTarget.tBodies[0].append(line); }
+      else target.append(contentFilesPager(pager));
+    }
+  }
+  if (tableTarget) target.append(tableTarget);
+  target.append(miniAxis(activity));
+  if (projection.kind === 'loading') { const message = node('p', 'Loading timelines…', 'footnote'); message.setAttribute('role', 'status'); target.append(message); }
+  if (projection.kind === 'error') { const message = node('div', null, 'content-status footnote'); message.setAttribute('role', 'status'); message.append(node('span', 'Timelines are unavailable.'), button('Retry timelines', () => { if ($('skill-table').contains(document.activeElement)) $('skill-table').focus({ preventScroll: true }); loadContentAnalytics(true); }, 'quiet')); target.append(message); }
+}
+function comparisonFocus() {
+  const active = document.activeElement;
+  if ($('comparison-pagination').contains(active)) return { kind: 'page', label: active.getAttribute('aria-label') };
+  if (!$('skill-table').contains(active)) return null;
+  const row = active.closest('[data-content-key]');
+  if (row) return { kind: 'row', key: row.dataset.contentKey, column: active.closest('td')?.cellIndex ?? null, action: active.classList.contains('content-files') ? 'files' : active.classList.contains('content-title') ? 'name' : active.classList.contains('mini-timeline') ? 'timeline' : 'count' };
+  const pager = active.closest('[data-owner-key]');
+  return pager ? { kind: 'files', key: pager.dataset.ownerKey, label: active.textContent } : { kind: 'region' };
+}
+function restoreComparisonFocus(focus) {
+  if (!focus) return;
+  const target = $('skill-table'); let action = target;
+  if (document.activeElement !== document.body && !target.contains(document.activeElement) && !$('comparison-pagination').contains(document.activeElement)) return;
+  if (focus.kind === 'row') {
+    const row = Array.from(target.querySelectorAll('[data-content-key]')).find(row => row.dataset.contentKey === focus.key);
+    if (row) action = focus.action === 'files' ? row.querySelector('.content-files') : focus.action === 'name' ? row.querySelector('.content-title') : focus.column !== null ? row.cells[focus.column]?.querySelector('button') : row.querySelector(focus.action === 'timeline' ? '.mini-timeline' : 'strong > button');
+  } else if (focus.kind === 'files') {
+    const pager = Array.from(target.querySelectorAll('[data-owner-key]')).find(pager => pager.dataset.ownerKey === focus.key);
+    const buttons = Array.from(pager?.querySelectorAll('button:not(:disabled)') || []); action = buttons.find(button => button.textContent === focus.label) || buttons[0];
+  } else if (focus.kind === 'page') {
+    const buttons = Array.from($('comparison-pagination').querySelectorAll('button:not(:disabled)'));
+    const group = focus.label?.replace(/^(Next|Previous) /, '');
+    action = buttons.find(button => button.getAttribute('aria-label') === focus.label) || buttons.find(button => button.getAttribute('aria-label')?.endsWith(' ' + group));
+  }
+  (action || target).focus({ preventScroll: true });
+}
 function renderContentComparison() {
+  const focus = comparisonFocus();
+  renderContentComparisonRows();
+  restoreComparisonFocus(focus);
+}
+function renderContentComparisonRows() {
   if (state.content.kind !== 'ready') return;
   const report = contentReport(); const query = $('skill-search').value.trim().toLowerCase();
   const rows = report.selection.rows.filter(row => row.count > 0 && (!query || contentRowMatches(row, query) || row.children.some(child => contentRowMatches(child, query))));
   $('skills-heading').textContent = contentMode() === 'resources' ? 'Compare resources' : 'Compare skills and resources';
-  $('comparison-note').textContent = contentMode() === 'both' ? 'Expand a skill to compare its files. Parent totals include their children once. Select a count for evidence and location details.' : 'All files with matching activity, including SKILL.md. Select a count for evidence and location details.';
+  $('comparison-note').textContent = presentation().display === 'timeline' ? 'Each timeline uses the same UTC intervals and scale. Select a timeline for details.' : contentMode() === 'both' ? 'Skill totals include their files once. Select a name or count for details.' : 'Select a name or count for details.';
   const target = $('skill-table'); const before = motion.capture(target); target.replaceChildren(); const pager = $('comparison-pagination'); pager.replaceChildren();
   const split = presentation().split; $('comparison-scroll-hint').hidden = split === 'skill';
   if (!rows.length) {
+    cancelContentTimelines();
     $('comparison-scroll-hint').hidden = true; target.append(empty(query ? 'No skills or resources match this search.' : metricEmptyText()));
     if (state.report.scope.source) target.append(button('Clear command source filter', () => { $('source-filter').value = ''; loadDashboard(); }, 'link'));
     target.append(button('View resource inventory', () => showWorkspace('resources', true), 'link')); return;
   }
   const max = Math.max(1, ...rows.map(row => row.count));
   const page = pageItems(rows, 'skills', split === 'skill' ? 8 : 12);
-  const visible = page.flatMap(row => [{ row, child: false }, ...(row.children.length && (state.contentExpanded.has(row.key) || query) ? row.children.filter(child => !query || contentRowMatches(row, query) || contentRowMatches(child, query)).map(child => ({ row: child, child: true })) : [])]);
-  if (split === 'skill') {
-    for (const { row, child } of visible) {
-      const line = node('div', null, 'rank-row' + (child ? ' content-child' : '')); line.dataset.contentKey = row.key; line.dataset.motionKey = row.key;
-      line.append(node('span', child ? '↳' : '', 'rank-number'));
+  const visible = visibleContentRows(page, query);
+  if (presentation().display === 'timeline') {
+    const columns = split === 'skill' ? [] : pageItems(report.displayed.series, 'columns', 6);
+    renderContentTimelines(target, visible, columns);
+    if (report.displayed.series.length > 6 && columns.length) pager.append(pagination('columns', report.displayed.series.length, 6, renderContentComparison));
+  } else if (split === 'skill') {
+    for (const { row, child, pager } of visible) {
+      const line = node('div', null, 'rank-row content-rank-row' + (child ? ' content-child' : '')); line.dataset.contentKey = row.key; line.dataset.motionKey = row.key;
       const name = node('div'); name.append(contentRowAction(row, child));
-      if (row.identity.kind === 'file' && !row.identity.ownerSkillPath) name.append(node('div', 'No owning skill', 'content-location'));
+      if (row.identity.kind === 'file' && !row.identity.ownerSkillPath) name.append(node('div', 'No owning skill', 'content-kind'));
       const track = node('div', null, 'rank-track'); const fill = node('div', null, 'rank-fill'); fill.style.width = row.count / max * 100 + '%'; track.append(fill); name.append(track);
       const value = node('strong'); value.append(button(number(row.count), () => selectContentDetail(row), 'link')); line.append(name, value); target.append(line);
+      if (pager) target.append(contentFilesPager(pager));
     }
   } else {
     const columns = pageItems(report.displayed.series, 'columns', 6);
     const matrix = table(['Item', ...columns.map(series => trendName(series.key))], measureLabels[presentation().measure] + ' by item and ' + split.replace('-', ' + ')); matrix.className = 'matrix';
     const maximum = Math.max(1, ...rows.flatMap(row => row.cells.map(cell => cell.count)));
-    for (const { row, child } of visible) {
+    for (const { row, child, pager } of visible) {
       const line = node('tr', null, child ? 'content-child' : ''); line.dataset.contentKey = row.key; line.dataset.motionKey = row.key;
       const heading = node('th'); heading.scope = 'row'; heading.append(contentRowAction(row, child)); line.append(heading);
       for (const column of columns) {
@@ -1218,6 +1399,7 @@ function renderContentComparison() {
         action.setAttribute('aria-label', row.label + ', ' + trendName(column.key) + ': ' + metricCount(value)); item.append(action); line.append(item);
       }
       matrix.lastChild.append(line);
+      if (pager) { const line = node('tr'); const cell = node('td'); cell.colSpan = columns.length + 1; cell.append(contentFilesPager(pager)); line.append(cell); matrix.lastChild.append(line); }
     }
     target.append(matrix); if (report.displayed.series.length > 6) pager.append(pagination('columns', report.displayed.series.length, 6, renderContentComparison));
   }
@@ -1248,9 +1430,11 @@ function renderContentDetail() {
   for (const [key, label] of Object.entries(contentMeasures)) if (key !== 'activity' && key !== 'toolActivity' && (contentMode() === 'both' || label.resources)) { const value = node('div'); value.append(node('strong', number(stats.counts[key] || 0)), node('span', label.label)); breakdown.append(value); }
   target.append(breakdown);
   const identity = row.identity; const location = identity.kind === 'skill' ? identity : identity.location;
-  for (const [label, value] of [['File', location.canonicalPath || 'Not recorded in skill evidence'], ['Machine', location.machineId], ['Account source', location.sourceId], ['Filesystem', identity.kind === 'skill' ? 'Not recorded in skill evidence' : location.filesystemId]]) target.append(node('p', label + ': ' + value, 'content-location'));
-  if (identity.kind === 'skill') target.append(node('p', 'Observed path: Not recorded in skill evidence', 'content-location'));
-  if (identity.kind === 'file') target.append(node('p', 'Observed path: ' + identity.observedPath, 'content-location'), node('p', 'Owning skill: ' + (identity.ownerSkillPath || 'None'), 'content-location'));
+  const locations = node('div');
+  for (const [label, value] of [['File', location.canonicalPath || 'Not recorded in skill evidence'], ['Machine', location.machineId], ['Account source', location.sourceId], ['Filesystem', identity.kind === 'skill' ? 'Not recorded in skill evidence' : location.filesystemId]]) locations.append(node('p', label + ': ' + value, 'content-location'));
+  if (identity.kind === 'skill') locations.append(node('p', 'Observed path: Not recorded in skill evidence', 'content-location'));
+  if (identity.kind === 'file') locations.append(node('p', 'Observed path: ' + identity.observedPath, 'content-location'), node('p', 'Owning skill: ' + (identity.ownerSkillPath || 'None'), 'content-location'));
+  const diagnostics = disclosure('Location details', locations); diagnostics.className = 'content-diagnostics'; target.append(diagnostics);
   if (identity.kind === 'owner') target.append(node('p', 'Select a file to see requested and returned portions.', 'footnote'));
   else if (stats.readDetails?.groups.length) {
     target.append(node('h3', 'Read portions'));
@@ -1276,7 +1460,7 @@ function portionLabel(portion) {
   return portion.count === 1 ? 'Line ' + number(portion.start) : 'Lines ' + number(portion.start) + '–' + number(portion.start + portion.count - 1);
 }
 function changeContentMode() {
-  cancelContentRequest(); state.content = { kind: 'unrequested' }; state.contentInterval = null; state.contentExpanded.clear(); state.contentDetail = null; state.contentTrends = { kind: 'top', count: 5 };
+  cancelContentRequest(); state.content = { kind: 'unrequested' }; state.contentInterval = null; state.contentExpanded.clear(); state.contentChildPages.clear(); state.contentDetail = null; state.contentTrends = { kind: 'top', count: 5 };
   $('skill-search').value = ''; state.pages.skills = 0; state.pages.columns = 0;
   configureContentControls();
   if (!isContentView()) { $('metric-split').value = state.skillPresentation.split; if (state.filterOptions) renderFilterOptions(state.filterOptions); renderMetrics(); showWorkspaceStatus(); }
@@ -1288,7 +1472,7 @@ function updateMetricProjection() {
   const p = presentation();
   document.querySelector('.overview-grid').classList.toggle('matrix-layout', p.split !== 'skill');
   $('metric-display').querySelector('[value="session-share"]').disabled = p.measure !== 'uses';
-  if (p.measure !== 'uses') $('metric-display').value = 'count';
+  if (p.measure !== 'uses' && p.display === 'session-share') $('metric-display').value = 'count';
   state.metricView = projectMetrics(state.report, presentation());
   const notes = { successfulReads: 'Repeated successful reads count separately.', uses: 'Successful reads, successful native invocations, and unconfirmed read attempts. Failures are excluded.', failedReads: 'Reads with a recorded error.', invocations: 'Successful native skill invocations.', invocationFailures: 'Native invocations with a recorded error.', readAttempts: 'Unconfirmed read attempts. The outcome is unknown.', requests: 'Recorded skill commands. Requests have no model attribution.', wrappers: 'Skill text found in input. Wrappers have no model attribution.' };
   $('metric-explanation').textContent = notes[p.measure] + (p.measure !== 'successfulReads' ? ' Date selections below explore successful reads in the same interval.' : '');
@@ -1409,6 +1593,7 @@ function appendModelRecovery(target) { if (state.report.scope.modelSelection && 
 function renderActivity() {
   const target = $('activity-chart'); motion.cancel(target); target.replaceChildren(); activityView = null;
   const report = state.report; const activity = metricActivity();
+  const contentDisplayed = isContentView() ? contentReport().displayed : null;
   const updateControls = $('metric-split').value === 'skill' ? mountTrendControls(target) : () => {}; updateControls();
   if (activity.kind !== 'empty' && !state.metricView.series.length && presentation().split !== 'skill') { activityView = updateControls; target.append(empty(metricEmptyText())); appendModelRecovery(target); return; }
   if (activity.kind === 'empty') {
@@ -1437,8 +1622,8 @@ function renderActivity() {
       const scope = (focus.kind === 'inspection' ? 'Interval' : focus.kind === 'selected' ? 'Selected range' : 'Displayed range') + ' · ' + intervalLabel(range.startAt, range.endAt) + ' UTC';
       let counts;
       if (focus.kind === 'inspection') counts = binSkills[focus.index];
-      else if (isContentView()) {
-        counts = focus.kind === 'selected' && state.content.kind !== 'ready' ? null : new Map((focus.kind === 'selected' ? contentReport().selection.series : contentReport().displayed.series).map(series => [series.key, series.datedCount]));
+      else if (contentDisplayed !== null) {
+        counts = focus.kind === 'selected' && state.content.kind !== 'ready' ? null : new Map((focus.kind === 'selected' ? state.content.report.selection.series : contentDisplayed.series).map(series => [series.key, series.datedCount]));
       }
       else {
         let view = state.metricView;
@@ -1727,11 +1912,11 @@ function renderExplore() {
   $('explore-announcement').textContent = count(snapshot.paths.length, 'matching path') + ' in the exploration.';
   motion.expand(panel, before);
 }
-function comparisonView() {
-  if (!state.explore.interval && !state.explore.skillName) return state.metricView;
+function comparisonView(projection) {
+  if (!state.explore.interval && !state.explore.skillName) return projection ? projectMetrics(state.report, presentation(), projection) : state.metricView;
   const matching = state.explore.skillName && presentation().measure === 'successfulReads' ? new Set(explorationSnapshot(state.explore.interval, state.explore.skillName).paths.map(entry => entry.route.key)) : null;
   const routes = state.report.routes.filter(route => !matching || matching.has(route.key)).map(route => ({ ...route, steps: route.steps.map(step => step.kind === 'observations' ? { ...step, items: step.items.filter(item => inInterval(item.observedAt, state.explore.interval)) } : step) }));
-  return projectMetrics({ ...state.report, routes }, presentation());
+  return projectMetrics({ ...state.report, routes }, presentation(), projection);
 }
 function selectMetricSkill(row, cell, series) {
   state.skillSelection = { kind: 'metric-skill', name: row.name, routeKeys: cell.routeKeys, query: { presentation: { ...presentation() }, cellKey: series?.key ?? null, interval: state.explore.interval }, label: measureLabels[presentation().measure] + (series ? ' · ' + series.label : '') + ': ' + (presentation().display === 'session-share' ? shareText(cell.share) + ' of eligible sessions' : number(cell.count)) };
@@ -1748,6 +1933,34 @@ function renderSkillComparison() {
   const target = $('skill-table'); const before = motion.capture(target); target.replaceChildren();
   const pager = $('comparison-pagination'); pager.replaceChildren();
   if (!rows.length) { $('comparison-scroll-hint').hidden = true; target.append(empty(query ? noResults('skills', query) : metricEmptyText())); appendModelRecovery(target); if (state.report.skillGroups.some(group => group.cataloged)) target.append(button('View skill catalog', () => { $('catalog-context').open = true; $('catalog-context').querySelector('summary').focus(); }, 'link')); return; }
+  if (p.display === 'timeline') {
+    const page = pageItems(rows, 'skills', p.split === 'skill' ? 8 : 12);
+    const columns = p.split === 'skill' ? [] : pageItems(view.series, 'columns', 6);
+    const timelines = comparisonView({ skillNames: page.map(row => row.name), cohortKeys: columns.map(column => column.key) }).rowTimelines;
+    const activity = state.report.activity; const maximum = Math.max(1, ...timelines.flatMap(row => row.values));
+    const matrix = columns.length ? table(['Skill', ...columns.map(column => trendName(column.key))], measureLabels[p.measure] + ' over time by skill and ' + p.split.replace('-', ' + ')) : null;
+    if (matrix) { matrix.className = 'matrix mini-matrix'; matrix.style.minWidth = 210 + columns.length * 180 + 'px'; }
+    for (const row of page) {
+      const line = node(matrix ? 'tr' : 'div', null, matrix ? '' : 'mini-total-row'); line.dataset.motionKey = row.name; line.dataset.skillName = row.name;
+      const name = button(row.name, () => selectMetricSkill(row, row, null), 'link');
+      if (matrix) {
+        const heading = node('th'); heading.scope = 'row'; heading.append(name); line.append(heading);
+        for (const column of columns) {
+          const cell = row.cells.find(cell => cell.key === column.key); const target = node('td');
+          target.append(miniTimeline(timelines.find(value => value.name === row.name && value.cohortKey === column.key), activity, maximum, row.name + ', ' + trendName(column.key), cell?.count || 0, () => selectMetricSkill(row, cell || { count: 0, routeKeys: [] }, column))); line.append(target);
+        }
+        matrix.tBodies[0].append(line);
+      } else {
+        line.append(name, miniTimeline(timelines.find(value => value.name === row.name && value.cohortKey === null), activity, maximum, row.name, row.count, () => selectMetricSkill(row, row, null))); target.append(line);
+      }
+    }
+    if (matrix) target.append(matrix);
+    target.append(miniAxis(activity));
+    $('comparison-note').textContent = 'Each timeline uses the same UTC intervals and scale. Select a timeline for matching records and paths.';
+    if (columns.length && view.series.length > 6) pager.append(pagination('columns', view.series.length, 6, renderSkillComparison));
+    pager.append(pagination('skills', rows.length, p.split === 'skill' ? 8 : 12, renderSkillComparison));
+    motion.reflow(target, before); return;
+  }
   if (p.split === 'skill') {
     const max = Math.max(1, ...rows.map(row => share ? row.share || 0 : row.count));
     for (const [index, row] of pageItems(rows, 'skills', 8).entries()) {
@@ -2036,6 +2249,7 @@ $('reset-filters').addEventListener('click', () => {
   $('filter-form').reset();
   cancelContentRequest(); state.content = { kind: 'unrequested' };
   state.contentMeasures = { ...defaultContentMeasures };
+  state.contentDisplay = 'count'; state.contentChildPages.clear();
   state.skillPresentation = { measure: 'successfulReads', split: 'skill', display: 'count' };
   $('metric-split').value = 'skill'; $('metric-display').value = 'count'; state.trends = { kind: 'top', count: 5 };
   configureContentControls(); resetSelections(); loadDashboard();
@@ -2049,11 +2263,15 @@ $('time-preset').addEventListener('change', () => {
   loadDashboard();
 });
 for (const id of ['from-filter', 'to-filter']) $(id).addEventListener('change', () => { $('time-preset').value = 'custom'; });
-for (const [id, key, render] of [['skill-search', 'skills', renderSkillComparison], ['catalog-search', 'catalog', renderCatalog], ['route-search', 'routes', renderPaths], ['resource-search', 'resources', renderResources]]) $(id).addEventListener('input', () => { state.pages[key] = 0; if (key === 'resources' ? state.resources.kind === 'ready' : state.report) render(); });
+for (const [id, key, render] of [['skill-search', 'skills', renderSkillComparison], ['catalog-search', 'catalog', renderCatalog], ['route-search', 'routes', renderPaths], ['resource-search', 'resources', renderResources]]) $(id).addEventListener('input', () => { state.pages[key] = 0; if (key === 'skills') state.contentChildPages.clear(); if (key === 'resources' ? state.resources.kind === 'ready' : state.report) render(); });
 for (const id of ['resource-kind', 'resource-observation']) $(id).addEventListener('change', () => { state.pages.resources = 0; if (state.resources.kind === 'ready') renderResources(); });
 for (const id of ['metric-measure', 'metric-split', 'metric-display']) $(id).addEventListener('change', () => {
-  if (!state.report) return; state.pages.skills = 0; state.pages.columns = 0;
-  if (isContentView()) { state.contentMeasures[contentMode()] = $('metric-measure').value; state.contentDetail = null; state.contentTrends = { kind: 'top', count: 5 }; loadContentAnalytics(); }
+  if (!state.report) return;
+  if (id !== 'metric-display') { state.pages.skills = 0; state.pages.columns = 0; }
+  if (isContentView()) {
+    if (id === 'metric-display') { state.contentDisplay = $('metric-display').value; cancelContentTimelines(); renderContentComparison(); return; }
+    state.contentMeasures[contentMode()] = $('metric-measure').value; state.contentDetail = null; state.contentTrends = { kind: 'top', count: 5 }; loadContentAnalytics();
+  }
   else { updateMetricProjection(); state.skillPresentation = presentation(); renderActivity(); renderExplore(); }
 });
 $('route-model').addEventListener('change', () => { state.pages.routes = 0; state.routeKey = null; renderPaths(); });

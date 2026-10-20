@@ -22,6 +22,8 @@ Native invocations counts successful invocations. Invocation failures remain sep
 
 Split by selects Skill / total ranking, Agent, Model, or Agent + model. The trend stacks counts for the selected measure. The comparison shows a total ranking or a matrix. Matrix columns contain observed cohorts, including Unknown model and No model attribution where applicable. It never constructs all possible agent/model combinations.
 
+Display selects Count or Timeline in Skills, Resources, and Both. Timeline shows a small bar chart beside each item or cohort count. The charts share UTC intervals and a count scale within the page. Agent, Model, Period, and the selected chart interval also apply to these timelines. Undated evidence stays in the count and has no bar.
+
 For Skill uses, Display can show Count or Session share in the comparison. The trend continues to show counts. Session share divides sessions with the skill use by sessions with any skill use in that cohort. A model cohort has its own denominator. Sessions that span models can contribute to several columns. A missing denominator displays a dash, not zero.
 
 A skill use is a successful read, a successful native skill invocation, or a read attempt. Failed reads and failed invocations are excluded. Requests and wrappers are excluded. Hosts capture different evidence: Codex read attempts have no known outcome.
@@ -48,6 +50,8 @@ Catalog polling can appear in filesystem events without an agent tool read.
 **Filesystem opens** and **Filesystem accesses** remain separate diagnostic measures.
 Both also offers the skill evidence measures. Session share remains available only in Skills. Each content mode remembers its measure.
 
+Comparison rows show item names and counts. A labeled file count expands an owner's files. Absolute paths and installation identifiers appear in Location details, which is closed initially.
+
 Search matches file paths and owner names. A matching supporting file appears under its owner. Pagination keeps parents with their children. Select a count to see that cell's evidence breakdown, physical location, attribution, and first/latest evidence timestamps. These details do not invent a skill session path for filesystem activity.
 
 File details show **Read portions**, with requested and reported returned portions in separate columns.
@@ -65,6 +69,8 @@ Only files with matching activity enter the main comparison. The Resources works
 Agent, model, machine, project, and date filters also apply to resource activity. Resource-only agent/model pairs appear in these views. Unknown and non-agent evidence retain separate attribution. A known model slice cannot claim activity with an unknown model.
 
 Resource and combined views request compact aggregates from the server when content, measures, splits, or selected dates change. The full trend remains in place during a date-selection request. Selected counts show a loading state or a retry action until the requested counts arrive. Hover and keyboard inspection remain local. Returning to Skills restores its measure, split, and display.
+
+Timeline requests include only visible rows and cohorts. Count does not request timeline data. Loading or failed timelines keep the counts available and provide a retry action. Historical resource records do not contain original tool names. Agent identifies the integration, such as Codex or Claude Code, rather than a named subagent.
 
 ## Selection and paths
 
@@ -130,6 +136,7 @@ Run the repeatable Chromium checks:
 
 ```bash
 npm run smoke:dashboard
+npm run smoke:dashboard:timelines
 ```
 
 The script starts disposable previews and a private headless browser. It removes the browser profile and preview databases after the checks.
