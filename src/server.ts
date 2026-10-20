@@ -1,12 +1,15 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { promisify } from "node:util";
+import { gzip, constants as zlibConstants } from "node:zlib";
 import { parseHostId, parseMachineId } from "./observation.js";
 import { dashboardCss, dashboardHtml, dashboardJs } from "./dashboard/assets.js";
 import { archivoFont, fontLicenses, jetbrainsMonoFont } from "./dashboard/fonts.js";
 import { buildDashboardReport, type DashboardReport } from "./dashboard/analytics.js";
-import { isContentMeasure, isResourceMeasure, type ContentInterval, type ContentQuery, type ContentReport } from "./content-analytics.js";
+import { isContentMeasure, isResourceMeasure, type ContentInterval, type ContentQuery, type ContentReport, type ContentTimelineRequest } from "./content-analytics.js";
 import {
   openHotplateReadStore,
+  assertHotplateReadiness,
   resolveHotplateDatabasePath,
   type HotplateReadonlyStore,
 } from "./store.js";
@@ -22,6 +25,7 @@ import type {
 const DEFAULT_DASHBOARD_HOST = "127.0.0.1";
 const DEFAULT_DASHBOARD_PORT = 7345;
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
+const compressJson = promisify(gzip);
 
 type DashboardServerOptions = {
   databasePath?: string;
@@ -165,20 +169,54 @@ export async function respondDashboard(args: { request: IncomingMessage; respons
   }
   if (url.pathname === "/api/dashboard") {
     const payload = await readDashboardPayload(databasePath, url.searchParams);
-    sendJson(response, 200, payload, request.method === "HEAD");
+    await sendJson(request, response, 200, payload);
     return;
   }
   if (url.pathname === "/api/content-analytics") {
     const payload = await readContentPayload(databasePath, url.searchParams);
-    sendJson(response, 200, payload, request.method === "HEAD");
+    await sendJson(request, response, 200, payload);
+    return;
+  }
+  if (url.pathname === "/api/content-timelines") {
+    let reader: HotplateReadonlyStore | undefined;
+    try {
+      const query = parseContentParams(url.searchParams);
+      const projection = parseTimelineProjection(url.searchParams);
+      const opened = openHotplateReadStore({ databasePath });
+      if (opened.kind === "missing") await sendJson(request, response, 200, opened);
+      else {
+        reader = opened.store;
+        await sendJson(request, response, 200, { kind: "ready", databasePath, timelines: await reader.queryContentTimelines({ query, projection }) });
+      }
+    } catch (error) {
+      await sendJson(request, response, 200, { kind: "error", databasePath, message: error instanceof Error ? error.message : "Unknown content timeline error" });
+    } finally { await reader?.close(); }
     return;
   }
   if (url.pathname === "/health") {
-    sendJson(response, 200, { ok: true }, request.method === "HEAD");
+    await sendJson(request, response, 200, { ok: true });
+    return;
+  }
+  if (url.pathname === "/api/readiness") {
+    try {
+      assertHotplateReadiness(databasePath);
+      await sendJson(request, response, 200, { ok: true });
+    } catch (error) {
+      await sendJson(request, response, 503, { ok: false, message: error instanceof Error ? error.message : "Hotplate database is unreadable." });
+    }
     return;
   }
 
   sendText(response, 404, "Not found");
+}
+
+function parseTimelineProjection(params: URLSearchParams): ContentTimelineRequest["projection"] {
+  const rowKeys = params.getAll("rowKey"); const cohortKeys = params.getAll("cohortKey");
+  if (rowKeys.length < 1 || rowKeys.length > 24 || new Set(rowKeys).size !== rowKeys.length
+    || rowKeys.some(key => !key || key.length > 512)) throw new Error("Provide 1 to 24 unique rowKey values.");
+  if (cohortKeys.length > 6 || new Set(cohortKeys).size !== cohortKeys.length
+    || cohortKeys.some(key => !key || key.length > 512)) throw new Error("Provide at most 6 unique cohortKey values.");
+  return { rowKeys, cohortKeys };
 }
 
 async function readContentPayload(databasePath: string, params: URLSearchParams): Promise<
@@ -395,8 +433,29 @@ function setSecurityHeaders(response: ServerResponse): void {
   response.setHeader("cache-control", "no-store");
 }
 
-function sendJson(response: ServerResponse, statusCode: number, body: unknown, headOnly = false): void {
-  send(response, statusCode, JSON_HEADERS["content-type"], `${JSON.stringify(body)}\n`, headOnly);
+async function sendJson(request: IncomingMessage, response: ServerResponse, statusCode: number, body: unknown): Promise<void> {
+  const json = `${JSON.stringify(body)}\n`;
+  response.setHeader("vary", "Accept-Encoding");
+  if (Buffer.byteLength(json) >= 1024 && acceptsGzip(request.headers["accept-encoding"])) {
+    const compressed = await compressJson(json, { level: zlibConstants.Z_BEST_SPEED });
+    response.setHeader("content-encoding", "gzip");
+    send(response, statusCode, JSON_HEADERS["content-type"], compressed, request.method === "HEAD");
+  } else {
+    send(response, statusCode, JSON_HEADERS["content-type"], json, request.method === "HEAD");
+  }
+}
+
+function acceptsGzip(header: string | undefined): boolean {
+  let wildcard = false;
+  let gzipQuality: number | undefined;
+  for (const entry of header?.split(",") ?? []) {
+    const [encoding, ...parameters] = entry.trim().toLowerCase().split(";");
+    const quality = parameters.find(parameter => parameter.trim().startsWith("q="))?.trim().slice(2);
+    const weight = quality === undefined ? 1 : /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/u.test(quality) ? Number(quality) : 0;
+    if (encoding?.trim() === "gzip") gzipQuality = Math.max(gzipQuality ?? 0, weight);
+    else if (encoding?.trim() === "*") wildcard ||= weight > 0;
+  }
+  return gzipQuality === undefined ? wildcard : gzipQuality > 0;
 }
 
 function sendText(response: ServerResponse, statusCode: number, body: string): void {

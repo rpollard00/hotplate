@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { analyticsEvidenceTime } from "./analytics-time.js";
 import type { DashboardFilter, DashboardFilterOptions, Evidence, HostId, MachineId, ModelRef, Observation, SourceId } from "./domain.js";
 import type { ReadDelivery, ReadPortion, ResourceAccessEvidence, ToolCoverageEvidence, ToolReadMetadata } from "./resource-domain.js";
 
@@ -69,12 +70,18 @@ export type ContentToolCoverage = {
 };
 export type ContentSkillEvidence = Extract<Evidence, { kind: "read-result" | "read-attempt" | "skill-invocation" | "command-intent" | "wrapper-observed" }>;
 export type ContentFact<E extends ContentSkillEvidence | ResourceAccessEvidence | ToolCoverageEvidence = ContentSkillEvidence | ResourceAccessEvidence> =
-  Omit<Observation, "evidence"> & { machineId: MachineId; sourceId: SourceId | "local"; evidence: E };
+  Omit<Observation, "evidence"> & { machineId: MachineId; sourceId: SourceId | "local"; evidence: E; aggregate?: { count: number; lastObservedAt: string } };
 export type ContentInput = {
   skills: readonly ContentFact<ContentSkillEvidence>[];
   resources: () => Iterable<ContentFact<ResourceAccessEvidence>>;
+  resourceProjects?: readonly string[];
   coverage?: () => Iterable<ContentFact<ToolCoverageEvidence>>;
 };
+export type ContentTimelineRequest = { query: ContentQuery; projection: { rowKeys: readonly string[]; cohortKeys: readonly string[] } };
+export type ContentRowTimeline = { rowKey: string; cohortKey: string | null; count: number; datedCount: number; undatedCount: number; values: readonly number[] };
+export type ContentTimelines =
+  | { kind: "empty"; timezone: "UTC"; rows: readonly ContentRowTimeline[] }
+  | { kind: "bucketed"; timezone: "UTC"; startAt: string; endAt: string; binWidthMs: number; binCount: number; rows: readonly ContentRowTimeline[] };
 
 export function isContentMeasure(value: string): value is ContentMeasure {
   return Object.hasOwn(contentMeasures, value);
@@ -85,6 +92,14 @@ export function isResourceMeasure(value: ContentMeasure): value is ResourceMeasu
 }
 
 export function buildContentAnalytics(query: ContentQuery, input: ContentInput): ContentReport {
+  return buildContentData(query, input).report;
+}
+
+export function buildContentTimelines(request: ContentTimelineRequest, input: ContentInput): ContentTimelines {
+  return buildContentData(request.query, input, request.projection).timelines;
+}
+
+function buildContentData(query: ContentQuery, input: ContentInput, projection?: ContentTimelineRequest["projection"]): { report: ContentReport; timelines: ContentTimelines } {
   const legacy = new Map<string, ContentFact<ContentSkillEvidence>[]>();
   const resources = new Map<string, { count: number; fact: ContentFact<ResourceAccessEvidence> }>();
   const owners = new Map<string, Map<string, PhysicalLocation>>();
@@ -145,6 +160,7 @@ export function buildContentAnalytics(query: ContentQuery, input: ContentInput):
   };
   const filterOptions: DashboardFilterOptions = { hosts: [], machines: [], projects: [], agentModelPairs: [], modelProviders: [], modelIds: [], timeRange: { firstObservedAt: null, lastObservedAt: null } };
   const hosts = new Set<HostId>(); const machines = new Set<MachineId>(); const projects = new Set<string>();
+  for (const project of input.resourceProjects ?? []) projects.add(project);
   const pairs = new Map<string, { host: HostId; model: ModelRef }>();
   const providers = new Set<string>(); const models = new Set<string>();
   const { host: ignoredHost, modelSelection: ignoredSelection, modelProvider: ignoredProvider, modelId: ignoredModel, ...facetFilter } = query.filter;
@@ -156,14 +172,16 @@ export function buildContentAnalytics(query: ContentQuery, input: ContentInput):
       if (item.model) { providers.add(item.model.provider); models.add(item.model.id); }
       if (item.time !== null) {
         filterOptions.timeRange.firstObservedAt = earlier(filterOptions.timeRange.firstObservedAt, item.fact.observedAt);
-        filterOptions.timeRange.lastObservedAt = later(filterOptions.timeRange.lastObservedAt, item.fact.observedAt);
+        filterOptions.timeRange.lastObservedAt = later(filterOptions.timeRange.lastObservedAt, item.fact.aggregate?.lastObservedAt ?? item.fact.observedAt);
       }
     }
   }
   for (const item of events()) {
     if (query.measure !== "toolActivity" || targets(item, query.measure)) addFacet(item);
     if (!targets(item, query.measure) || !matches(item, query.filter) || item.time === null) continue;
-    first = Math.min(first ?? item.time, item.time); last = Math.max(last ?? item.time, item.time);
+    first = Math.min(first ?? item.time, item.time);
+    const lastTime = Date.parse(item.fact.aggregate?.lastObservedAt ?? item.fact.observedAt);
+    last = Math.max(last ?? lastTime, lastTime);
   }
   const coverage: ContentReport["coverage"] = {
     completeness: "unknown", overall: coverageStats(), displayed: coverageStats(), selection: coverageStats(),
@@ -185,6 +203,14 @@ export function buildContentAnalytics(query: ContentQuery, input: ContentInput):
   filterOptions.agentModelPairs = [...pairs].sort(([a], [b]) => a.localeCompare(b)).map(([, value]) => value);
   filterOptions.modelProviders = [...providers].sort(); filterOptions.modelIds = [...models].sort();
   const activity = activityFor(query.filter, first, last);
+  const timelineRows: (ContentRowTimeline & { values: number[] })[] = [];
+  const timelineLookup = new Map<string, (ContentRowTimeline & { values: number[] })[]>();
+  for (const rowKey of projection?.rowKeys ?? []) {
+    const rows = (projection?.cohortKeys.length ? projection.cohortKeys : [null]).map(cohortKey => ({
+      rowKey, cohortKey, count: 0, datedCount: 0, undatedCount: 0, values: Array<number>(activity.kind === "bucketed" ? activity.bins.length : 0).fill(0),
+    }));
+    timelineRows.push(...rows); timelineLookup.set(rowKey, rows);
+  }
   const bins = activity.kind === "empty" ? [] : activity.bins.map(bin => ({ ...bin, values: new Map<string, number>() }));
   const overall = stats(); const displayed = stats(); const selected = stats();
   const cohorts = new Map<string, { identity: ContentCohort; all: ContentStats; displayed: ContentStats; selected: ContentStats }>();
@@ -219,10 +245,26 @@ export function buildContentAnalytics(query: ContentQuery, input: ContentInput):
       add(displayed, item, query.measure); add(cohort.displayed, item, query.measure);
       if (activity.kind === "bucketed" && targets(item, query.measure)) {
         const bin = bins[Math.floor((item.time - Date.parse(activity.startAt)) / activity.binWidthMs)];
-        if (bin) { bin.count += 1; bin.values.set(cohortIdentity.key, (bin.values.get(cohortIdentity.key) ?? 0) + 1); }
+        const count = item.fact.aggregate?.count ?? 1;
+        if (bin) { bin.count += count; bin.values.set(cohortIdentity.key, (bin.values.get(cohortIdentity.key) ?? 0) + count); }
       }
     }
     if (!selectedTime(item.time, query.selection)) continue;
+    if (targets(item, query.measure)) for (const key of parentKey === null ? [rowKey] : [rowKey, parentKey]) {
+      for (const timeline of timelineLookup.get(key) ?? []) {
+        if (timeline.cohortKey !== null && timeline.cohortKey !== cohortIdentity.key) continue;
+        const count = item.fact.aggregate?.count ?? 1;
+        timeline.count += count;
+        if (item.time === null) timeline.undatedCount += count;
+        else {
+          timeline.datedCount += count;
+          if (activity.kind === "bucketed") {
+            const index = Math.floor((item.time - Date.parse(activity.startAt)) / activity.binWidthMs);
+            if (index >= 0 && index < timeline.values.length) timeline.values[index] = (timeline.values[index] ?? 0) + count;
+          }
+        }
+      }
+    }
     add(selected, item, query.measure); add(cohort.selected, item, query.measure);
     let row = rows.get(rowKey);
     if (!row) { row = { ...stats(), key: rowKey, identity, label, parentKey, cells: new Map(), readDetails: readDetails() }; rows.set(rowKey, row); }
@@ -262,12 +304,15 @@ export function buildContentAnalytics(query: ContentQuery, input: ContentInput):
     finalized.push({ ...totals, key, label: owner.label, identity: owner.identity, readDetails: readDetails(),
       cells: [...cells.values()].sort((a, b) => (orderedKeys.get(a.key) ?? 0) - (orderedKeys.get(b.key) ?? 0)), children: descendants.sort(compareRows) });
   }
-  return {
+  const report: ContentReport = {
     query, filterOptions, overall, coverage,
     displayed: { ...displayed, series: ordered.map(cohort => ({ ...cohort.identity, ...cohort.displayed })),
       activity: activity.kind === "empty" ? activity : { ...activity, bins: bins.map(bin => ({ ...bin, values: [...bin.values].map(([key, count]) => ({ key, count })) })) } },
     selection: { ...selected, interval: query.selection, series: ordered.map(cohort => ({ ...cohort.identity, ...cohort.selected })), rows: finalized.sort(compareRows) },
   };
+  return { report, timelines: activity.kind === "empty" ? { kind: "empty", timezone: "UTC", rows: timelineRows }
+    : { kind: "bucketed", timezone: "UTC", startAt: activity.startAt, endAt: activity.endAt,
+      binWidthMs: activity.binWidthMs, binCount: activity.bins.length, rows: timelineRows } };
 }
 
 type ScopedEvent = { fact: ContentFact<ContentSkillEvidence | ResourceAccessEvidence | ToolCoverageEvidence>; host: HostId; model: ModelRef;
@@ -281,9 +326,9 @@ function event(fact: ContentFact, resource: ResourceAccessEvidence | null): Even
   const model = attributed ? evidence.model : null;
   const host = fact.host ?? "unknown";
   const attribution = resource?.attribution ?? (attributed ? fact.scope.sessionId === null ? "harness" : "session" : "none");
-  const time = Date.parse(fact.observedAt);
+  const time = analyticsEvidenceTime(fact.observedAt);
   return { fact, resource, category: categoryOf(evidence), host, model, modelAttribution: attributed ? model === null ? "unknown" : "known" : "none",
-    attribution, actor: attribution === "non-agent" ? "non-agent" : host === "unknown" ? "unknown" : "agent", time: Number.isFinite(time) ? time : null };
+    attribution, actor: attribution === "non-agent" ? "non-agent" : host === "unknown" ? "unknown" : "agent", time };
 }
 
 function categoryOf(evidence: ContentFact["evidence"]): EvidenceCategory {
@@ -381,13 +426,16 @@ function targets(item: Event, measure: ContentMeasure): boolean {
     && item.category !== "fsOpens" && item.category !== "fsAccesses" && item.category !== "requests" && item.category !== "wrappers";
 }
 function add(tally: ContentStats, item: Event, measure: ContentMeasure): void {
-  tally.counts[item.category] += 1;
+  const count = item.fact.aggregate?.count ?? 1;
+  tally.counts[item.category] += count;
   if (!targets(item, measure)) return;
-  tally.count += 1; tally.attributionCounts[item.attribution] += 1;
-  if (item.time === null) { tally.undatedCount += 1; return; }
-  tally.datedCount += 1;
+  tally.count += count; tally.attributionCounts[item.attribution] += count;
+  if (item.time === null) { tally.undatedCount += count; return; }
+  tally.datedCount += count;
   const timestamp = new Date(item.time).toISOString();
-  tally.firstEvidenceAt = earlier(tally.firstEvidenceAt, timestamp); tally.lastEvidenceAt = later(tally.lastEvidenceAt, timestamp);
+  tally.firstEvidenceAt = earlier(tally.firstEvidenceAt, timestamp);
+  const lastTime = analyticsEvidenceTime(item.fact.aggregate?.lastObservedAt ?? item.fact.observedAt);
+  tally.lastEvidenceAt = later(tally.lastEvidenceAt, lastTime === null ? timestamp : new Date(lastTime).toISOString());
 }
 function merge(tally: ContentStats, other: ContentStats): void {
   tally.count += other.count; tally.datedCount += other.datedCount; tally.undatedCount += other.undatedCount;
@@ -407,10 +455,10 @@ function selectedTime(time: number | null, selection: ContentInterval): boolean 
 }
 
 function coverageEvent(fact: ContentFact<ToolCoverageEvidence>): ScopedEvent {
-  const time = Date.parse(fact.observedAt);
+  const time = analyticsEvidenceTime(fact.observedAt);
   const host = fact.host ?? "unknown";
   return { fact, host, model: fact.evidence.model, modelAttribution: fact.evidence.model === null ? "unknown" : "known",
-    attribution: fact.scope.sessionId === null ? "harness" : "session", actor: host === "unknown" ? "unknown" : "agent", time: Number.isFinite(time) ? time : null };
+    attribution: fact.scope.sessionId === null ? "harness" : "session", actor: host === "unknown" ? "unknown" : "agent", time };
 }
 
 function coverageStats(): ContentToolCoverage {
@@ -451,8 +499,8 @@ function readGroupKey(group: ContentReadGroup): string {
 }
 
 function activityFor(filter: DashboardFilter, first: number | undefined, last: number | undefined): ContentActivity {
-  first = filter.fromObservedAt === undefined ? first : Date.parse(filter.fromObservedAt);
-  last = filter.toObservedAt === undefined ? last : Date.parse(filter.toObservedAt);
+  first = filter.fromObservedAt === undefined ? first : analyticsEvidenceTime(filter.fromObservedAt) ?? undefined;
+  last = filter.toObservedAt === undefined ? last : analyticsEvidenceTime(filter.toObservedAt) ?? undefined;
   if (first === undefined || last === undefined || first > last) return { kind: "empty", timezone: "UTC" };
   const hour = 3_600_000; const day = 24 * hour;
   const step = last - first <= 7 * day ? hour : day;

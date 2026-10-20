@@ -11,6 +11,7 @@ import { captureFact, type CaptureFact } from "../src/capture.js";
 import { encodeEnvelope, parseEnvelope } from "../src/network-protocol.js";
 import { parseCollectorOrigin, parseMachineId, parseObservation, parseSourceId, serializeObservation } from "../src/observation.js";
 import { openAggregateStore, openCaptureStore, openHotplateReadStore, openHotplateStore, openRelayStore } from "../src/store.js";
+import { removeAnalyticsProjectionSchema } from "./fixtures/legacy-database.js";
 
 const sourceId = parseSourceId("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
 const machineId = parseMachineId("machine-a");
@@ -82,6 +83,7 @@ test("schema six migration preserves historical payloads, native receipts, outbo
     assert.deepEqual(await store.record(old), { accepted: 1, duplicate: 0, dropped: 0 });
     await store.close();
     const original = new DatabaseSync(databasePath);
+    removeAnalyticsProjectionSchema(original);
     const saved = original.prepare("SELECT payload FROM resource_events").get()?.payload;
     const outbox = original.prepare("SELECT payload FROM delivery_outbox").get()?.payload;
     original.exec("INSERT INTO native_receipts VALUES ('native:old-receipt', 'preserve-digest')");
@@ -101,7 +103,7 @@ test("schema six migration preserves historical payloads, native receipts, outbo
     assert.equal((await upgraded.queryResources({})).rows[0]?.successfulReadCount, 1);
     await upgraded.close();
     const db = new DatabaseSync(databasePath);
-    assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 7);
+    assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 8);
     assert.equal(db.prepare("SELECT payload FROM resource_events WHERE observation_id='legacy-resource'").get()?.payload, saved);
     assert.equal(db.prepare("SELECT payload FROM delivery_outbox").get()?.payload, outbox);
     assert.equal(db.prepare("SELECT digest FROM native_receipts WHERE id='native:old-receipt'").get()?.digest, "preserve-digest");

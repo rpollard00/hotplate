@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { encodeEnvelope, parseEnvelope } from "../src/network-protocol.js";
 import { parseSourceId, serializeObservation } from "../src/observation.js";
 import type { Observation } from "../src/domain.js";
+import { removeAnalyticsProjectionSchema } from "./fixtures/legacy-database.js";
 
 const legacy: Observation = { id: "id", producerId: "producer", sequence: 0, observedAt: "2026-01-01T00:00:00.000Z", scope: { projectCwd: "/project", sessionId: null, sessionFile: null, segmentId: "segment", segmentReason: "unknown", runId: null, turnId: null, leafId: null }, evidence: { kind: "command-intent", skillName: "test", source: "interactive" } };
 const sourceId = parseSourceId("11111111-1111-4111-8111-111111111111");
@@ -36,6 +37,7 @@ test("schema v3 upgrade preserves legacy payload bytes and accepts mixed outbox 
     await original.record(legacy);
     await original.close();
     const old = new DatabaseSync(databasePath);
+    removeAnalyticsProjectionSchema(old);
     const payload = old.prepare("SELECT payload FROM delivery_outbox").get()?.payload;
     old.exec("DROP TABLE resource_events; DROP TABLE resource_locations; DROP INDEX observations_scope_idx; DROP INDEX observations_skill_idx; DROP INDEX observations_model_idx; ALTER TABLE observations DROP COLUMN host");
     old.exec("ALTER TABLE catalog_skills RENAME TO catalog_new");

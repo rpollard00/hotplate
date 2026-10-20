@@ -4,13 +4,15 @@ import type { DatabaseSync } from "node:sqlite";
 import type { DashboardFilter, MachineId, Observation, SourceId } from "./domain.js";
 import { isResourceEvidence, parseMachineId, parseObservation, parseSourceId, serializeObservation } from "./observation.js";
 import type { InventorySnapshotEvidence, ObserverCoverageEvidence, ResourceCoverageRow, ResourceCoverageView, ResourceEvidence, ResourceLocation, ResourceRow, ResourceView } from "./resource-domain.js";
+import { readResourceAccessFacts, recordAnalyticsFact } from "./analytics-read-model.js";
+import { readInventoryScanFacts, readInventoryLocationHistory, readInventoryCompletionPaths } from "./inventory-read-model.js";
 
 type StoredSource = { machineId: MachineId; sourceId: SourceId | "local" };
 type ResourceObservation = Observation & { evidence: ResourceEvidence };
-type StoredEvent = { source: StoredSource; observation: ResourceObservation };
+type StoredEvent = { source: StoredSource; observation: ResourceObservation; count?: number; digest?: string | null };
 type ResourceState = {
   row: ResourceRow;
-  latestLocationAt: string;
+  latestLocationOrder: Pick<Observation, "observedAt" | "producerId" | "sequence" | "id">;
   roots: Map<string, { firstSeen: string | null; lastSeen: string | null }>;
 };
 type Scan = {
@@ -18,7 +20,7 @@ type Scan = {
   identity: InventorySnapshotEvidence;
   startedAt: string | null;
   firstObservedAt: string;
-  batches: Map<number, { resources: readonly ResourceLocation[]; observedAt: string }>;
+  batches: Map<number, { digest: string | null }>;
   complete: { batchCount: number; observedAt: string } | null;
   invalid: boolean;
 };
@@ -61,17 +63,25 @@ export function recordResourceObservation(db: DatabaseSync, source: StoredSource
   }
   db.prepare("INSERT INTO resource_events (machine_id, source_id, observation_id, payload) VALUES (?, ?, ?, ?)")
     .run(source.machineId, source.sourceId, observation.id, serializeObservation(observation));
+  recordAnalyticsFact(db, source, observation);
 }
 
 export function queryResources(db: DatabaseSync, filter: DashboardFilter): ResourceView {
   if (filter.source !== undefined) return { rows: [] };
   const resources = new Map<string, ResourceState>();
   const scans = new Map<string, Scan>();
-  for (const { source, observation } of readEvents(db, filter, "exclude-coverage")) {
+  for (const history of readInventoryLocationHistory(db, filter)) {
+    const order = { observedAt: history.lastAt, producerId: history.producerId, sequence: history.sequence, id: history.observationId };
+    const state = resourceState(resources, { machineId: history.machineId, sourceId: history.sourceId }, history.resource, history.lastAt, order);
+    const root = state.roots.get(history.resource.rootPath);
+    if (root) { root.firstSeen = earliest(root.firstSeen, history.firstAt); root.lastSeen = latest(root.lastSeen, history.lastAt); }
+    state.row.firstInventoriedAt = earliest(state.row.firstInventoriedAt, history.firstAt);
+    state.row.lastInventoriedAt = latest(state.row.lastInventoriedAt, history.lastAt);
+  }
+  for (const { source, observation, count = 1, digest = null } of readResourceEvents(db, filter)) {
     const evidence = observation.evidence;
     if (evidence.kind === "observer-coverage" || evidence.kind === "tool-coverage") continue;
     if (evidence.kind === "inventory-snapshot") {
-      if (!scopeMatches(observation, filter)) continue;
       const key = JSON.stringify([source.machineId, source.sourceId, evidence.filesystemId, evidence.rootPath, evidence.scanId]);
       let scan = scans.get(key);
       if (!scan) {
@@ -83,18 +93,8 @@ export function queryResources(db: DatabaseSync, filter: DashboardFilter): Resou
         case "started": scan.startedAt = earliest(scan.startedAt, observation.observedAt); break;
         case "batch": {
           const previous = scan.batches.get(evidence.batchIndex);
-          if (previous && JSON.stringify(previous.resources) !== JSON.stringify(evidence.resources)) scan.invalid = true;
-          scan.batches.set(evidence.batchIndex, { resources: evidence.resources, observedAt: observation.observedAt });
-          for (const location of evidence.resources) {
-            const resource = resourceState(resources, source, location, observation.observedAt);
-            const root = resource.roots.get(location.rootPath);
-            if (root) {
-              root.firstSeen = earliest(root.firstSeen, observation.observedAt);
-              root.lastSeen = latest(root.lastSeen, observation.observedAt);
-            }
-            resource.row.firstInventoriedAt = earliest(resource.row.firstInventoriedAt, observation.observedAt);
-            resource.row.lastInventoriedAt = latest(resource.row.lastInventoriedAt, observation.observedAt);
-          }
+          if (previous && previous.digest !== digest) scan.invalid = true;
+          scan.batches.set(evidence.batchIndex, { digest });
           break;
         }
         case "complete":
@@ -108,22 +108,22 @@ export function queryResources(db: DatabaseSync, filter: DashboardFilter): Resou
     }
     const scope = accessScope(observation, filter);
     if (scope === "excluded" || (scope === "ambiguous" && evidence.attribution === "non-agent")) continue;
-    const state = resourceState(resources, source, evidence.resource, observation.observedAt);
+    const state = resourceState(resources, source, evidence.resource, observation.observedAt, observation);
     if (filter.fromObservedAt !== undefined && observation.observedAt < filter.fromObservedAt) continue;
     const row = state.row;
-    if (scope === "ambiguous") { row.unattributedAccessCount += 1; continue; }
+    if (scope === "ambiguous") { row.unattributedAccessCount += count; continue; }
     row.lastAccessAt = latest(row.lastAccessAt, observation.observedAt);
-    if (evidence.access === "attempt") row.attemptCount += 1;
-    else if (evidence.access === "read" && evidence.outcome === "success") row.successfulReadCount += 1;
-    else if (evidence.access === "inferred-read") row.inferredReadCount += 1;
-    else if (evidence.access === "read" && evidence.outcome === "error") row.failedReadCount += 1;
-    else if (evidence.access === "open") row.openCount += 1;
-    else if (evidence.access === "access") row.accessCount += 1;
-    if (evidence.attribution === "session" || evidence.attribution === "harness") row.attributedAccessCount += 1;
-    else if (evidence.attribution === "non-agent") row.nonAgentAccessCount += 1;
-    else row.unattributedAccessCount += 1;
+    if (evidence.access === "attempt") row.attemptCount += count;
+    else if (evidence.access === "read" && evidence.outcome === "success") row.successfulReadCount += count;
+    else if (evidence.access === "inferred-read") row.inferredReadCount += count;
+    else if (evidence.access === "read" && evidence.outcome === "error") row.failedReadCount += count;
+    else if (evidence.access === "open") row.openCount += count;
+    else if (evidence.access === "access") row.accessCount += count;
+    if (evidence.attribution === "session" || evidence.attribution === "harness") row.attributedAccessCount += count;
+    else if (evidence.attribution === "non-agent") row.nonAgentAccessCount += count;
+    else row.unattributedAccessCount += count;
   }
-  const inventory = inventoryState(scans);
+  const inventory = inventoryState(scans, scan => readInventoryCompletionPaths(db, scan, filter));
   let coverageByRoot: Map<string, RootCoverage> | undefined;
   const combinedCoverage = new Map<string, RootCoverage>();
   const to = filter.toObservedAt === undefined ? Date.now() : Date.parse(filter.toObservedAt);
@@ -199,8 +199,31 @@ export function queryResourceCoverage(db: DatabaseSync, filter: DashboardFilter)
   return { rows: [...rows.values()].sort((a, b) => a.rootPath.localeCompare(b.rootPath) || a.observerId.localeCompare(b.observerId)) };
 }
 
-function* readEvents(db: DatabaseSync, filter: DashboardFilter, selection: "exclude-coverage" | "coverage-history" | "latest-coverage"): Generator<StoredEvent> {
-  const clauses = [selection === "exclude-coverage" ? "o.evidence_kind IN ('resource-access', 'inventory-snapshot')" : "o.evidence_kind = 'observer-coverage'"];
+function* readResourceEvents(db: DatabaseSync, filter: DashboardFilter): Generator<StoredEvent> {
+  const inventory = readInventoryScanFacts(db, filter);
+  const access = readResourceAccessFacts(db, filter, { kind: "resources" });
+  let nextInventory = inventory.next();
+  let nextAccess = access.next();
+  while (!nextInventory.done || !nextAccess.done) {
+    if (!nextAccess.done && (nextInventory.done || compareObservations(nextAccess.value, nextInventory.value.observation) < 0)) {
+      const fact = nextAccess.value;
+      yield { source: { machineId: fact.machineId, sourceId: fact.sourceId }, observation: fact, count: fact.aggregate?.count ?? 1 };
+      nextAccess = access.next();
+    } else if (!nextInventory.done) {
+      yield nextInventory.value;
+      nextInventory = inventory.next();
+    }
+  }
+}
+
+function compareObservations(left: Pick<Observation, "observedAt" | "producerId" | "sequence" | "id">, right: Pick<Observation, "observedAt" | "producerId" | "sequence" | "id">): number {
+  const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
+  return compare(left.observedAt, right.observedAt) || compare(left.producerId, right.producerId)
+    || left.sequence - right.sequence || compare(left.id, right.id);
+}
+
+function* readEvents(db: DatabaseSync, filter: DashboardFilter, selection: "coverage-history" | "latest-coverage"): Generator<StoredEvent> {
+  const clauses = ["o.evidence_kind = 'observer-coverage'"];
   const values: (string | number)[] = [];
   if (filter.machineId !== undefined) { clauses.push("e.machine_id = ?"); values.push(filter.machineId); }
   if (filter.toObservedAt !== undefined && selection !== "coverage-history") {
@@ -212,10 +235,10 @@ function* readEvents(db: DatabaseSync, filter: DashboardFilter, selection: "excl
   const query = selection === "latest-coverage" ? `WITH ranked AS (
       SELECT e.machine_id, e.source_id, e.observation_id,
         ROW_NUMBER() OVER (PARTITION BY e.machine_id, e.source_id,
-          json_extract(e.payload, '$.evidence.filesystemId'), json_extract(e.payload, '$.evidence.observerId'),
-          json_extract(e.payload, '$.evidence.mechanism'), json_extract(e.payload, '$.evidence.rootPaths')
+          c.filesystem_id, c.observer_id, c.mechanism, c.root_set
           ORDER BY o.observed_at DESC, o.producer_id DESC, o.sequence DESC, o.id DESC) AS position
-      ${join} WHERE ${clauses.join(" AND ")}
+      ${join} JOIN observer_coverage_facts c ON c.machine_id = e.machine_id AND c.source_id = e.source_id AND c.observation_id = e.observation_id
+      WHERE ${clauses.join(" AND ")}
     ) SELECT e.machine_id, e.source_id, e.payload ${join}
       JOIN ranked r ON r.machine_id = e.machine_id AND r.source_id = e.source_id AND r.observation_id = e.observation_id
       WHERE r.position = 1 ORDER BY ${order}`
@@ -232,19 +255,6 @@ function* readEvents(db: DatabaseSync, filter: DashboardFilter, selection: "excl
   }
 }
 
-function scopeMatches(observation: ResourceObservation, filter: DashboardFilter): boolean {
-  const evidence = observation.evidence;
-  if (evidence.kind === "inventory-snapshot") {
-    if (evidence.scope === "unassigned" && [filter.host, filter.projectCwd, filter.sessionId, filter.runId, filter.modelId, filter.modelProvider].some(value => value !== undefined)) return false;
-    if (evidence.scope !== "account" && filter.sessionId !== undefined && observation.scope.sessionId !== filter.sessionId) return false;
-    if (evidence.scope !== "account" && filter.runId !== undefined && observation.scope.runId !== filter.runId) return false;
-  }
-  if (filter.host !== undefined && observation.host !== undefined && observation.host !== "unknown" && observation.host !== filter.host) return false;
-  if (filter.projectCwd !== undefined && observation.scope.projectCwd !== filter.projectCwd
-    && !(evidence.kind === "inventory-snapshot" && evidence.scope === "account")) return false;
-  if (filter.runId !== undefined && observation.scope.runId !== filter.runId && evidence.kind === "resource-access") return false;
-  return true;
-}
 
 function accessScope(observation: ResourceObservation, filter: DashboardFilter): "exact" | "ambiguous" | "excluded" {
   const evidence = observation.evidence;
@@ -269,24 +279,25 @@ function accessScope(observation: ResourceObservation, filter: DashboardFilter):
   return ambiguous ? "ambiguous" : "exact";
 }
 
-function resourceState(resources: Map<string, ResourceState>, source: StoredSource, resource: ResourceLocation, observedAt: string): ResourceState {
+function resourceState(resources: Map<string, ResourceState>, source: StoredSource, resource: ResourceLocation, observedAt: string, order: Pick<Observation, "observedAt" | "producerId" | "sequence" | "id">): ResourceState {
   const id = createHash("sha256").update(JSON.stringify([source.machineId, source.sourceId, resource.filesystemId, resource.canonicalPath])).digest("hex");
   let state = resources.get(id);
   if (!state) {
-    state = { latestLocationAt: observedAt, roots: new Map(), row: {
+    state = { latestLocationOrder: order, roots: new Map(), row: {
       resourceId: id, ...source, resource, rootPaths: [], presence: "unknown", firstInventoriedAt: null, lastInventoriedAt: null,
       lastAccessAt: null, attemptCount: 0, successfulReadCount: 0, inferredReadCount: 0, failedReadCount: 0, openCount: 0, accessCount: 0,
       attributedAccessCount: 0, unattributedAccessCount: 0, nonAgentAccessCount: 0, observation: "unknown", coverageFrom: null, coverageTo: null,
     } };
     resources.set(id, state);
   }
-  if (observedAt >= state.latestLocationAt) { state.row.resource = resource; state.latestLocationAt = observedAt; }
+  if (compareObservations(order, state.latestLocationOrder) >= 0) { state.row.resource = resource; state.latestLocationOrder = order; }
   if (!state.roots.has(resource.rootPath)) state.roots.set(resource.rootPath, { firstSeen: null, lastSeen: null });
   return state;
 }
 
-function inventoryState(scans: Map<string, Scan>): { completions: Map<string, InventoryCompletion>; uncertainty: Map<string, string> } {
+function inventoryState(scans: Map<string, Scan>, paths: (scan: Scan) => readonly string[]): { completions: Map<string, InventoryCompletion>; uncertainty: Map<string, string> } {
   const result = new Map<string, InventoryCompletion>();
+  const selected = new Map<string, Scan>();
   const uncertainty = new Map<string, string>();
   for (const scan of scans.values()) {
     const complete = scan.complete;
@@ -302,8 +313,10 @@ function inventoryState(scans: Map<string, Scan>): { completions: Map<string, In
     }
     const previous = result.get(key);
     if (previous && previous.observedAt >= complete.observedAt) continue;
-    result.set(key, { observedAt: complete.observedAt, paths: new Set([...scan.batches.values()].flatMap(batch => batch.resources.map(resource => resource.canonicalPath))) });
+    result.set(key, { observedAt: complete.observedAt, paths: new Set() });
+    selected.set(key, scan);
   }
+  for (const [key, scan] of selected) { const completion = result.get(key); if (completion) completion.paths = new Set(paths(scan)); }
   return { completions: result, uncertainty };
 }
 

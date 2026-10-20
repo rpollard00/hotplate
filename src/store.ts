@@ -11,7 +11,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import { DatabaseSync } from "node:sqlite";
 import { createResourceSchema, recordResourceObservation, queryResources, queryResourceCoverage } from "./resource-store.js";
 import type { ResourceView, ResourceCoverageView, ToolCoverageEvidence } from "./resource-domain.js";
-import { buildContentAnalytics, type ContentFact, type ContentQuery, type ContentReport, type ContentSkillEvidence } from "./content-analytics.js";
+import { buildContentAnalytics, buildContentTimelines, type ContentInput, type ContentFact, type ContentQuery, type ContentReport, type ContentSkillEvidence, type ContentTimelineRequest, type ContentTimelines } from "./content-analytics.js";
+import { createAnalyticsReadModel, readResourceAccessFacts, readResourceProjectFacets } from "./analytics-read-model.js";
 import type {
   HostId,
   CaptureEnrollment,
@@ -41,7 +42,7 @@ import type {
   SkillTableView,
 } from "./domain.js";
 
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
 export const MAX_DYNAMIC_SOURCES = 10_000;
 export const ENROLLMENTS_PER_MINUTE = 30;
 const DEFAULT_BUSY_TIMEOUT_MS = 25;
@@ -124,6 +125,20 @@ export function openHotplateReadStore(options: Pick<OpenHotplateStoreOptions, "d
 
   const store = new SqliteHotplateStore({ db, databasePath, readOnly: true, busyRetries: 0 });
   return { kind: "ready", databasePath, store };
+}
+
+export function assertHotplateReadiness(databasePath: string): void {
+  if (!existsSync(databasePath)) throw new Error("Hotplate database is missing. Start capture or restore the configured database.");
+  const db = new DatabaseSync(databasePath, { readOnly: true, timeout: DEFAULT_BUSY_TIMEOUT_MS, allowExtension: false });
+  try {
+    db.exec("BEGIN");
+    assertReadableSchema(db);
+    const state = db.prepare("SELECT kind FROM database_state WHERE singleton = 1").get();
+    if (state?.kind !== "local" && state?.kind !== "aggregate") throw new Error("Hotplate database has no valid installation state.");
+    db.prepare("SELECT id FROM observations ORDER BY machine_id, source_id, id LIMIT 1").get();
+  } finally {
+    db.close();
+  }
 }
 
 class SqliteHotplateStore implements HotplateStore {
@@ -483,6 +498,14 @@ class SqliteHotplateStore implements HotplateStore {
   }
 
   async queryContentAnalytics(query: ContentQuery): Promise<ContentReport> {
+    return this.#readContent(query, input => buildContentAnalytics(query, input));
+  }
+
+  async queryContentTimelines(request: ContentTimelineRequest): Promise<ContentTimelines> {
+    return this.#readContent(request.query, input => buildContentTimelines(request, input));
+  }
+
+  #readContent<T>(query: ContentQuery, build: (input: ContentInput) => T): T {
     assertOpen(this.#closed);
     const db = this.#db;
     const clauses: string[] = [];
@@ -498,17 +521,8 @@ class SqliteHotplateStore implements HotplateStore {
       const skills: ContentFact<ContentSkillEvidence>[] = query.content === "resources" ? [] : db.prepare(`SELECT o.* FROM observations o
         WHERE o.evidence_kind IN ('read-result', 'read-attempt', 'skill-invocation', 'command-intent', 'wrapper-observed')${where}`)
         .all(...values).map(contentSkillFact);
-      const statement = db.prepare(`SELECT e.machine_id, e.source_id, e.payload FROM observations o JOIN resource_events e
-        ON e.machine_id = o.machine_id AND e.source_id = o.source_id AND e.observation_id = o.id
-        WHERE o.evidence_kind = 'resource-access'${where}`);
-      const resources = function* () {
-        if (filter.source !== undefined) return;
-        for (const row of statement.iterate(...values)) {
-          const observation = parseObservation(JSON.parse(requireString(row.payload, "resource payload")));
-          if (observation.evidence.kind !== "resource-access") throw new Error("Invalid stored resource access");
-          yield { ...observation, evidence: observation.evidence, machineId: parseMachineId(row.machine_id), sourceId: row.source_id === "local" ? "local" : parseSourceId(row.source_id) } satisfies ContentFact;
-        }
-      };
+      const resourceFacts = filter.source === undefined ? [...readResourceAccessFacts(db, filter, { kind: "content", selection: query.selection, measure: query.measure })] : [];
+      const resources = () => resourceFacts;
       const coverageStatement = db.prepare(`SELECT e.machine_id, e.source_id, e.payload FROM observations o JOIN resource_events e
         ON e.machine_id = o.machine_id AND e.source_id = o.source_id AND e.observation_id = o.id
         WHERE o.evidence_kind = 'tool-coverage'${where}`);
@@ -520,7 +534,8 @@ class SqliteHotplateStore implements HotplateStore {
           yield { ...observation, evidence: observation.evidence, machineId: parseMachineId(row.machine_id), sourceId: row.source_id === "local" ? "local" : parseSourceId(row.source_id) };
         }
       };
-      const result = buildContentAnalytics(query, { skills, resources, coverage });
+      const resourceProjects = filter.source === undefined && query.measure !== "toolActivity" ? readResourceProjectFacets(db, filter) : [];
+      const result = build({ skills, resources, resourceProjects, coverage });
       if (!this.#readOnly) db.exec("COMMIT");
       return result;
     } catch (error) {
@@ -1096,6 +1111,7 @@ function migrate(db: DatabaseSync, busyRetries: number): void {
     }
     db.exec(`CREATE INDEX IF NOT EXISTS observations_sequence_lookup_idx ON observations(machine_id, source_id, producer_id, sequence);
       CREATE INDEX IF NOT EXISTS observations_evidence_time_idx ON observations(evidence_kind, observed_at);`);
+    createAnalyticsReadModel(db);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}; COMMIT;`);
   } catch (error) {
     rollbackBestEffort(db);

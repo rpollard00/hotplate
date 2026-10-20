@@ -9,6 +9,7 @@ import type { Observation } from "../src/domain.js";
 import { ingestTokenDigest } from "../src/network-protocol.js";
 import { parseCollectorOrigin, parseMachineId, parseSourceId } from "../src/observation.js";
 import { openAggregateStore, openCaptureStore, openHotplateReadStore, openRelayStore } from "../src/store.js";
+import { removeAnalyticsProjectionSchema } from "./fixtures/legacy-database.js";
 
 const source = { machineId: parseMachineId("machine-a"), sourceId: parseSourceId("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa") };
 const enrollment = { sourceId: source.sourceId, collectorOrigin: parseCollectorOrigin("https://hotplate.lan") };
@@ -53,6 +54,7 @@ async function populatedV5(databasePath: string): Promise<void> {
   } finally { await capture.close(); }
   const db = new DatabaseSync(databasePath);
   try {
+    removeAnalyticsProjectionSchema(db);
     const schema = String(db.prepare("SELECT sql FROM sqlite_master WHERE name = 'observations'").get()?.sql);
     const indexes = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'observations' AND sql IS NOT NULL").all();
     db.exec("PRAGMA foreign_keys = OFF");
@@ -142,11 +144,12 @@ test("populated v5 upgrades preserve resource tables, enrollment, outbox and rec
   const tables = db.prepare("SELECT name, rootpage, sql FROM sqlite_master WHERE type = 'table' ORDER BY name").all();
   const capture = openCaptureStore({ databasePath, enrollment });
   await capture.close();
-  assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 7);
+  assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 8);
   assert.deepEqual(storedState(db), before);
   const upgradedTables = db.prepare("SELECT name, rootpage, sql FROM sqlite_master WHERE type = 'table' ORDER BY name").all();
-  assert.deepEqual(upgradedTables.map(table => table.name), tables.map(table => table.name));
-  const unchanged = (table: (typeof tables)[number]) => table.name !== "observations" && table.name !== "resource_events";
+  const originalNames = new Set(tables.map(table => table.name));
+  assert.ok(tables.every(table => upgradedTables.some(upgraded => upgraded.name === table.name)));
+  const unchanged = (table: (typeof tables)[number]) => originalNames.has(table.name) && table.name !== "observations" && table.name !== "resource_events";
   assert.deepEqual(upgradedTables.filter(unchanged), tables.filter(unchanged));
   assert.match(String(upgradedTables.find(table => table.name === "observations")?.sql), /'tool-coverage'/u);
   assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
@@ -203,7 +206,7 @@ test("v5 migration rolls back both new indexes when the second index cannot be c
   db.exec("DROP TABLE observations_evidence_time_idx");
   const capture = openCaptureStore({ databasePath, enrollment });
   await capture.close();
-  assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 7);
+  assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 8);
   assert.deepEqual(storedState(db), before);
 });
 
@@ -222,7 +225,7 @@ test("concurrent writers upgrade populated v5 once", async t => {
   for (const result of results) assert.equal(result.code, 0, result.stderr);
   const db = new DatabaseSync(databasePath, { readOnly: true });
   try {
-    assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 7);
+    assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 8);
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM resource_events").get()?.n, 1);
     assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
   } finally { db.close(); }

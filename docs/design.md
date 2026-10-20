@@ -115,6 +115,32 @@ Displayed trends use a separate top-count or ordered, unique custom-name selecti
 
 Overview exploration derives read-bearing path selections and comparisons from the current filtered report in browser memory. It does not persist the selection or request new data. A chosen skill and UTC interval select complete run paths; linked model counts include only matching successful reads, and model path navigation requires a matching read by that model. Comparison shares count each read-bearing path once per skill. A prior interval outside the loaded scope is unavailable, not a recorded zero.
 
+## Indexed analytics
+
+Schema version 8 adds an analytics read model without changing the observation protocol or deleting raw evidence.
+`src/analytics-read-model.ts` owns indexed access facts, filesystem activity buckets, and observer coverage identities.
+`src/inventory-read-model.ts` owns compact inventory scans and location history.
+Migration backfills these projections once. New observations update them in the same capture or aggregate transaction.
+Duplicate delivery changes no projection. A conflict rolls back observations, projections, receipts, and outbox changes together.
+HTTP readers do not migrate or backfill the database.
+
+Content queries reuse one materialized input across their ownership, facet, and count passes.
+Repeated filesystem events contribute weighted counts instead of repeated JSON decoding.
+Partial UTC hours use raw facts to preserve exact date boundaries and ambiguous resource scope.
+Each affected hour expands once, so overlapping scope groups cannot count a raw event twice.
+Inventory selectors retain first and last evidence, completed membership, member order, and incomplete-scan uncertainty.
+Historical coverage can still use a later heartbeat to confirm an earlier interval.
+
+Skills projects visible mini timelines from its existing report. Resources and Both request visible row and cohort projections from `/api/content-timelines`.
+The endpoint accepts at most 24 row keys and six cohort keys. Timelines use at most 256 UTC bins. A rolling week can contain 169 hourly bins.
+The displayed axis stays fixed during local selection. Undated evidence contributes to counts without a bar.
+JSON responses negotiate gzip and preserve identity and HEAD behavior.
+`/api/readiness` checks database queryability and schema compatibility without building an analytics report.
+
+After building, run `node scripts/analytics-benchmark.mjs --db /path/to/snapshot.sqlite --output /tmp/analytics-benchmark.json` against a consistent snapshot with the current schema.
+The read-only runner records endpoint latency, response sizes, query plans, hydrated row counts, and compiled source hashes across agent, model, project, and time filters.
+Its samples use first connections and a warmed operating-system cache; they do not measure cold-disk latency.
+
 ## Authorization and deployment
 
 The local listener remains loopback-only with Host/Origin checks and no network credentials.
@@ -139,8 +165,9 @@ Capture can lose observations before commit. Local WAL NORMAL does not promise z
 Aggregate FULL durability depends on the filesystem and hardware honoring synchronization. Gap reporting is best effort.
 Metadata names and paths remain sensitive. Same-account processes can access files available to that account.
 
-Queries currently materialize unbounded results. Pagination remains outside this slice.
-Production contention, backlog growth rates, and aggregate query scale require workload measurements.
+The compatible count and session-path responses still contain their complete matching rows. Visible timeline projections are bounded separately.
+Indexed projections reduce query work. They do not add a data-retention policy.
+Production contention and backlog growth still require workload measurements.
 A backup requires a SQLite-consistent snapshot or stopped writers. Copying only a live main database file is insufficient.
 
 Tests cover local SDK behavior, migration, source isolation, HTTP replay, authorization, bounded requests, and CLI lifecycle.
