@@ -17,6 +17,6 @@ USER node
 VOLUME ["/data"]
 EXPOSE 7345
 STOPSIGNAL SIGTERM
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["node", "scripts/container-healthcheck.mjs", "/run/secrets/hotplate.json"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=300s --retries=3 CMD ["node", "scripts/container-healthcheck.mjs", "/run/secrets/hotplate.json"]
 ENTRYPOINT ["node", "dist/src/cli.js"]
 CMD ["aggregate", "--config", "/run/secrets/hotplate.json"]

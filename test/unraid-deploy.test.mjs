@@ -353,3 +353,24 @@ test("container-healthcheck follows the public/basic policy and fails closed on 
     assert.deepEqual(requests, [{ path: "/api/readiness", host: "192.0.2.12", authorization: undefined }]);
   }
 });
+
+test("the candidate health allowance outruns a one-time database migration", () => {
+  const root = resolve(import.meta.dirname, "..");
+  const healthcheck = readFileSync(join(root, "Dockerfile"), "utf8").match(/^HEALTHCHECK .*$/m)?.[0];
+  assert.ok(healthcheck, "the image declares a health check");
+  const flag = name => Number(healthcheck.match(new RegExp(`--${name}=(\\d+)s`))?.[1]);
+  const startPeriod = flag("start-period");
+  const timeout = flag("timeout");
+  const interval = flag("interval");
+  const retries = Number(healthcheck.match(/--retries=(\d+)/)?.[1]);
+  assert.ok([startPeriod, timeout, interval, retries].every(Number.isSafeInteger), "the health check declares every interval");
+  assert.ok(startPeriod >= 300, `health start period ${startPeriod}s must cover a one-time migration on a large database`);
+  const controller = readFileSync(join(root, "scripts/unraid-controller.sh"), "utf8");
+  const attempts = Number(controller.match(/^health_attempts=(\d+)$/m)?.[1]);
+  assert.ok(attempts, "the controller declares its candidate health wait");
+  assert.equal(controller.match(/attempt<health_attempts/g)?.length, 2, "candidate start and predecessor restore share one allowance");
+  const wait = attempts * 2;
+  assert.ok(wait >= startPeriod + interval * retries + timeout, `controller wait ${wait}s must outlast the start period plus its retries`);
+  const transport = Number(readFileSync(join(root, "scripts/deploy-unraid"), "utf8").match(/child\.kill\(\), (\d+) \* 60_000/)?.[1]);
+  assert.ok(transport * 60 >= wait + 600, `transport timeout ${transport}m must cover the health wait plus the cold data archive`);
+});
