@@ -142,8 +142,12 @@ Apply disables the old restart policy, stops the old container, and refuses othe
 It archives the entire cold data directory, including SQLite sidecars, before disconnecting the old network attachment.
 After the durable `StartIntent` journal replacement, it removes the exact predecessor and verified stopped historical containers by immutable ID.
 Each removal uses nonforced `docker rm`, without volume removal. The replacement uses the stable appdata basename.
-The candidate starts with `restart=no`. Docker health and workstation requests to `/health` and `/api/dashboard` must both succeed.
-The workstation requests use the configured dashboard policy.
+The candidate starts with `restart=no`. Docker health checks `/api/readiness` with a three-second deadline.
+The workstation checks `/health` and `/api/readiness` with a ten-second deadline per request, including the response body.
+Both readiness checks require HTTP 200 and a JSON response with `ok: true`. Each response must be at most 4096 bytes.
+`/api/readiness` checks database queryability and schema compatibility without dashboard analytics. Analytics size and query time do not control deployment readiness.
+The requests use the configured dashboard policy. Public dashboards send no Authorization header. Basic dashboards send their configured credentials.
+Workstation probe errors report the endpoint and failure type without response bodies or credentials.
 Only an acknowledgment with the exact operation UUID and candidate ID enables `unless-stopped`.
 The controller holds the lock during this exchange. A missing acknowledgment times out after 30 seconds.
 
@@ -248,6 +252,8 @@ There is deliberately no public recovery command. An operator must review the ev
 
 Journal reconciliation is a manual engineering task in this version. Do not invent a `Healthy` record or reuse evidence from a different operation.
 Bootstrap failures without a previous container also require this review. The pipeline will not delete or adopt the partial installation.
+An existing `RecoveryRequired` journal still blocks `plan` and `apply` after this probe repair, even when an operator restarted a healthy candidate.
+The probe repair does not reconcile that journal or authorize another deployment. Reconciliation requires the same evidence review and lock described here.
 
 Atomic journal replacement and checksums do not establish power-loss durability. Filesystem, Docker, and storage synchronization remain operational limits.
 A host administrator or process outside this controller can bypass its lock. Do not use the Unraid UI to modify these containers during deployment.

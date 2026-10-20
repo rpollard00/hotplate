@@ -171,6 +171,27 @@ test("deploy-unraid acknowledgment binds the exact operation and candidate", asy
   await exchange(child, { command: "apply", operation }, null, id => { probes.push(id); });
   assert.deepEqual(probes, [candidate]);
 });
+test("failed readiness sends no candidate acknowledgment and retains the probe failure", async () => {
+  for (const state of ["RecoveryRequired", "Healthy"]) {
+    const operation = randomUUID();
+    const child = spawn(process.execPath, ["--input-type=module", "-e", `
+      import {createInterface} from 'node:readline';
+      let request;
+      for await (const line of createInterface({input:process.stdin})) {
+        if (!request) {
+          request=JSON.parse(line);
+          console.log(JSON.stringify({kind:'Probe',operation:request.operation,candidate:'${"a".repeat(64)}'}));
+        } else {
+          if (line !== '{}') process.exit(2);
+          console.log(JSON.stringify({kind:'Result',state:'${state}',operation:request.operation}));
+          process.exit(${state === "Healthy" ? 0 : 1});
+        }
+      }
+    `], { stdio: ["pipe", "pipe", "pipe"] });
+    const failure = new Error("Readiness failed.");
+    await assert.rejects(exchange(child, { command: "apply", operation }, null, () => { throw failure; }), error => error === failure);
+  }
+});
 test("deploy-unraid rejects retirement failure without acknowledging or probing a replacement", async () => {
   const operation = randomUUID();
   const child = spawn(process.execPath, ["-e", `
@@ -184,21 +205,79 @@ test("deploy-unraid rejects retirement failure without acknowledging or probing 
 
 test("deploy-unraid probes require healthy application payloads, not only HTTP 200", async t => {
   let health = { ok: true };
-  let dashboard = { kind: "ready" };
+  let readiness = { ok: true };
   const server = createServer((request, response) => {
     response.setHeader("content-type", "application/json");
-    response.end(JSON.stringify(request.url === "/health" ? health : dashboard));
+    response.end(JSON.stringify(request.url === "/health" ? health : readiness));
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   t.after(() => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); });
   const origin = `http://127.0.0.1:${server.address().port}`;
   const credentials = { kind: "basic", username: "test", password: "synthetic-password" };
   await probe(origin, credentials);
-  dashboard = { kind: "error" };
+  readiness = { ok: false };
   await assert.rejects(probe(origin, credentials));
-  dashboard = { kind: "ready" };
+  readiness = { ok: true };
   health = { ok: false };
   await assert.rejects(probe(origin, credentials));
+});
+test("deployment readiness does not wait for dashboard analytics", async t => {
+  const requests = [];
+  const timers = [];
+  const server = createServer((request, response) => {
+    requests.push(request.url);
+    response.setHeader("content-type", "application/json");
+    if (request.url === "/api/dashboard") {
+      timers.push(setTimeout(() => response.end('{"kind":"ready"}'), 10_000));
+    } else response.end('{"ok":true}');
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => {
+    for (const timer of timers) clearTimeout(timer);
+    server.closeAllConnections();
+    return new Promise(resolve => server.close(resolve));
+  });
+  await probe(`http://127.0.0.1:${server.address().port}`, { kind: "public" });
+  assert.deepEqual(requests, ["/health", "/api/readiness"]);
+});
+test("deployment probes reject failed status, redirects, invalid JSON and oversized responses", async t => {
+  let reply;
+  const server = createServer((request, response) => {
+    if (request.url === "/health") response.writeHead(200).end('{"ok":true}');
+    else response.writeHead(reply.status, { "content-type": "application/json", ...reply.headers }).end(reply.body);
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); });
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  for (const value of [
+    { status: 503, body: '{"ok":false}', error: /\/api\/readiness returned HTTP 503/ },
+    { status: 401, body: "private details", error: /\/api\/readiness returned HTTP 401/ },
+    { status: 302, headers: { location: "/health" }, body: "", error: /\/api\/readiness could not read a response/ },
+    { status: 200, body: "private details", error: /\/api\/readiness returned invalid JSON/ },
+    { status: 200, body: '{"ok":true,"padding":"' + "x".repeat(4096) + '"}', error: /\/api\/readiness exceeded 4096 bytes/ },
+    { status: 200, body: '{"kind":"ready"}', error: /\/api\/readiness reported that the application is not ready/ },
+  ]) {
+    reply = value;
+    await assert.rejects(probe(origin, { kind: "basic", username: "private-user", password: "private-password" }), error => {
+      assert.match(error.message, value.error);
+      assert.doesNotMatch(error.message, /private/);
+      return true;
+    });
+  }
+});
+test("deployment probe deadline includes a stalled response body", async t => {
+  const timeout = AbortSignal.timeout.bind(AbortSignal);
+  t.mock.method(AbortSignal, "timeout", milliseconds => {
+    assert.equal(milliseconds, 10_000);
+    return timeout(50);
+  });
+  const server = createServer((request, response) => {
+    if (request.url === "/health") response.end('{"ok":true}');
+    else { response.writeHead(200); response.write('{"ok":'); }
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); });
+  await assert.rejects(probe(`http://127.0.0.1:${server.address().port}`, { kind: "public" }), /\/api\/readiness timed out after 10 seconds/);
 });
 test("deploy-unraid refuses a mismatched operation without probing", async () => {
   const child = spawn(process.execPath, ["-e", `console.log(JSON.stringify({kind:'Probe',operation:'wrong',candidate:'${"a".repeat(64)}'})); setTimeout(()=>{},10000);`], { stdio: ["pipe", "pipe", "pipe"] });
@@ -210,13 +289,13 @@ test("deploy-unraid public probes send no Authorization while basic probes retai
   const server = createServer((request, response) => {
     requests.push({ path: request.url, authorization: request.headers.authorization });
     response.setHeader("content-type", "application/json");
-    response.end(JSON.stringify(request.url === "/health" ? { ok: true } : { kind: "ready" }));
+    response.end('{"ok":true}');
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   t.after(() => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); });
   const origin = `http://127.0.0.1:${server.address().port}`;
   await probe(origin, { kind: "public" });
-  assert.deepEqual(requests, ["/health", "/api/dashboard"].map(path => ({ path, authorization: undefined })));
+  assert.deepEqual(requests, ["/health", "/api/readiness"].map(path => ({ path, authorization: undefined })));
   requests.length = 0;
   await probe(origin, { kind: "basic", username: "test", password: "synthetic-password" });
   assert.ok(requests.every(request => request.authorization === `Basic ${Buffer.from("test:synthetic-password").toString("base64")}`));
@@ -224,9 +303,15 @@ test("deploy-unraid public probes send no Authorization while basic probes retai
 
 test("container-healthcheck follows the public/basic policy and fails closed on invalid credentials", async t => {
   const requests = [];
+  let reply = { status: 200, body: '{"ok":true}' };
   const server = createServer((request, response) => {
-    requests.push({ host: request.headers.host, authorization: request.headers.authorization });
-    response.writeHead(200).end('{"ok":true}');
+    requests.push({ path: request.url, host: request.headers.host, authorization: request.headers.authorization });
+    response.writeHead(reply.status, reply.headers);
+    if (reply.trickle) {
+      response.write('{"ok":');
+      const timer = setInterval(() => response.write(" "), 100);
+      response.once("close", () => clearInterval(timer));
+    } else response.end(reply.body);
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   t.after(() => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); });
@@ -235,17 +320,36 @@ test("container-healthcheck follows the public/basic policy and fails closed on 
   writeFileSync(configurationFile, JSON.stringify({ databasePath: join(directory, "unused.sqlite"), host: "127.0.0.1",
     port: server.address().port, publicOrigin: "http://192.0.2.12", credentialsFile, trustedHttp: true }));
   const ingest = [{ token: "a".repeat(48), sourceId: randomUUID(), machineId: "test" }];
+  const run = async () => {
+    const child = spawn(process.execPath, [new URL("../scripts/container-healthcheck.mjs", import.meta.url).pathname, configurationFile], { stdio: "ignore" });
+    const timer = setTimeout(() => child.kill(), 5000);
+    try { return await new Promise(resolve => child.once("close", resolve)); }
+    finally { clearTimeout(timer); }
+  };
   for (const dashboard of [{ kind: "public" }, { username: "test", password: "synthetic-password" }, undefined, { kind: "public", password: "invalid" }]) {
     requests.length = 0;
     writeFileSync(credentialsFile, JSON.stringify({ ingest, dashboard }));
-    const child = spawn(process.execPath, [new URL("../scripts/container-healthcheck.mjs", import.meta.url).pathname, configurationFile], { stdio: "ignore" });
-    const code = await new Promise(resolve => child.once("close", resolve));
+    const code = await run();
     if (!dashboard || "password" in dashboard && dashboard.kind === "public") {
       assert.equal(code, 1);
       assert.deepEqual(requests, []);
     } else {
       assert.equal(code, 0);
-      assert.deepEqual(requests, [{ host: "192.0.2.12", authorization: dashboard.kind === "public" ? undefined : `Basic ${Buffer.from("test:synthetic-password").toString("base64")}` }]);
+      assert.deepEqual(requests, [{ path: "/api/readiness", host: "192.0.2.12", authorization: dashboard.kind === "public" ? undefined : `Basic ${Buffer.from("test:synthetic-password").toString("base64")}` }]);
     }
+  }
+  writeFileSync(credentialsFile, JSON.stringify({ ingest, dashboard: { kind: "public" } }));
+  for (const value of [
+    { status: 503, body: '{"ok":false}' },
+    { status: 302, headers: { location: "/health" }, body: '{"ok":true}' },
+    { status: 200, body: '{"ok":false}' },
+    { status: 200, body: "not JSON" },
+    { status: 200, body: '{"ok":true,"padding":"' + "x".repeat(4096) + '"}' },
+    { status: 200, trickle: true },
+  ]) {
+    requests.length = 0;
+    reply = value;
+    assert.equal(await run(), 1, JSON.stringify(value));
+    assert.deepEqual(requests, [{ path: "/api/readiness", host: "192.0.2.12", authorization: undefined }]);
   }
 });
