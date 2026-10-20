@@ -143,6 +143,9 @@ It archives the entire cold data directory, including SQLite sidecars, before di
 After the durable `StartIntent` journal replacement, it removes the exact predecessor and verified stopped historical containers by immutable ID.
 Each removal uses nonforced `docker rm`, without volume removal. The replacement uses the stable appdata basename.
 The candidate starts with `restart=no`. Docker health checks `/api/readiness` with a three-second deadline.
+The image health check waits 300 seconds before a failure counts, and the controller waits up to 480 seconds for the candidate to turn healthy.
+A release that raises the schema version migrates and backfills before the listener binds, so a large database can stay `starting` for several minutes without failing the deployment.
+A candidate that never turns healthy still stops the deployment and leaves `RecoveryRequired`. The controller uses the same wait when it restores an unchanged predecessor.
 The workstation checks `/health` and `/api/readiness` with a ten-second deadline per request, including the response body.
 Both readiness checks require HTTP 200 and a JSON response with `ok: true`. Each response must be at most 4096 bytes.
 `/api/readiness` checks database queryability and schema compatibility without dashboard analytics. Analytics size and query time do not control deployment readiness.
