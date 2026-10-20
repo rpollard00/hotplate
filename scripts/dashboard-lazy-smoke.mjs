@@ -47,8 +47,8 @@ try {
         return originalFetch(input, init);
       };
     ` });
-    await command("Page.navigate", { url: preview.url }); await until(ready); await change("metric-content", "skills");
-    assert.deepEqual(await scopes(), ["skills"], "Startup requests skills only");
+    await command("Page.navigate", { url: preview.url }); await until(ready);
+    assert.deepEqual(await scopes(), ["skills"], "Startup requests only the skills dashboard scope");
     assert.equal(await rowCount(), 0, "Startup does not render hidden Resources");
     await click('[data-workspace="paths"]'); await click('[data-workspace="metrics"]');
     assert.deepEqual(await scopes(), ["skills"], "Skill workspace navigation does not request Resources");
@@ -69,6 +69,7 @@ try {
     await change("time-preset", "all"); await until(resourcesReady);
     assert.deepEqual(await scopes(), ["skills", "resources", "skills", "resources"], "A global slicer reloads both scopes on Resources");
     assert.equal(await evaluate('document.getElementById("resource-kind").value'), "");
+    await change("metric-content", "skills");
 
     await evaluate(`window.pendingDashboardRequests = []; window.fetch = (input, init) => new Promise((resolve, reject) => {
       window.pendingDashboardRequests.push({ url: String(input), signal: init.signal, resolve, reject });

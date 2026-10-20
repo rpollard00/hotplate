@@ -84,9 +84,9 @@ Agent, Model, and Period remain visible in every workspace. Select All agents or
 
 The slicers allow observed agent/model combinations in the current machine, project, source, and date context. Incompatible options are disabled. A selection that becomes unavailable stays visible until you clear it or broaden the scope. Changing an agent or model preserves the project.
 
-More filters contains machine, project, command source, and custom UTC dates. Source applies to requests only. The summary shows applied restrictions. Last 7 days is the default. Refresh recalculates relative periods and keeps custom UTC dates fixed.
-Reset restores Last 7 days, Both, Tool activity, the total ranking, and the top five trends.
-Select All time to recover older records.
+More filters contains machine, project, command source, and custom UTC dates. Source applies to requests only. The summary shows applied restrictions.
+
+Last 4 hours is the default Period. The presets also include Last 30 minutes, Last 1 hour, Last 24 hours, and the existing day ranges. Refresh recalculates relative periods and keeps custom UTC dates fixed. Reset restores Last 4 hours, Both, Tool activity, Count, the total ranking, and the top five trends. Reset also restores each content mode's default measure. Select All time to recover older records.
 
 Windows up to seven days use UTC hours. Longer windows use daily or adaptive bins without truncation. About this data remains available from every workspace.
 
@@ -136,7 +136,7 @@ The script starts disposable previews and a private headless browser. It removes
 It prints the retained screenshot directory and response-size measurements.
 Set `CHROMIUM` to select a browser executable. Set `HOTPLATE_SCREENSHOT_DIR` to choose an artifact directory.
 
-The checks freeze browser time for weekly defaults and retain historical All time scenarios. They cover desktop, mobile, 320px layouts, editable rows, hourly edges, missing periods, and repeated reads. Mouse, touch, and keyboard checks cover continuous selection, resize, move, cancellation, and path navigation. They also cover comparison counts, linked rankings and models, applied filters, hostile text, empty states, failed refreshes, and retry.
+The checks freeze browser time for recent defaults and retain weekly Skills and historical All time scenarios. They verify exact preset bounds on both analytics paths, Refresh, custom dates, Reset, and remembered content measures. They cover desktop, mobile, 320px layouts, editable rows, hourly edges, missing periods, and repeated reads. Mouse, touch, and keyboard checks cover continuous selection, resize, move, cancellation, and path navigation. They also cover comparison counts, linked rankings and models, applied filters, hostile text, empty states, failed refreshes, and retry.
 A larger controlled response checks bounded rendering. It is not a production storage-load benchmark.
 
 ## What the evidence means
