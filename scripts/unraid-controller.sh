@@ -46,6 +46,13 @@ port=80
 for tool in docker jq tar sha256sum flock realpath stat df head base64 timeout; do command -v "$tool" >/dev/null || refuse; done
 [[ $(docker info --format '{{.OSType}}/{{.Architecture}}') == linux/x86_64 ]] || refuse
 
+# Docker reports a candidate as "starting" for the image health start period, so a
+# one-time database migration outruns the check failures rather than failing apply. The
+# wait here must outlast that start period plus its retries, otherwise a migrating
+# candidate is refused after the predecessor is already retired. Both the candidate
+# start and the predecessor restore use this allowance.
+health_attempts=240
+
 private_directory() { [[ -d $1 && ! -L $1 && $(realpath -e "$1") == "$1" && $(stat -c '%u:%a' "$1") == 0:700 ]]; }
 private_file() { [[ -f $1 && ! -L $1 && $(stat -c '%u:%a:%h' "$1") == 0:600:1 ]]; }
 network_info=$(docker network inspect "$network")
@@ -370,7 +377,7 @@ unchanged_old() {
   docker update --restart unless-stopped "$current" >/dev/null || return 1
   docker start "$current" >/dev/null || return 1
   local attempt
-  for ((attempt=0; attempt<90; attempt++)); do
+  for ((attempt=0; attempt<health_attempts; attempt++)); do
     spec=$(inspect_container "$current") || return 1
     [[ $(jq -r .State.Running <<< "$spec") == true ]] || return 1
     [[ $(jq -r .State.Health.Status <<< "$spec") != healthy ]] || break
@@ -495,7 +502,7 @@ candidate=$(docker create --name "$candidate_name" --label "io.hotplate.installa
 jq --arg candidate "$candidate" '.candidate=$candidate' "$journal" | atomic "$journal"
 owned_spec "$(inspect_container "$candidate")"
 docker start "$candidate" >/dev/null
-for ((attempt=0; attempt<90; attempt++)); do
+for ((attempt=0; attempt<health_attempts; attempt++)); do
   spec=$(inspect_container "$candidate")
   [[ $(jq -r .State.Running <<< "$spec") == true ]]
   health=$(jq -r .State.Health.Status <<< "$spec")

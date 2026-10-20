@@ -78,22 +78,46 @@ New Pi observations identify their host. Existing untagged data remains `unknown
 Structured read tools report a file path and can report a requested line range.
 A successful structured read produces a confirmed read. An error produces a read failure.
 
-Shell capture recognizes only these complete literal commands:
+Shell capture statically parses a command and recognizes these readers:
 
 | Form | Requested portion |
 | --- | --- |
-| `cat [--] path...` | Whole files |
-| `head [-n N] [--] path...` | First `N` lines, or 10 lines without `-n` |
+| `cat [-n] [--] path...` | Whole files |
+| `nl path...` | Whole files |
+| `head [-n N \| -N] [--] path...` | First `N` lines, or 10 lines without `-n` |
+| `tail -n +N [--] path...` or `tail +N path` | Lines from `N` to the end |
+| `tail [-n N \| -N] [--] path...` | Unknown portion |
 | `sed -n 'Np' [--] path` | One line |
 | `sed -n 'N,Mp' [--] path` | Inclusive line range |
+| `sed -n 'N,$p' [--] path` | Lines from `N` to the end |
 | `python -c 'expression'` or `python3 -c 'expression'` | Whole file from the supported Python forms |
 
 `N` and `M` must be positive integers, with `M` no smaller than `N`.
-`cat` and `head` can name multiple files. `sed` accepts one file.
-Paths can be absolute or relative when the host reports the effective working directory. Literal quoting and escaped spaces are supported.
+`sed` accepts one file. A reader without file operands reads `< path` as its target. Other flags and executable paths remain unsupported.
+Readers can appear in any pipeline stage and in lists joined by `&&`, `||`, `;`, or newlines.
+`#` comments, unquoted leading `NAME=value` assignments, unquoted `~` and `~/...`, and `$HOME` or `${HOME}` are supported.
+A command made only of assignments, or an assignment to `HOME` or `CDPATH`, makes the whole command opaque.
+Literal quoting and escaped spaces are supported.
+A reader target with a `..` segment is dropped, and coverage becomes opaque `missing-input`, because the shell resolves it against the physical directory.
+Redirections apply left to right. A read requires the reader's final stdout to reach the original stdout or stderr.
+Piped content must pass through stdin filters to that destination. `2>/dev/null` and `1>&2 2>/tmp/x` are reads. `>/tmp/x` and `2>/tmp/x >&2` are not.
+
+`cd` tracks the working directory. `cd` without arguments goes home.
+`cd -` (also after `--`), `pushd`, `popd`, and a `cd` reached through `||` make the directory unknown.
+The new directory applies to the following `&&` chain. A later `||` in the same list makes it unknown, except after the guard `cd path || exit [N]`.
+After `;` or a newline, the new directory remains only when the `cd` was unconditional. `test -d x && cd x; cat f` has an unknown directory.
+A `cd` inside a multi-command pipeline has no effect.
+Relative targets resolve against the tracked directory. Targets that cannot resolve are dropped, and coverage becomes opaque `missing-input`.
 Codex Bash hooks report the session directory and omit a command's `workdir`. Hotplate accepts only absolute targets from these hooks.
-An operation with any relative target produces opaque coverage. Claude Bash hooks track persistent working-directory changes.
-The command names must match the table. Other flags, executable paths, and stdin reads remain unsupported.
+Claude Bash hooks track persistent working-directory changes.
+
+The reported tool outcome applies to a reader only when every connector is `&&` and the reader is alone in its pipeline.
+Other readers produce attempts.
+`echo`, `printf`, `true`, `false`, `pwd`, `ls`, and stdin filters after a pipe (`head`, `tail`, `sed`, `grep`, `rg`, `wc`, `sort`, `uniq`, `cut`, `tr`, `nl`, `cat`, `awk`, `jq`, `less`) are understood.
+`exit` is understood only in the `cd` guard or as the final step.
+Any other command makes coverage opaque `unsupported-syntax`, and the recognized readers still produce evidence.
+`builtin`, `command`, `eval`, `.`, `source`, `exec`, and any other `exit` make the whole command opaque without evidence.
+Other variables, command substitution, process substitution, heredocs, background `&`, `|&`, globs, subshells, braces, and shell keywords such as `if` and `for` make the whole command opaque.
 
 The Python parser accepts these forms:
 

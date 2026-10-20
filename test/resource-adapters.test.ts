@@ -54,8 +54,11 @@ test("Codex literal multi-file reads create separate retry-safe resource attempt
   } finally { await store.close(); }
   assert.equal(JSON.stringify(facts).includes("CANARY"), false);
   assert.equal(parseCodexHook({ ...hook, tool_input: { command: `sed -n '1,20p' '${reference}'` } }, undefined, env).length, 2);
-  for (const command of [`cat '${reference}' && true`, `cat $(echo '${reference}')`, `cat '${reference}' | head`, `cat '${reference}' > output`]) {
+  for (const command of [`cat $(echo '${reference}')`, `cat '${reference}' > output`]) {
     assert.deepEqual(parseCodexHook({ ...hook, tool_input: { command } }, undefined, env).map((fact) => fact.evidence.kind), ["tool-coverage"]);
+  }
+  for (const command of [`cat '${reference}' && true`, `cat '${reference}' | head`]) {
+    assert.deepEqual(parseCodexHook({ ...hook, tool_input: { command } }, undefined, env).map((fact) => fact.evidence.kind), ["resource-access", "tool-coverage"]);
   }
 });
 

@@ -129,7 +129,9 @@ export async function exchange(child, request, archive, acknowledge) {
   finished.catch(() => {});
   child.stdin.on("error", () => {});
   child.stderr.on("data", chunk => { stderrBytes += chunk.length; if (stderrBytes > 65536) child.kill(); });
-  const timer = setTimeout(() => child.kill(), 20 * 60_000);
+  // One exchange covers the cold data archive, the candidate health allowance, and the
+  // workstation checks, so it must stay longer than the controller's health wait.
+  const timer = setTimeout(() => child.kill(), 45 * 60_000);
   try {
     child.stdin.write(`${JSON.stringify(request)}\n`);
     const upload = archive ? (async () => {
