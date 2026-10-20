@@ -33,7 +33,7 @@
     "build": "tsc -p tsconfig.json",
     "build:observer": "node scripts/build-observer.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test dist/test/**/*.test.js",
+    "test": "npm run build && node --test --test-concurrency=4 dist/test/**/*.test.js",
     "check": "npm run typecheck && npm test && npm run test:deploy && npm run test:dashboard-preview",
     "deploy:unraid": "node scripts/deploy-unraid deploy",
     "test:deploy": "node --test test/unraid-deploy.test.mjs",
@@ -43,7 +43,8 @@
     "dashboard:demo": "npm run build && node dist/src/cli.js demo --db ./dist/demo/hotplate-demo.sqlite --force",
     "dashboard:preview": "npm run build && node scripts/dashboard-preview.mjs",
     "test:dashboard-preview": "npm run build && node --test test/dashboard-preview.test.mjs",
-    "smoke:dashboard": "npm run build && node scripts/dashboard-browser-smoke.mjs"
+    "smoke:dashboard": "npm run build && node scripts/dashboard-browser-smoke.mjs",
+    "smoke:dashboard:timelines": "npm run build && node scripts/dashboard-timeline-smoke.mjs"
   },
   "engines": {
     "node": ">=24.19.0"

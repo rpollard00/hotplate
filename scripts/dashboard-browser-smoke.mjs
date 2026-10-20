@@ -278,7 +278,7 @@ try {
     assert.equal(await evaluate('document.getElementById("metric-measure").selectedOptions[0].textContent'), 'Tool activity');
     assert.equal(await evaluate('document.getElementById("metrics-heading").textContent'), 'Skill and resource metrics');
     assert.equal(await evaluate('document.getElementById("skills-heading").textContent'), 'Compare skills and resources');
-    assert.equal(await evaluate('document.getElementById("metric-display").disabled'), true);
+    assert.equal(await evaluate('document.getElementById("metric-display").disabled'), false);
     assert.equal(await evaluate('document.getElementById("metric-split").selectedOptions[0].textContent'), 'Item / total ranking');
     assert.deepEqual(await evaluate('Array.from(document.getElementById("time-preset").options, option => [option.value, option.textContent])'), [
       ['all', 'All time'], ['30m', 'Last 30 minutes'], ['1h', 'Last 1 hour'], ['4h', 'Last 4 hours'], ['24h', 'Last 24 hours'],
@@ -357,7 +357,7 @@ try {
     assert.equal(await evaluate('document.getElementById("metric-measure").value'), 'toolActivity');
     assert.equal(await evaluate('document.getElementById("metric-split").value'), 'skill');
     assert.equal(await evaluate('document.getElementById("metric-display").value'), 'count');
-    assert.equal(await evaluate('document.getElementById("metric-display").disabled'), true);
+    assert.equal(await evaluate('document.getElementById("metric-display").disabled'), false);
     assert.equal(await evaluate('document.querySelector(".brush-band")?.hidden ?? true'), true);
     assert.deepEqual((await legendValues()).map(([name]) => name), defaultContentNames, 'Reset restores the default content trends');
     await change('metric-content', 'resources'); await until(ready);
@@ -1248,7 +1248,7 @@ try {
       await change('metric-content', content); await until(ready);
       assert.equal(await evaluate('document.getElementById("metric-measure").value'), 'toolActivity');
       await change('metric-measure', 'activity'); await until(ready);
-      assert.equal(await evaluate('document.getElementById("metric-display").disabled'), true);
+      assert.equal(await evaluate('document.getElementById("metric-display").disabled'), false);
       assert.equal(await evaluate('document.getElementById("explorer-panel").hidden'), true);
       for (const split of ['skill', 'agent', 'model', 'agent-model']) {
         await change('metric-split', split); await until(ready);
@@ -1262,20 +1262,20 @@ try {
     }
     await change('metric-content', 'resources'); await until(ready); await change('metric-split', 'skill'); await until(ready);
     await input('skill-search', 'SKILL.md');
-    assert.ok(await evaluate('new Set(Array.from(document.querySelectorAll("#skill-table .content-location"), item => item.textContent)).size >= 2'), 'Repeated entrypoint names retain visible path context');
+    assert.ok(await evaluate('document.querySelectorAll("#skill-table .content-location, #skill-table .content-toggle").length === 0'), 'Repeated entrypoint names omit raw location metadata');
     await change('metric-content', 'both'); await until(ready);
     await input('skill-search', 'playbooks/feature.md');
     assert.equal(await evaluate('document.querySelectorAll("#skill-table .content-child").length'), 1, 'Child path search reveals its owner and matching file');
     assert.match(await evaluate('document.getElementById("skill-table").textContent'), /playbooks\/feature\.md/);
     await input('skill-search', '');
-    await click('#skill-table .content-toggle');
+    await click('#skill-table .content-files');
     assert.ok(await evaluate('document.querySelectorAll("#skill-table .content-child").length > 0'));
     assert.match(await evaluate('document.getElementById("skill-table").textContent'), /Skill evidence ·/);
     assert.ok(await evaluate('Array.from(document.querySelectorAll("#skill-table .content-child"), row => row.textContent).every(text => !text.includes("Unresolved"))'), 'Resolved owner children do not claim unresolved location');
     await evaluate('Array.from(document.querySelectorAll("#skill-table .content-child button.link")).find(button => button.textContent.startsWith("Skill evidence")).click()');
     assert.match(await evaluate('document.getElementById("content-detail").textContent'), /Filesystem: Not recorded in skill evidence/);
     await click('#content-detail > .section-heading button');
-    await click('#skill-table .content-toggle');
+    await click('#skill-table .content-files');
     assert.equal(await evaluate('document.querySelectorAll("#skill-table .content-child").length'), 0);
     await input('skill-search', 'owner-with-only-supporting-activity');
     assert.match(await evaluate('document.getElementById("skill-table").textContent'), /a-long-reference-name/);
