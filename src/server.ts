@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from "node:net";
 import { parseHostId, parseMachineId } from "./observation.js";
 import { dashboardCss, dashboardHtml, dashboardJs } from "./dashboard/assets.js";
+import { archivoFont, fontLicenses, jetbrainsMonoFont } from "./dashboard/fonts.js";
 import { buildDashboardReport, type DashboardReport } from "./dashboard/analytics.js";
 import {
   openHotplateReadStore,
@@ -147,6 +148,18 @@ export async function respondDashboard(args: { request: IncomingMessage; respons
   }
   if (url.pathname === "/assets/app.js") {
     send(response, 200, "text/javascript; charset=utf-8", dashboardJs, request.method === "HEAD");
+    return;
+  }
+  if (url.pathname === "/assets/fonts/archivo-latin.woff2") {
+    send(response, 200, "font/woff2", archivoFont, request.method === "HEAD");
+    return;
+  }
+  if (url.pathname === "/assets/fonts/jetbrains-mono-latin.woff2") {
+    send(response, 200, "font/woff2", jetbrainsMonoFont, request.method === "HEAD");
+    return;
+  }
+  if (url.pathname === "/assets/fonts/LICENSE.txt") {
+    send(response, 200, "text/plain; charset=utf-8", fontLicenses, request.method === "HEAD");
     return;
   }
   if (url.pathname === "/api/dashboard") {
@@ -330,7 +343,7 @@ function emptyFilterOptions(): FilterOptions {
 }
 
 function setSecurityHeaders(response: ServerResponse): void {
-  response.setHeader("content-security-policy", "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
+  response.setHeader("content-security-policy", "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
   response.setHeader("x-content-type-options", "nosniff");
   response.setHeader("referrer-policy", "no-referrer");
   response.setHeader("cache-control", "no-store");
@@ -344,7 +357,7 @@ function sendText(response: ServerResponse, statusCode: number, body: string): v
   send(response, statusCode, "text/plain; charset=utf-8", `${body}\n`, false);
 }
 
-function send(response: ServerResponse, statusCode: number, contentType: string, body: string, headOnly: boolean): void {
+function send(response: ServerResponse, statusCode: number, contentType: string, body: string | Uint8Array, headOnly: boolean): void {
   response.writeHead(statusCode, { "content-type": contentType, "content-length": Buffer.byteLength(body) });
   if (headOnly) {
     response.end();

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { request } from "node:http";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -30,6 +31,80 @@ test("dashboard reports a missing database without creating it", async () => {
       assert.equal(getString(payload, "kind"), "missing");
       assert.equal(getString(payload, "databasePath"), databasePath);
       assert.equal("report" in payload, false);
+      assert.equal(existsSync(databasePath), false);
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+test("dashboard serves the original licensed fonts through guarded GET and HEAD routes", async () => {
+  await withTempDir(async dir => {
+    const databasePath = join(dir, "missing.sqlite");
+    const server = await startDashboardServer({ databasePath, port: 0 });
+    const fonts = [
+      {
+        path: "/assets/fonts/archivo-latin.woff2",
+        packageName: "archivo",
+        fileName: "archivo-latin-wdth-normal.woff2",
+        byteLength: 90104,
+        hash: "e3a28eade21a900c7155a247757f4b2834c07bb7ef07ad7efa55cebaac1e8f5e",
+        licenseHash: "c3c8402eec0e31dc9a76851235b1c02a0bb821488b2db8e35bcc2ab60ca8fc2b",
+      },
+      {
+        path: "/assets/fonts/jetbrains-mono-latin.woff2",
+        packageName: "jetbrains-mono",
+        fileName: "jetbrains-mono-latin-wght-normal.woff2",
+        byteLength: 40404,
+        hash: "18be452724bfdc236c074ca94a249a7f41a86752c7d04ab258ce9ed5651f6a7e",
+        licenseHash: "403581b69dac5cff4079205e01c6b467e56af449ecbd7247693ddb1baafa005b",
+      },
+    ];
+    try {
+      for (const font of fonts) {
+        const response = await fetch(`${server.url}${font.path}`);
+        assert.equal(response.status, 200);
+        assert.equal(response.headers.get("content-type"), "font/woff2");
+        assert.equal(response.headers.get("content-length"), String(font.byteLength));
+        assert.equal(response.headers.get("cache-control"), "no-store");
+        assert.equal(response.headers.get("content-security-policy")?.includes("font-src 'self'"), true);
+        const bytes = Buffer.from(await response.arrayBuffer());
+        assert.equal(bytes.byteLength, font.byteLength);
+        assert.equal(createHash("sha256").update(bytes).digest("hex"), font.hash);
+
+        const head = await fetch(`${server.url}${font.path}`, { method: "HEAD" });
+        assert.equal(head.status, 200);
+        assert.equal(head.headers.get("content-type"), "font/woff2");
+        assert.equal(head.headers.get("content-length"), String(font.byteLength));
+        assert.equal((await head.arrayBuffer()).byteLength, 0);
+        const post = await fetch(`${server.url}${font.path}`, { method: "POST" });
+        assert.equal(post.status, 405);
+        assert.equal(post.headers.get("allow"), "GET, HEAD");
+        assert.equal(await requestStatus(`${server.url}${font.path}`, { Host: "evil.example" }), 403);
+        assert.equal((await fetch(`${server.url}${font.path}`, { headers: { Origin: "http://evil.example" } })).status, 403);
+      }
+
+      const response = await fetch(`${server.url}/assets/fonts/LICENSE.txt`);
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get("content-type"), "text/plain; charset=utf-8");
+      const licenses = await response.text();
+      assert.equal(response.headers.get("content-length"), String(Buffer.byteLength(licenses)));
+      for (const font of fonts) {
+        const packageName = `@fontsource-variable/${font.packageName}`;
+        assert.ok(licenses.includes(`${packageName}@5.3.0`));
+        assert.ok(licenses.includes(`Source: files/${font.fileName}\nSHA-256: ${font.hash}\n`));
+        const section = licenses.split(`BEGIN LICENSE ${packageName}\n`)[1];
+        assert.ok(section);
+        const originalLicense = section.split(`\nEND LICENSE ${packageName}`)[0];
+        assert.ok(originalLicense);
+        assert.equal(createHash("sha256").update(originalLicense).digest("hex"), font.licenseHash);
+      }
+      const head = await fetch(`${server.url}/assets/fonts/LICENSE.txt`, { method: "HEAD" });
+      assert.equal(head.status, 200);
+      assert.equal(head.headers.get("content-length"), String(Buffer.byteLength(licenses)));
+      assert.equal(await head.text(), "");
+      assert.equal((await fetch(`${server.url}/assets/fonts/missing.woff2`)).status, 404);
+      assert.equal((await fetch(`${server.url}/assets/fonts/archivo-latin-wdth-normal.woff2`)).status, 404);
       assert.equal(existsSync(databasePath), false);
     } finally {
       await server.close();
