@@ -41,8 +41,9 @@ test("OpenCode v2 distinguishes failure and native skill invocation", () => {
 test("OpenCode adapters reject unrelated, incomplete, and ambiguous events", () => {
   assert.equal(extractOpenCodeV1Fact(v1Input, { error: "failed" }, context), null);
   assert.equal(extractOpenCodeV2Fact({ ...v2Input, status: "running" }, context), null);
-  assert.equal(extractOpenCodeV2Fact({ ...v2Input, tool: "bash", input: { command: "cat SKILL.md" } }, context), null);
-  assert.equal(extractOpenCodeV2Fact({ ...v2Input, input: { path: "/project/README.md" } }, context), null);
+  assert.equal(extractOpenCodeV2Fact({ ...v2Input, tool: "webfetch", input: { url: "https://example.com" } }, context), null);
+  assert.equal(extractOpenCodeV2Fact({ ...v2Input, tool: "bash", input: { command: "cat SKILL.md" } }, context)?.evidence.kind, "tool-coverage");
+  assert.equal(extractOpenCodeV2Fact({ ...v2Input, input: { path: "/project/README.md" } }, context)?.evidence.kind, "tool-coverage");
   assert.equal(extractOpenCodeV2Fact(v2Input, { projectCwd: "relative" }), null);
 });
 

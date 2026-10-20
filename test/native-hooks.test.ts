@@ -38,12 +38,13 @@ test("Codex records narrow shell read attempts without guessing success from res
   const data = fixture(t);
   const hook = { ...base, cwd: data.cwd, turn_id: "turn-1", tool_name: "Bash", tool_input: { command: `cat ${data.codex}` }, tool_response: "OUTPUT_CANARY" };
   const facts = parseCodexHook(hook, time, data.env);
-  assert.equal(facts.length, 2);
+  assert.equal(facts.length, 3);
   assert.equal(facts[0]?.evidence.kind, "read-attempt");
   assert.equal(facts[0]?.scope.runId, "turn-1");
   assert.equal(JSON.stringify(facts).includes("OUTPUT_CANARY"), false);
   for (const command of ["cat a/SKILL.md", "echo SKILL.md", "cat /a/SKILL.md; true", "cat /a/SKILL.md && true", "cat /a/SKILL.md\n", "cat $(pwd)/SKILL.md", "cat /a/SKILL.md > output"]) {
-    assert.deepEqual(parseCodexHook({ ...hook, tool_input: { command } }, time, data.env), []);
+    const unrecognized = parseCodexHook({ ...hook, tool_input: { command } }, time, data.env);
+    assert.deepEqual(unrecognized.map((fact) => fact.evidence.kind), ["tool-coverage"]);
   }
   assert.deepEqual(parseCodexHook({ ...hook, tool_response: { output: "exit code 0" } }, time), []);
   assert.deepEqual(parseCodexHook({ ...hook, tool_response: { exit_code: null, session_id: 42 } }, time), []);

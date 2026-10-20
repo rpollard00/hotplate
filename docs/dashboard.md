@@ -8,7 +8,17 @@ The dashboard shows recorded skill and file evidence, plus session paths. It doe
 
 ## Metrics
 
-Skills is the default Content. Select a Measure to show successful reads, skill uses, read failures, native invocations, invocation failures, read attempts, requests, or wrappers. Native invocations counts successful invocations. Read attempts remain unconfirmed.
+**Both** is the default Content, and **Tool activity** is the default Measure.
+This view includes skill entrypoints, supporting files, and native skill invocations.
+Tool activity counts confirmed reads, inferred reads, attempts, read failures, and successful or failed native invocations.
+It excludes filesystem events, requests, wrappers, and catalog discovery.
+
+Select **Confirmed reads** to show successful structured read results.
+Select **Inferred reads** to show recognized literal read commands with successful tool outcomes.
+**Read attempts** have no confirmed read outcome. Each measure keeps those distinctions visible.
+
+Skills retains its legacy measures, including **Successful reads** and **Skill uses**.
+Native invocations counts successful invocations. Invocation failures remain separate.
 
 Split by selects Skill / total ranking, Agent, Model, or Agent + model. The trend stacks counts for the selected measure. The comparison shows a total ranking or a matrix. Matrix columns contain observed cohorts, including Unknown model and No model attribution where applicable. It never constructs all possible agent/model combinations.
 
@@ -20,7 +30,9 @@ Skill names retain their exact recorded form, including plugin prefixes. This ch
 
 The unit for session share is one host session on one machine and account source. Records without a session use their segment identity. Claude Code subagents share their parent session. OpenCode subagents use child sessions.
 
-The default trend shows successful reads for five skills. Open Skills to search exact names and add or remove layers. Custom names survive refreshes and filter changes without substitution. Each name keeps its color while the page remains open. Agent, Model, and Agent + model show all observed series. Exact counts follow in View activity data, with 24 intervals per page. Undated evidence stays in the comparison and is omitted from the trend.
+The default trend shows tool activity for the top five items.
+In Skills, the default trend shows successful reads for five skills.
+Open Skills to search exact names and add or remove layers. Custom names survive refreshes and filter changes without substitution. Each name keeps its color while the page remains open. Agent, Model, and Agent + model show all observed series. Exact counts follow in View activity data, with 24 intervals per page. Undated evidence stays in the comparison and is omitted from the trend.
 
 Legend counts total the displayed range, or the selected dates after a selection. Pointer hover and keyboard inspection temporarily show one interval. Leaving inspection restores range totals. The readout names the scope for these counts.
 
@@ -30,9 +42,23 @@ Select Resources to compare activity on all tracked files, including `SKILL.md`.
 
 Both counts a mirrored native skill read and resource read once. Independent filesystem opens and accesses remain separate evidence. Resources retains the original file observations. Equal file or skill names do not merge physical locations.
 
-Recorded activity is the default measure in these views. It includes failures, attempts, and filesystem events. Specific measures separate successful reads, read failures, read attempts, filesystem opens, and filesystem accesses. Both also offers the skill evidence measures. Session share remains available only in Skills. Each content mode remembers its measure.
+**Tool activity** is the default measure in these views. Repeated operations count separately.
+**All recorded activity** retains the diagnostic total, including filesystem events, requests, and wrappers.
+Catalog polling can appear in filesystem events without an agent tool read.
+**Filesystem opens** and **Filesystem accesses** remain separate diagnostic measures.
+Both also offers the skill evidence measures. Session share remains available only in Skills. Each content mode remembers its measure.
 
 Search matches file paths and owner names. A matching supporting file appears under its owner. Pagination keeps parents with their children. Select a count to see that cell's evidence breakdown, physical location, attribution, and first/latest evidence timestamps. These details do not invent a skill session path for filesystem activity.
+
+File details show **Read portions**, with requested and reported returned portions in separate columns.
+Reported returned portions include their truncation state. Missing delivery information and content revision display **Unknown**.
+The summary groups equivalent reads and shows at most eight groups. An additional count reports reads omitted from this portion summary.
+Parent rows direct you to the individual files for portion details.
+
+**Tool coverage** shows observed operations, recognized operations, unresolved file access, unknown outcomes, and failed operations.
+It follows the selected scope and dates.
+Opaque operations have no resolved file target and do not create resource rows.
+Historical reads can lack coverage records. Coverage does not establish that all reads were captured.
 
 Only files with matching activity enter the main comparison. The Resources workspace retains inventory-only files and observation coverage. Zero recorded events do not establish that a file was unused.
 
@@ -58,7 +84,9 @@ Agent, Model, and Period remain visible in every workspace. Select All agents or
 
 The slicers allow observed agent/model combinations in the current machine, project, source, and date context. Incompatible options are disabled. A selection that becomes unavailable stays visible until you clear it or broaden the scope. Changing an agent or model preserves the project.
 
-More filters contains machine, project, command source, and custom UTC dates. Source applies to requests only. The summary shows applied restrictions. Last 7 days is the default. Refresh recalculates relative periods and keeps custom UTC dates fixed. Reset restores Last 7 days, successful reads, the total ranking, and the top five trends. Select All time to recover older records.
+More filters contains machine, project, command source, and custom UTC dates. Source applies to requests only. The summary shows applied restrictions. Last 7 days is the default. Refresh recalculates relative periods and keeps custom UTC dates fixed.
+Reset restores Last 7 days, Both, Tool activity, the total ranking, and the top five trends.
+Select All time to recover older records.
 
 Windows up to seven days use UTC hours. Longer windows use daily or adaptive bins without truncation. About this data remains available from every workspace.
 
@@ -72,8 +100,15 @@ npm run dashboard:preview
 
 Open the printed URL, normally `http://127.0.0.1:7346/?preview=1`.
 The preview uses synthetic data in a new temporary database. It does not use `HOTPLATE_DB` or change the default database.
-The fixture contains 21 days of skill activity, three projects, three named models, unknown model reads, failures, and capture gaps. Its latest hour includes Claude file activity, a mirrored entrypoint, supporting files, unowned files, and unknown attribution. Its sessions come from Pi, Claude Code, Codex, OpenCode v2, and untagged records.
+The fixture contains 21 days of skill activity, three projects, three named models, unknown model reads, failures, and capture gaps.
+Its latest hour includes Claude file reads, failures, attempts, and filesystem diagnostics.
+It also includes a mirrored entrypoint, supporting files, unowned files, and unknown attribution.
+Its sessions come from Pi, Claude Code, Codex, OpenCode v2, and untagged records.
 Model counts in this fixture are examples, not measured comparisons.
+
+The separate `toolActivityFixture` export in `scripts/dashboard-fixture.mjs` supplies deterministic tool-capture evidence.
+It includes inferred reads, requested and returned portions, opaque coverage, and a filesystem-event flood.
+The default preview does not include that fixture.
 
 Press Ctrl+C to stop the server and remove its temporary database.
 If the process stops without cleanup, its data remains in the printed temporary directory.
@@ -106,7 +141,12 @@ A larger controlled response checks bounded rendering. It is not a production st
 
 ## What the evidence means
 
-- A successful read means a tool read `SKILL.md` successfully. It does not prove that the model followed the instructions.
+- A confirmed read means a structured file-read tool reported success. It does not prove that the model followed the instructions.
+- An inferred read means a recognized literal read command had a successful tool outcome. Its delivered content can remain unknown.
+- A read attempt identifies a file target without a confirmed read outcome.
+- A requested portion does not establish what the tool returned.
+- An opaque operation has unresolved file access. It is not evidence of a read of a particular skill.
+- A filesystem event can result from catalog polling or a background loader.
 - A request means a skill command was recorded. It does not prove a successful load.
 - A wrapper means skill content appeared in the input. It has no model attribution.
 - A failed read is a read error, not a missed opportunity.
@@ -115,6 +155,7 @@ A larger controlled response checks bounded rendering. It is not a production st
 - A gap interrupts the path. It represents filtered or lost records.
 
 Hotplate does not capture task outcomes, expected skill choices, causal parent-skill links, or agent identities. Miss rates and usefulness scores require those signals.
-Model comparisons use attributed read results, native invocations, and read attempts. Unknown models remain separate from records without model attribution.
+Model comparisons use the selected evidence measure. Unknown models remain separate from records without model attribution.
+Zero tool activity does not prove that a file is unused, especially when operations or delivery information remain unresolved.
 
 The dashboard is read-only. Its filters are not access controls. Skills retains its filtered report for local exploration. Resource and combined analytics send aggregate bins, rows, and cohort counts; raw resource history stays on the server.

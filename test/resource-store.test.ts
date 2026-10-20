@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import type { Observation } from "../src/domain.js";
 import type { InventorySnapshotEvidence, ResourceAccessEvidence, ResourceEvidence, ResourceLocation } from "../src/resource-domain.js";
-import { parseCollectorOrigin, parseMachineId, parseSourceId } from "../src/observation.js";
+import { isResourceEvidence, parseCollectorOrigin, parseMachineId, parseSourceId } from "../src/observation.js";
 import { openAggregateStore, openCaptureStore, openHotplateReadStore, openHotplateStore, openRelayStore } from "../src/store.js";
 
 const root = "/skills";
@@ -20,7 +20,9 @@ function observation(id: string, evidence: ResourceEvidence, second = 0): Observ
     scope: { projectCwd: "/project", sessionId: "session", sessionFile: null, segmentId: "segment", segmentReason: "unknown", runId: null, turnId: null, leafId: null }, evidence };
 }
 function access(resource: ResourceLocation, overrides: Partial<ResourceAccessEvidence> = {}): ResourceAccessEvidence {
-  return { kind: "resource-access", resource, operationId: "tool-operation", mechanism: "host-tool", access: "read", outcome: "success", model: null, process: null, attribution: "session", ...overrides };
+  const evidence = { kind: "resource-access", resource, operationId: "tool-operation", mechanism: "host-tool", access: "read", outcome: "success", model: null, process: null, attribution: "session", ...overrides };
+  assert.ok(isResourceEvidence(evidence) && evidence.kind === "resource-access");
+  return evidence;
 }
 function scan(scanId: string, phase: "started" | "complete" | "incomplete", second: number, batchCount = 0): Observation {
   const base = { kind: "inventory-snapshot", scanId, filesystemId, rootPath: root, origin: "configured", scope: "project" } satisfies Partial<InventorySnapshotEvidence>;

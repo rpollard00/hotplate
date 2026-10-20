@@ -2,6 +2,13 @@
 
 Hotplate inventories and observes selected installed or project skill content without Skills Explorer or an index. References, principles, scripts, hidden artifacts, and files without a `SKILL.md` owner are eligible. Labels come from paths and nearby skill markers. Inventory reads filenames and metadata, without document bodies.
 
+Agent tool capture is the primary source for skill and reference activity. It operates without a filesystem watcher.
+Structured reads and recognized literal commands can identify supporting files even when the agent does not read their `SKILL.md`.
+The [integration guide](integrations.md#supported-tool-reads) lists the supported syntax and host limits.
+
+Filesystem observation remains a separate diagnostic source. Catalog polling and background loaders can open files without an agent tool read.
+Neither a filesystem event nor frontmatter in context establishes that the agent used the instructions.
+
 ## Configure roots
 
 Hotplate discovers installed account collections, exact host advertisements, and explicitly configured content roots. The watcher does not infer project scope from its working directory or home directory. A session supplies its host and project boundary for project discovery.
@@ -63,7 +70,7 @@ Preview does not open a database, recorder, or lease. It does not start a servic
 
 Scans record filenames and metadata, including incomplete scans. They do not count as reads. Periodic scans detect additions and deletions; incomplete scans do not assert that missing files were deleted. Symlink aliases retain the physical location identity. Copies at different locations remain separate resources.
 
-## Observe filesystem access on Linux
+## Optional filesystem diagnostics on Linux
 
 From this checkout, activate a watcher for your account:
 
@@ -77,7 +84,8 @@ The script builds Hotplate and the helper. Only helper installation and capabili
 
 The service retains the current account selection and resource overrides, including `HOTPLATE_CONFIG`, `HOTPLATE_DB`, and `HOTPLATE_INTEGRATION_SETTINGS`. Path overrides must be absolute. The script refuses disabled capture or an unrelated service with the same name. Its final output includes service and coverage state. Active fanotify coverage confirms observation. A running service alone does not.
 
-For service errors, use `journalctl --user -u hotplate-resources.service`. Rerun `hotplate resources status` after the initial inventory finishes. To stop collection, use `systemctl --user disable --now hotplate-resources.service`.
+For service errors, use `journalctl --user -u hotplate-resources.service`. Rerun `hotplate resources status` after the initial inventory finishes.
+To stop this service, use the [deactivation script](#deactivate-the-filesystem-watcher).
 
 For a foreground watcher, build the optional native helper with a C compiler:
 
@@ -95,11 +103,33 @@ Linux fanotify needs `CAP_SYS_ADMIN` for the process-attributed notification mod
 
 The helper uses filesystem-wide `FAN_MARK_FILESYSTEM` subscriptions. Inventory detects nested filesystems within admitted content and supplies their paths for additional marks. These paths retain the original content boundary and inventory membership. The helper filters selected roots and exclusions before process attribution and IPC. TypeScript checks each received path against the same admission policy. The helper does not intercept permission decisions or read file contents.
 
-The private helper protocol requires a complete version-1 scope policy on stdin and a `scopeVersion: 1` readiness acknowledgement. Invalid, oversized, or incomplete policies fail before subscriptions start. Older helpers cannot establish active coverage. After this update, reinstall the helper with `scripts/activate-watcher`.
+The private helper protocol requires a complete version-1 scope policy on stdin and a `scopeVersion: 1` readiness acknowledgement. Invalid, oversized, or incomplete policies fail before subscriptions start. Older helpers cannot establish active coverage.
+To retain filesystem diagnostics with an older helper, reinstall it with `scripts/activate-watcher`.
 
 Hotplate records filesystem `open` and `access` evidence separately from successful host-tool reads. Filesystem notifications can coalesce, and memory-mapped or cached content can produce no access event. Hotplate does not claim to observe all model consumption.
 
 Run the watcher under a process supervisor for continuous collection. It retries a failed helper on the next reconciliation. Stopping it with SIGINT or SIGTERM drains received notifications and records a graceful stop. Confirmed coverage ends at the last active heartbeat, not the later stop record. Abrupt termination becomes stale after the heartbeat window; Hotplate cannot count every event lost during a crash.
+
+## Deactivate the filesystem watcher
+
+Run the script from this checkout as the capturing Linux account, without `sudo`:
+
+```sh
+scripts/deactivate-watcher
+```
+
+The script requires a systemd user manager. It verifies the unit path and ownership marker installed by `scripts/activate-watcher`.
+It stops and disables `hotplate-resources.service`, then verifies both states.
+An already disabled managed service or an absent inactive service permits another run.
+An unrelated or symlinked unit produces a refusal.
+
+The script preserves the service unit, installed helper, resource configuration, saved roots, and captured history.
+It leaves `hotplate-relay.service` and native agent integrations running.
+Foreground watchers and custom services remain outside its scope.
+Stopping this service also stops its periodic inventory scans. Manual `resources scan` remains available.
+
+Historical filesystem events remain in the database. The default **Tool activity** measure excludes them.
+After deactivation, filesystem coverage ends. Missing tool reads still do not establish that a file is unused.
 
 ## Attribution through T3 and wrappers
 
@@ -111,10 +141,23 @@ Codex and OpenCode can share a runtime across conversations. Their filesystem ob
 
 ## Read the results
 
-The Resources dashboard and `resources list` separate attempts, successful or failed tool reads, filesystem opens and accesses, and attribution. Resource identity includes the account source and filesystem namespace. Names, content hashes, and Explorer metadata do not merge locations.
+The default Metrics view shows **Both** skills and resources with **Tool activity**.
+It includes confirmed reads, inferred command reads, attempts, read failures, and native invocations.
+The Resources workspace and `resources list` also retain filesystem diagnostics and inventory.
+Resource identity includes the account source and filesystem namespace. Names, content hashes, and Explorer metadata do not merge locations.
+
+File details separate requested portions from reported returned portions and truncation.
+Unreported delivery and content revision remain unknown. Hotplate does not reopen a file to infer either value.
+**Tool coverage** reports recognized and opaque operations separately from file counts.
+An opaque operation has unresolved file access and creates no invented resource row.
+Coverage counts describe observed operations. They do not establish that every agent read was captured.
 
 "No observed access" requires an inventoried file and a confirmed filesystem observation interval. The result includes that interval. Missing, stale, failed, or ambiguous coverage remains unknown. A file with zero recorded reads is not automatically unused.
 
-Resource events, inventory, and coverage use protocol version 3. Upgrade the aggregate before enabling new producers. Existing version-1 and version-2 payloads remain unchanged. An older receiver cannot accept the new evidence; pending deliveries remain in the existing backlog until a compatible receiver is available.
+Upgrade the aggregate before enabling updated producers.
+New tool-read metadata, inferred reads, and tool coverage use protocol version 4.
+Schema version 7 adds storage for tool coverage.
+Existing version-1, version-2, and version-3 payloads and their canonical digests remain unchanged.
+An older receiver cannot accept the new evidence. Pending deliveries remain in the backlog until a compatible receiver is available.
 
 Skills Explorer is not required for any of these operations. A future annotation importer can add its relationships without changing the capture or inventory contract.

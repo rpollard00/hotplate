@@ -11,7 +11,7 @@ A metadata-only fact from a live coding-agent session, filesystem observer, or i
 The coding-agent integration that produced an observation. OpenCode v1 and OpenCode v2 are separate hosts, distinct from machine, account source, and model provider.
 
 **Evidence**:
-The reason for an observation: command intent, observed wrapper, read attempt, read result, native skill invocation, catalog snapshot, capture gap, resource access, inventory snapshot, or observer coverage.
+The recorded basis for a skill-use claim, content availability, or capture coverage. Evidence types retain their distinct meaning and strength.
 
 **Resource**:
 A file location in selected installed or project skill content, including support files without a skill owner. Its identity includes the account source, filesystem namespace, and canonical path.
@@ -26,10 +26,19 @@ A logical installation path that selects an exact physical content subtree. Mult
 The reported project or nearest repository or worktree boundary that limits a host's project skill discovery.
 
 **Resource access**:
-Evidence that a host tool attempted or completed a read, or that the filesystem reported an open or access. These evidence kinds remain separate. An access does not prove that a model received or followed the contents.
+Evidence of a structured read, an inferred command read, a read attempt, or a filesystem open or access. It does not prove model consumption.
+
+**Tool activity**:
+Recorded confirmed reads, inferred reads, read attempts, read failures, and native skill invocations with their outcomes. It excludes filesystem events, catalog discovery, command intents, and wrappers.
 
 **Recorded activity**:
-Evidence occurrences across the selected content, including successful reads, attempts, failures, filesystem events, native invocations, requests, and wrappers. Mirrored skill and resource facts count once in Both; the total does not measure unique content consumption or usefulness.
+Evidence occurrences across selected content, including tool activity, filesystem events, requests, and wrappers. Mirrored skill and resource facts represent one occurrence, not unique content consumption.
+
+**Tool coverage**:
+A record of an observed operation, its known outcome, and whether its file targets can be resolved. It does not establish complete capture.
+
+**Opaque operation**:
+An observed tool operation whose file access remains unresolved. It is not evidence of a read of a particular skill or reference.
 
 **Owning skill**:
 The physical skill entrypoint associated with a supporting file, identified by machine, account source, filesystem namespace, and canonical path. Equal skill names do not establish shared ownership.
@@ -81,8 +90,20 @@ A skill wrapper found after Pi input handling. It can come from slash expansion,
 **Read result**:
 A `SKILL.md` read by a tool call. Successful and failed reads are separate facts.
 
+**Confirmed read**:
+A successful result from a structured file-read tool. It does not prove that the model followed the file's instructions.
+
+**Inferred read**:
+A recognized literal read command with a successful tool outcome. Its returned content can remain unknown.
+
 **Read attempt**:
-A tool call that attempts to read `SKILL.md` without an observable success or failure outcome. It does not contribute to successful-read counts.
+A tool call with a known file target but an unconfirmed read outcome. It does not contribute to confirmed or inferred reads.
+
+**Requested portion**:
+The whole file or line range requested by a tool call. It does not establish what the tool returned.
+
+**Returned portion**:
+The whole file or line range reported by a successful tool result, with its reported truncation state. Missing delivery information remains unknown.
 
 **Native skill invocation**:
 A host's native skill tool invocation with its observed outcome. It is distinct from a file read and does not contribute to successful-read counts.

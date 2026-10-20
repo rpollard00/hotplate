@@ -4,6 +4,20 @@ import { startDashboardPreview } from "./dashboard-preview.mjs";
 import { openHotplateStore } from "../dist/src/store.js";
 
 const preview = await startDashboardPreview();
+const expectedResources = [
+  ["skill", "/preview/skills/mako/SKILL.md"],
+  ["reference", "/preview/skills/mako/playbooks/feature.md"],
+  ["reference", "/preview/skills/mako/references/execution.md"],
+  ["reference", "/preview/skills/mako/references/unavailable.md"],
+  ["reference", "/preview/skills/owner-with-only-supporting-activity/references/a-long-reference-name-for-responsive-layout-verification.md"],
+  ["skill", "/preview/skills/second-owner/SKILL.md"],
+  ["reference", "/preview/skills/shared/standalone-reference.md"],
+  ["reference", "/preview/skills/shared/unknown-access.md"],
+  ["reference", "/synthetic/skills/reference.md"],
+  ["skill", "/synthetic/skills/skill.md"],
+];
+const expectedPaths = expectedResources.map(([, path]) => path).sort();
+const expectedReferencePaths = expectedResources.filter(([kind]) => kind === "reference").map(([, path]) => path).sort();
 try {
   const store = openHotplateStore({ databasePath: preview.databasePath });
   try {
@@ -16,6 +30,7 @@ try {
     assert.equal((await store.record(observations)).accepted, 2);
   } finally { await store.close(); }
   const payload = await fetch(new URL("/api/dashboard", preview.url)).then(response => response.json());
+  assert.deepEqual(payload.resources.rows.map(row => [row.resource.kind, row.resource.canonicalPath]).sort(), expectedResources.toSorted());
   await withBrowser(async ({ command, evaluate, until, errors }) => {
     const ready = 'document.getElementById("status-text").textContent === "Ready"';
     const resourcesReady = ready + ' && !document.getElementById("resources-workspace").hidden';
@@ -23,6 +38,7 @@ try {
     const change = (id, value, event = "change") => evaluate(`document.getElementById(${JSON.stringify(id)}).value = ${JSON.stringify(value)}; document.getElementById(${JSON.stringify(id)}).dispatchEvent(new Event(${JSON.stringify(event)}));`);
     const scopes = () => evaluate('window.dashboardRequests.map(value => new URL(value, location.href).searchParams.get("scope"))');
     const rowCount = () => evaluate('document.querySelectorAll("#resource-table tbody tr").length');
+    const rowPaths = () => evaluate('Array.from(document.querySelectorAll("#resource-table tbody tr .resource-path"), item => item.textContent).sort()');
     await command("Page.addScriptToEvaluateOnNewDocument", { source: `
       window.dashboardRequests = [];
       const originalFetch = window.fetch;
@@ -31,7 +47,7 @@ try {
         return originalFetch(input, init);
       };
     ` });
-    await command("Page.navigate", { url: preview.url }); await until(ready);
+    await command("Page.navigate", { url: preview.url }); await until(ready); await change("metric-content", "skills");
     assert.deepEqual(await scopes(), ["skills"], "Startup requests skills only");
     assert.equal(await rowCount(), 0, "Startup does not render hidden Resources");
     await click('[data-workspace="paths"]'); await click('[data-workspace="metrics"]');
@@ -42,11 +58,11 @@ try {
     assert.deepEqual(await scopes(), ["skills", "resources"]);
     const initialParams = await evaluate('window.dashboardRequests.map(value => { const params = new URL(value, location.href).searchParams; params.delete("scope"); return params.toString(); })');
     assert.equal(initialParams[0], initialParams[1], "Lazy Resources retains the exact original date selection");
-    assert.equal(await rowCount(), 2);
+    assert.deepEqual(await rowPaths(), expectedPaths, "Resources includes the eight preview files and both lazy-loading fixture files");
     await change("resource-kind", "reference");
     await click("#resource-table summary");
     await click('[data-workspace="metrics"]'); await click('[data-workspace="resources"]');
-    assert.equal(await rowCount(), 1);
+    assert.deepEqual(await rowPaths(), expectedReferencePaths, "The reference filter retains exactly the six preview references and one lazy-loading reference");
     assert.equal(await evaluate('document.getElementById("resource-kind").value'), "reference");
     assert.equal(await evaluate('document.querySelector("#resource-table details").open'), true, "Tab returns retain local DOM state");
     assert.deepEqual(await scopes(), ["skills", "resources"], "Local filters and tab returns do not fetch");
@@ -75,7 +91,7 @@ try {
     await click('[data-workspace="resources"]'); await click('[data-workspace="resources"]');
     assert.equal(await queued(), pending + 1, "Repeated Resource clicks share one pending request");
     await click('[data-workspace="metrics"]'); await until(ready);
-    await respond(pending); assert.equal(await rowCount(), 2);
+    await respond(pending); assert.deepEqual(await rowPaths(), expectedPaths);
     assert.equal(await evaluate('document.getElementById("resources-workspace").hidden'), true);
     assert.equal(await evaluate('document.getElementById("workspace").getAttribute("aria-busy")'), "false");
     await click('[data-workspace="resources"]'); await until(resourcesReady);
@@ -115,11 +131,13 @@ try {
     await click('[data-workspace="resources"]'); await waitQueued(oldResources + 1);
     await click('#refresh-data'); await waitQueued(oldResources + 2);
     await respond(oldResources + 1, currentPayload); await waitQueued(oldResources + 3);
-    const oneResource = { ...currentPayload, resources: { rows: payload.resources.rows.slice(0, 1) } };
+    const selectedResource = payload.resources.rows.find(row => row.resource.canonicalPath === "/synthetic/skills/reference.md");
+    assert.ok(selectedResource);
+    const oneResource = { ...currentPayload, resources: { rows: [selectedResource] } };
     await respond(oldResources + 2, oneResource); await until(resourcesReady);
-    assert.equal(await rowCount(), 1);
+    assert.deepEqual(await rowPaths(), [selectedResource.resource.canonicalPath]);
     await respond(oldResources, payload);
-    assert.equal(await rowCount(), 1, "An older resource response cannot replace current rows");
+    assert.deepEqual(await rowPaths(), [selectedResource.resource.canonicalPath], "An older resource response cannot replace current rows");
     assert.equal(await evaluate(`window.pendingDashboardRequests[${oldResources}].signal.aborted`), true);
 
     await click('[data-workspace="metrics"]');

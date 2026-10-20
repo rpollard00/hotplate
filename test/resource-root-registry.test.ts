@@ -139,7 +139,7 @@ test("cross-project discovery enables global inventory and reads without inventi
     }
     const facts = parseClaudeCodeHook({ hook_event_name: "PostToolUse", session_id: "session-a", cwd: projectA,
       tool_use_id: "cross-project-read", tool_name: "Read", tool_input: { file_path: path } }, new Date(now + 500).toISOString(), data.env);
-    assert.equal(facts.length, 1);
+    assert.deepEqual(facts.map(fact => fact.evidence.kind), ["resource-access", "tool-coverage"]);
     for (const fact of facts) await captureFact({ fact, env: data.env });
     const read = (await store.queryResources({ projectCwd: projectA, sessionId: "session-a", toObservedAt: end })).rows[0];
     assert.equal(read?.successfulReadCount, 1);

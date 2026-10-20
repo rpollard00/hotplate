@@ -5,8 +5,8 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { contentMeasures, isContentMeasure, type ContentQuery, type ContentReport } from "../src/content-analytics.js";
 import type { Evidence, Observation } from "../src/domain.js";
-import type { ResourceAccessEvidence, ResourceLocation } from "../src/resource-domain.js";
-import { parseMachineId, parseSourceId } from "../src/observation.js";
+import type { ResourceAccessEvidence, ResourceLocation, ToolCoverageEvidence } from "../src/resource-domain.js";
+import { parseMachineId, parseObservation, parseSourceId } from "../src/observation.js";
 import { openAggregateStore, openHotplateReadStore, openHotplateStore } from "../src/store.js";
 
 const start = Date.parse("2026-10-20T01:00:00.000Z");
@@ -19,7 +19,12 @@ function location(path = skill.canonicalPath, overrides: Partial<ResourceLocatio
   return { filesystemId: "mount-one", canonicalPath: path, observedPath: path, rootPath: "/skills", kind: path.endsWith("SKILL.md") ? "skill" : "reference", ownerSkillPath: skill.canonicalPath, ...overrides };
 }
 function access(path = skill.canonicalPath, overrides: Partial<ResourceAccessEvidence> = {}): ResourceAccessEvidence {
-  return { kind: "resource-access", resource: location(path), operationId: "operation", mechanism: "host-tool", access: "read", outcome: "success", model, process: null, attribution: "session", ...overrides };
+  const parsed = parseObservation({ ...fact("fixture", read()), evidence: {
+    kind: "resource-access", resource: location(path), operationId: "operation", mechanism: "host-tool",
+    access: "read", outcome: "success", model, process: null, attribution: "session", ...overrides,
+  } }).evidence;
+  assert.ok(parsed.kind === "resource-access");
+  return parsed;
 }
 function read(operation = "operation"): Extract<Evidence, { kind: "read-result" }> {
   return { kind: "read-result", skill, toolCallId: operation, outcome: "success", model };
@@ -40,7 +45,7 @@ function conserved(report: ContentReport): void {
     assert.equal(row.cells.reduce((sum, cell) => sum + cell.count, 0), row.count);
     if (row.identity.kind === "owner") {
       assert.equal(row.children.reduce((sum, child) => sum + child.count, 0), row.count);
-      for (const key of Object.keys(row.counts)) if (isContentMeasure(key) && key !== "activity") {
+      for (const key of Object.keys(row.counts)) if (isContentMeasure(key) && key !== "activity" && key !== "toolActivity") {
         assert.equal(row.children.reduce((sum, child) => sum + child.counts[key], 0), row.counts[key]);
       }
     }
@@ -63,11 +68,11 @@ test("content measures conserve disjoint evidence and group support-only owners 
       fact("support-only", access("/skills/other/references/support.md", { operationId: "support", resource: location("/skills/other/references/support.md", { ownerSkillPath: "/skills/other/SKILL.md" }) })),
       fact("inventory", { kind: "inventory-snapshot", scanId: "inventory", filesystemId: "mount-one", rootPath: "/skills", origin: "configured", scope: "account", phase: "batch", batchIndex: 0, resources: [location("/skills/inventory-only.md", { ownerSkillPath: null })], error: null }),
     ]);
-    const expected = { successfulReads: 2, failedReads: 1, readAttempts: 1, fsOpens: 1, fsAccesses: 1, invocations: 1, invocationFailures: 1, requests: 1, wrappers: 1 };
+    const expected = { successfulReads: 2, inferredReads: 0, failedReads: 1, readAttempts: 1, fsOpens: 1, fsAccesses: 1, invocations: 1, invocationFailures: 1, requests: 1, wrappers: 1 };
     for (const measure of Object.keys(contentMeasures)) if (isContentMeasure(measure)) for (const split of ["item", "agent", "model", "agent-model"] as const) {
       const result = await store.queryContentAnalytics({ ...query, measure, split });
       assert.deepEqual(result.overall.counts, expected);
-      assert.equal(result.overall.count, measure === "activity" ? 10 : expected[measure]);
+      assert.equal(result.overall.count, measure === "activity" ? 10 : measure === "toolActivity" ? 6 : expected[measure]);
       conserved(result);
       const owner = result.selection.rows.find(row => row.identity.kind === "owner" && row.identity.location.canonicalPath === skill.canonicalPath);
       assert.ok(owner); assert.equal(owner.counts.fsOpens, 1); assert.equal(owner.counts.failedReads, 1);
@@ -211,5 +216,119 @@ test("unowned filesystem candidates prevent ambiguous legacy ownership", async (
     assert.equal(result.selection.rows.length, 3); conserved(result);
     assert.equal(result.selection.rows.find(row => row.identity.kind === "skill")?.counts.wrappers, 1);
     assert.equal(result.selection.rows.find(row => row.identity.kind === "owner")?.counts.wrappers, 0);
+  } finally { await store.close(); }
+});
+
+test("tool activity excludes filesystem floods and input context without hiding inferred reads or unknown outcomes", async () => {
+  const store = openHotplateStore({ databasePath: ":memory:" });
+  const toolQuery: ContentQuery = { ...query, measure: "toolActivity", split: "agent" };
+  try {
+    await store.record([
+      fact("legacy", read()), fact("mirror", access(), 1),
+      fact("inferred", access("/skills/support/references/only.md", { operationId: "inferred", access: "inferred-read",
+        toolRead: { kind: "literal-command", requested: { kind: "whole" }, delivery: { kind: "unknown" }, revision: { kind: "unknown" } },
+        resource: location("/skills/support/references/only.md", { ownerSkillPath: "/skills/support/SKILL.md" }) }), 2000),
+      fact("attempt", access("/skills/mako/references/attempt.md", { operationId: "attempt", access: "attempt", outcome: "unknown", model: null }), 3000, { host: "codex" }),
+      fact("failure", access("/skills/mako/references/error.md", { operationId: "failure", outcome: "error" }), 4000),
+      fact("invoke", { kind: "skill-invocation", skill: { ...skill, canonicalPath: null }, toolCallId: "invoke", outcome: "success", model }, 5000),
+      fact("request", { kind: "command-intent", skillName: "context-only", source: "rpc" }),
+      fact("wrapper", { kind: "wrapper-observed", skill: { ...skill, name: "context-only" }, wrapperSource: "expanded-prompt" }),
+    ]);
+    const before = await store.queryContentAnalytics(toolQuery);
+    assert.equal(before.overall.count, 5);
+    assert.equal(before.overall.counts.successfulReads, 1);
+    assert.equal(before.overall.counts.inferredReads, 1);
+    assert.equal(before.overall.counts.readAttempts, 1);
+    assert.equal(before.selection.series.find(series => series.host === "codex")?.count, 1);
+    assert.ok(before.selection.rows.some(row => row.identity.kind === "owner" && row.label === "support" && row.count === 1));
+    await store.record(Array.from({ length: 120 }, (_, index) => fact(`poll-${index}`, access("/skills/polling/SKILL.md", {
+      resource: location("/skills/polling/SKILL.md", { ownerSkillPath: "/skills/polling/SKILL.md" }),
+      operationId: `poll-${index}`, mechanism: "fanotify", access: index % 2 ? "access" : "open", outcome: "unknown", model: null, attribution: "harness",
+    }), (index - 60) * 86_400_000, { host: "pi" })));
+    const after = await store.queryContentAnalytics(toolQuery);
+    assert.equal(after.overall.count, before.overall.count);
+    assert.equal(after.overall.firstEvidenceAt, before.overall.firstEvidenceAt);
+    assert.equal(after.overall.lastEvidenceAt, before.overall.lastEvidenceAt);
+    assert.deepEqual(after.displayed.activity, before.displayed.activity);
+    assert.deepEqual(after.selection.rows.filter(row => row.count).map(row => [row.key, row.count]), before.selection.rows.filter(row => row.count).map(row => [row.key, row.count]));
+    assert.deepEqual(after.filterOptions, before.filterOptions);
+    assert.deepEqual(after.coverage, before.coverage);
+    assert.equal(after.coverage.completeness, "unknown");
+    assert.equal(after.coverage.overall.observedOperations, 0);
+    conserved(after);
+    assert.equal((await store.queryContentAnalytics(query)).overall.count, 127);
+    assert.equal((await store.queryContentAnalytics({ ...query, measure: "fsOpens" })).overall.count, 60);
+    assert.equal((await store.queryContentAnalytics({ ...query, measure: "fsAccesses" })).overall.count, 60);
+  } finally { await store.close(); }
+});
+
+test("operation coverage is scoped, deduplicated, and never creates resource rows", async () => {
+  const store = openHotplateStore({ databasePath: ":memory:" });
+  const coverage = (operationId: string, recognition: ToolCoverageEvidence["recognition"], overrides: Partial<ToolCoverageEvidence> = {}): ToolCoverageEvidence => ({
+    kind: "tool-coverage", operationId, family: "shell", outcome: "unknown", recognition, model, ...overrides,
+  });
+  const toolQuery: ContentQuery = { ...query, measure: "toolActivity" };
+  try {
+    await store.record([
+      fact("recognized", coverage("recognized", { kind: "recognized", resourceCount: 2 }, { outcome: "success" }), 0),
+      fact("duplicate", coverage("recognized", { kind: "recognized", resourceCount: 2 }, { outcome: "success" }), 0),
+      fact("opaque", coverage("opaque", { kind: "opaque", reason: "unsupported-syntax" }), 1),
+      fact("failed", coverage("failed", { kind: "opaque", reason: "missing-input" }, { outcome: "error", model: null }), 2, { host: "codex" }),
+      fact("other-model", coverage("other-model", { kind: "opaque", reason: "limit" }, { model: { provider: "two", id: "shared" } }), 3),
+      fact("undated", coverage("undated", { kind: "opaque", reason: "unsupported-tool" }), 0, { observedAt: "undated" }),
+    ]);
+    const report = await store.queryContentAnalytics(toolQuery);
+    assert.equal(report.overall.count, 0);
+    assert.deepEqual(report.selection.rows, []);
+    assert.deepEqual(report.displayed.activity, { kind: "empty", timezone: "UTC" });
+    assert.partialDeepStrictEqual(report.coverage, {
+      completeness: "unknown",
+      overall: { observedOperations: 5, recognizedOperations: 1, opaqueOperations: 4, recognizedResources: 2, undatedOperations: 1, outcomes: { success: 1, error: 1, unknown: 3 } },
+      displayed: { observedOperations: 4, undatedOperations: 0 },
+    });
+    assert.equal(report.filterOptions.agentModelPairs.length, 3);
+    const exact = await store.queryContentAnalytics({ ...toolQuery, filter: { host: "claude-code", modelSelection: { kind: "known", model }, fromObservedAt: at(0), toObservedAt: at(1) },
+      selection: { kind: "interval", startAt: at(0), endAt: at(1) } });
+    assert.equal(exact.coverage.overall.observedOperations, 2);
+    assert.equal(exact.coverage.selection.observedOperations, 1);
+    assert.equal(exact.coverage.selection.opaqueOperations, 0);
+    const unknown = await store.queryContentAnalytics({ ...toolQuery, filter: { host: "codex", modelSelection: { kind: "unknown" } } });
+    assert.equal(unknown.coverage.overall.observedOperations, 1);
+    assert.equal(unknown.coverage.overall.outcomes.error, 1);
+    const commandSource = await store.queryContentAnalytics({ ...toolQuery, filter: { source: "rpc" } });
+    assert.equal(commandSource.coverage.overall.observedOperations, 0);
+  } finally { await store.close(); }
+});
+
+test("per-file portions retain reported delivery, unknown metadata, and bounded summaries after mirror deduplication", async () => {
+  const store = openHotplateStore({ databasePath: ":memory:" });
+  const toolQuery: ContentQuery = { ...query, measure: "toolActivity", split: "agent" };
+  const revision = `sha256:${"a".repeat(64)}`;
+  try {
+    await store.record([
+      fact("legacy", read()),
+      fact("mirror", access(skill.canonicalPath, { toolRead: { kind: "structured-read", requested: { kind: "lines", start: 10, count: 20 },
+        delivery: { kind: "known", returned: { kind: "lines", start: 10, count: 5 }, truncated: true }, revision: { kind: "known", value: revision } } }), 1),
+      fact("unknown", access("/skills/mako/references/unknown.md", { operationId: "unknown", access: "attempt", outcome: "unknown" }), 2),
+      ...Array.from({ length: 10 }, (_, index) => fact(`range-${index}`, access("/skills/mako/references/ranges.md", { operationId: `range-${index}`,
+        access: "inferred-read", toolRead: { kind: "literal-command", requested: { kind: "lines", start: index + 1, count: null },
+          delivery: { kind: "unknown" }, revision: { kind: "unknown" } } }), index + 3)),
+    ]);
+    const report = await store.queryContentAnalytics(toolQuery);
+    const children = report.selection.rows.flatMap(row => row.children);
+    const entrypoint = children.find(row => row.identity.kind === "file" && row.identity.location.canonicalPath === skill.canonicalPath);
+    assert.ok(entrypoint);
+    assert.deepEqual(entrypoint.readDetails, { groups: [{
+      category: "successfulReads", count: 1, requested: { kind: "lines", start: 10, count: 20 },
+      delivery: { kind: "known", returned: { kind: "lines", start: 10, count: 5 }, truncated: true }, revision: { kind: "known", value: revision },
+    }], omittedCount: 0 });
+    assert.deepEqual(entrypoint.cells[0]?.readDetails, entrypoint.readDetails);
+    const unknown = children.find(row => row.label === "unknown.md");
+    assert.deepEqual(unknown?.readDetails.groups, [{ category: "readAttempts", count: 1, requested: { kind: "unknown" }, delivery: { kind: "unknown" }, revision: { kind: "unknown" } }]);
+    const ranges = children.find(row => row.label === "ranges.md");
+    assert.equal(ranges?.readDetails.groups.length, 8);
+    assert.equal(ranges?.readDetails.omittedCount, 2);
+    assert.equal(ranges?.count, 10);
+    conserved(report);
   } finally { await store.close(); }
 });

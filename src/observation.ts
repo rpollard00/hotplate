@@ -1,6 +1,6 @@
 import type { HostId, CaptureEnrollment, CollectorOrigin, Evidence, GapReason, InputSource, MachineId, ModelRef, Observation, SegmentReason, SkillRef, SourceId, SourceIdentity } from "./domain.js";
 import { posix, win32 } from "node:path";
-import type { ResourceEvidence, ResourceLocation } from "./resource-domain.js";
+import type { ReadDelivery, ReadPortion, ResourceEvidence, ResourceLocation, ToolReadMetadata } from "./resource-domain.js";
 
 export const LOCAL_MACHINE_ID = parseMachineId("local");
 export const LOCAL_SOURCE_ID = "local";
@@ -72,12 +72,31 @@ function copyEvidence(evidence: Evidence): Evidence {
     };
     case "catalog-snapshot": return { kind: evidence.kind, skills: Array.from(evidence.skills, copySkill) };
     case "capture-gap": return { kind: evidence.kind, dropped: evidence.dropped, reason: evidence.reason };
-    case "resource-access": return {
-      kind: evidence.kind, resource: copyResource(evidence.resource), operationId: evidence.operationId,
-      mechanism: evidence.mechanism, access: evidence.access, outcome: evidence.outcome,
+    case "resource-access": {
+      const base = {
+        kind: evidence.kind, resource: copyResource(evidence.resource), operationId: evidence.operationId,
+        mechanism: evidence.mechanism, access: evidence.access, outcome: evidence.outcome,
+        model: evidence.model === null ? null : { provider: evidence.model.provider, id: evidence.model.id },
+        process: evidence.process === null ? null : { bootId: evidence.process.bootId, pid: evidence.process.pid, startTicks: evidence.process.startTicks },
+        attribution: evidence.attribution,
+      };
+      if (evidence.mechanism === "fanotify") return { ...base, mechanism: evidence.mechanism, access: evidence.access, outcome: evidence.outcome };
+      const metadata = evidence.toolRead === undefined ? {} : { toolRead: copyToolRead(evidence.toolRead) };
+      switch (evidence.access) {
+        case "read": return { ...base, mechanism: evidence.mechanism, access: evidence.access, outcome: evidence.outcome,
+          ...(evidence.toolRead === undefined ? {} : { toolRead: { ...copyToolRead(evidence.toolRead), kind: "structured-read" } }) };
+        case "attempt": return { ...base, mechanism: evidence.mechanism, access: evidence.access, outcome: evidence.outcome, ...metadata };
+        case "inferred-read": return { ...base, mechanism: evidence.mechanism, access: evidence.access, outcome: evidence.outcome,
+          toolRead: { ...copyToolRead(evidence.toolRead), kind: "literal-command" } };
+        default: { const exhaustive: never = evidence; return exhaustive; }
+      }
+    }
+    case "tool-coverage": return {
+      kind: evidence.kind, operationId: evidence.operationId, family: evidence.family, outcome: evidence.outcome,
       model: evidence.model === null ? null : { provider: evidence.model.provider, id: evidence.model.id },
-      process: evidence.process === null ? null : { bootId: evidence.process.bootId, pid: evidence.process.pid, startTicks: evidence.process.startTicks },
-      attribution: evidence.attribution,
+      recognition: evidence.recognition.kind === "recognized"
+        ? { kind: evidence.recognition.kind, resourceCount: evidence.recognition.resourceCount }
+        : { kind: evidence.recognition.kind, reason: evidence.recognition.reason },
     };
     case "inventory-snapshot": {
       const base = { kind: evidence.kind, scanId: evidence.scanId, filesystemId: evidence.filesystemId, rootPath: evidence.rootPath, origin: evidence.origin, scope: evidence.scope };
@@ -96,6 +115,21 @@ function copyEvidence(evidence: Evidence): Evidence {
     }
     default: { const exhaustive: never = evidence; return exhaustive; }
   }
+}
+
+function copyPortion(portion: ReadPortion): ReadPortion {
+  return portion.kind === "lines" ? { kind: portion.kind, start: portion.start, count: portion.count } : { kind: portion.kind };
+}
+function copyToolRead(metadata: ToolReadMetadata): ToolReadMetadata {
+  return { kind: metadata.kind, requested: copyPortion(metadata.requested),
+    delivery: metadata.delivery.kind === "unknown" ? { kind: "unknown" }
+      : { kind: "known", returned: copyPortion(metadata.delivery.returned), truncated: metadata.delivery.truncated },
+    revision: metadata.revision.kind === "unknown" ? { kind: "unknown" } : { kind: "known", value: metadata.revision.value } };
+}
+
+export function requiresToolProtocol4(evidence: Evidence): boolean {
+  return evidence.kind === "tool-coverage" || (evidence.kind === "resource-access"
+    && (evidence.access === "inferred-read" || evidence.toolRead !== undefined));
 }
 
 function copyResource(resource: ResourceLocation): ResourceLocation {
@@ -140,6 +174,7 @@ function isEvidence(value: unknown): boolean {
     case "catalog-snapshot": return Array.isArray(value.skills) && Array.prototype.every.call(value.skills, isSkillRef);
     case "capture-gap": return typeof value.dropped === "number" && Number.isSafeInteger(value.dropped) && value.dropped >= 0 && isGapReason(value.reason);
     case "resource-access":
+    case "tool-coverage":
     case "inventory-snapshot":
     case "observer-coverage": return isResourceEvidence(value);
     default: return false;
@@ -151,13 +186,23 @@ export function isResourceEvidence(value: unknown): value is ResourceEvidence {
   switch (value.kind) {
     case "resource-access":
       return isResourceLocation(value.resource) && metadataString(value.operationId)
-        && ((value.mechanism === "fanotify" && (value.access === "open" || value.access === "access") && value.outcome === "unknown")
+        && ((value.mechanism === "fanotify" && (value.access === "open" || value.access === "access") && value.outcome === "unknown" && value.toolRead === undefined)
           || (value.mechanism === "host-tool" && ((value.access === "attempt" && value.outcome === "unknown")
-            || (value.access === "read" && (value.outcome === "success" || value.outcome === "error")))))
+            || (value.access === "read" && (value.outcome === "success" || value.outcome === "error"))
+            || (value.access === "inferred-read" && value.outcome === "success" && isToolReadMetadata(value.toolRead) && value.toolRead.kind === "literal-command"))
+            && (value.toolRead === undefined || (isToolReadMetadata(value.toolRead)
+              && (value.access !== "read" || value.toolRead.kind === "structured-read")
+              && (value.outcome === "success" || value.toolRead.delivery.kind === "unknown")))))
         && isModelRef(value.model) && (value.process === null || (isRecord(value.process)
           && metadataString(value.process.bootId) && typeof value.process.pid === "number" && Number.isSafeInteger(value.process.pid) && value.process.pid > 0
           && typeof value.process.startTicks === "string" && /^\d{1,30}$/.test(value.process.startTicks)))
         && (value.attribution === "session" || value.attribution === "harness" || value.attribution === "non-agent" || value.attribution === "unknown");
+    case "tool-coverage":
+      return metadataString(value.operationId) && (value.family === "file" || value.family === "shell" || value.family === "python" || value.family === "other")
+        && (value.outcome === "success" || value.outcome === "error" || value.outcome === "unknown") && isModelRef(value.model)
+        && isRecord(value.recognition) && ((value.recognition.kind === "recognized" && nonnegativeInteger(value.recognition.resourceCount) && value.recognition.resourceCount <= 128)
+          || (value.recognition.kind === "opaque" && (value.recognition.reason === "unsupported-syntax" || value.recognition.reason === "missing-input"
+            || value.recognition.reason === "unsupported-tool" || value.recognition.reason === "limit")));
     case "inventory-snapshot": {
       if (!metadataString(value.scanId) || !metadataString(value.filesystemId) || !absolutePath(value.rootPath)
         || (value.origin !== "configured" && value.origin !== "conventional" && value.origin !== "host")
@@ -184,6 +229,20 @@ export function isResourceEvidence(value: unknown): value is ResourceEvidence {
               || value.reason === "queue-overflow" || value.reason === "process-exited" || value.reason === "io-error")));
     default: return false;
   }
+}
+
+export function isReadPortion(value: unknown): value is ReadPortion {
+  return isRecord(value) && (value.kind === "unknown" || value.kind === "whole"
+    || (value.kind === "lines" && nonnegativeInteger(value.start) && value.start >= 1
+      && (value.count === null || (nonnegativeInteger(value.count) && Number.isSafeInteger(value.start + Math.max(value.count - 1, 0))))));
+}
+export function isReadDelivery(value: unknown): value is ReadDelivery {
+  return isRecord(value) && (value.kind === "unknown" || (value.kind === "known" && isReadPortion(value.returned) && typeof value.truncated === "boolean"));
+}
+function isToolReadMetadata(value: unknown): value is ToolReadMetadata {
+  return isRecord(value) && (value.kind === "structured-read" || value.kind === "literal-command")
+    && isReadPortion(value.requested) && isReadDelivery(value.delivery) && isRecord(value.revision)
+    && (value.revision.kind === "unknown" || (value.revision.kind === "known" && typeof value.revision.value === "string" && /^sha256:[a-f0-9]{64}$/u.test(value.revision.value)));
 }
 
 function isResourceLocation(value: unknown): value is ResourceLocation {

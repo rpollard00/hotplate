@@ -41,10 +41,10 @@ export const dashboardHtml = `<!doctype html>
     <main id="workspace" tabindex="-1" aria-busy="true">
       <div id="dashboard-content" hidden>
         <section id="metrics-workspace" aria-labelledby="metrics-heading">
-          <div class="page-heading"><div><h1 id="metrics-heading">Skill metrics</h1></div></div>
+          <div class="page-heading"><div><h1 id="metrics-heading">Skill and resource metrics</h1></div></div>
           <div id="overview-cards" class="metrics-grid" aria-label="Filtered totals"></div>
           <div id="evidence-context" class="evidence-context"></div>
-          <div class="metric-controls"><label>Content<select id="metric-content"><option value="skills">Skills</option><option value="resources">Resources</option><option value="both">Both</option></select></label><label>Measure<select id="metric-measure"><option value="successfulReads">Successful reads</option><option value="uses">Skill uses</option><option value="failedReads">Read failures</option><option value="invocations">Native invocations</option><option value="invocationFailures">Invocation failures</option><option value="readAttempts">Read attempts</option><option value="requests">Requests</option><option value="wrappers">Wrappers</option></select></label><label>Split by<select id="metric-split"><option value="skill">Skill / total ranking</option><option value="agent">Agent</option><option value="model">Model</option><option value="agent-model">Agent + model</option></select></label></div><p id="metric-explanation" class="footnote"></p><div id="content-status" class="content-status" role="status" hidden></div>
+          <div class="metric-controls"><label>Content<select id="metric-content"><option value="skills">Skills</option><option value="resources">Resources</option><option value="both" selected>Both</option></select></label><label>Measure<select id="metric-measure"><option value="successfulReads">Successful reads</option><option value="uses">Skill uses</option><option value="failedReads">Read failures</option><option value="invocations">Native invocations</option><option value="invocationFailures">Invocation failures</option><option value="readAttempts">Read attempts</option><option value="requests">Requests</option><option value="wrappers">Wrappers</option></select></label><label>Split by<select id="metric-split"><option value="skill">Skill / total ranking</option><option value="agent">Agent</option><option value="model">Model</option><option value="agent-model">Agent + model</option></select></label></div><p id="metric-explanation" class="footnote"></p><details id="tool-coverage" class="footnote"><summary id="tool-coverage-summary">Tool coverage</summary><div id="tool-coverage-content"></div></details><div id="content-status" class="content-status" role="status" hidden></div>
           <div class="overview-grid">
             <section class="panel activity-panel" aria-labelledby="activity-heading"><div class="section-heading"><div><h2 id="activity-heading">Over time</h2></div><div class="activity-actions"><span class="small muted">UTC</span><button id="view-explorer" class="quiet" type="button" hidden>View selection</button></div></div><div id="activity-chart"></div></section>
             <section class="panel" aria-labelledby="skills-heading"><div class="section-heading"><h2 id="skills-heading">Compare skills</h2><label class="inline-label">Display<select id="metric-display"><option value="count">Count</option><option value="session-share">Session share</option></select></label></div><label class="search-label"><span class="sr-only">Find a skill</span><input id="skill-search" type="search" placeholder="Find a skill…"></label><div id="skill-table" class="table-wrap" tabindex="0" role="region" aria-label="Skill comparison"></div><p id="comparison-scroll-hint" class="matrix-scroll-hint footnote" hidden>Scroll horizontally to compare all columns.</p><div id="comparison-pagination"></div><p id="comparison-note" class="footnote"></p></section>
@@ -73,7 +73,7 @@ export const dashboardHtml = `<!doctype html>
             <p id="resource-scroll-hint" class="resource-scroll-hint footnote">Scroll horizontally for access counts and attribution.</p>
             <div id="resource-table" class="table-wrap" tabindex="0" role="region" aria-label="Resource access evidence"></div>
             <div id="resource-pagination"></div>
-            <p id="resource-evidence-note" class="footnote">Reads, failures, and attempts come from agent tools. Opens and accesses come from filesystem observation.</p>
+            <p id="resource-evidence-note" class="footnote">This inventory includes filesystem diagnostics. Confirmed reads have native read results. Inferred reads come from recognized commands. Observed access can include catalog polling.</p>
           </section>
         </section>
         <section id="paths-workspace" aria-labelledby="paths-heading" hidden>
@@ -94,8 +94,11 @@ export const dashboardHtml = `<!doctype html>
       <p>Each path represents one recorded run. A session can contain multiple runs. Order within a read group is unknown.</p>
       <p>Capture gaps represent lost records. Filtered gaps represent records hidden by filters.</p>
       <p>Agent comparisons use evidence from Hotplate integrations. Each integration records different evidence. For example, the Codex integration records read attempts with no known outcome.</p>
-      <p>Resource capture comes from enabled agent integrations and filesystem observers.</p>
-      <p>Resource inventory records files found in skill directories. No observed agent access applies only to the covered dates shown for that file.</p>
+      <p>Tool activity counts confirmed reads, inferred reads, read attempts, read failures, and native invocations from enabled agent integrations.</p>
+      <p>Inferred reads come from recognized literal commands with successful tool outcomes. A file read does not establish which instructions the agent followed.</p>
+      <p>All recorded activity includes filesystem observers, requests, and wrappers. Filesystem activity can include catalog polling.</p>
+      <p>Resource inventory records files found in skill directories. Files without observed tool access are not known to be unused. Filesystem covered dates do not establish complete tool coverage.</p>
+      <p>Tool coverage counts observed operations. Opaque operations have unresolved file access and do not create skill or resource rows.</p>
       <p>Unknown and non-agent access remain separate from activity attributed to an agent.</p>
     </div></details>
   </div>
@@ -332,12 +335,13 @@ details[open] > summary { margin-bottom: 15px; }
 .resource-controls .search-label { flex: 1; min-width: 220px; max-width: none; margin-bottom: 0; }
 .resource-controls > label { display: grid; gap: 7px; font-size: 12px; font-weight: 600; }
 .resource-controls input, .resource-controls select { height: 38px; }
-.resource-table { min-width: 1100px; table-layout: fixed; }
+.resource-table { min-width: 1280px; table-layout: fixed; }
 .resource-table th:first-child { width: 310px; }
 .resource-table th:nth-child(2) { width: 165px; }
-.resource-table th:nth-child(8), .resource-table th:nth-child(9) { width: 125px; }
+.resource-table th:nth-child(n+3):nth-child(-n+8) { width: 90px; white-space: nowrap; }
+.resource-table th:nth-child(9), .resource-table th:nth-child(10) { width: 125px; }
 .resource-table td { vertical-align: top; }
-.resource-table td:nth-child(n+3):nth-child(-n+7) { font-variant-numeric: tabular-nums; text-align: right; }
+.resource-table td:nth-child(n+3):nth-child(-n+8) { font-variant-numeric: tabular-nums; text-align: right; }
 .resource-path { font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
 .resource-meta { display: block; font-size: 11px; line-height: 1.65; color: var(--muted); margin-top: 5px; }
 .resource-state { display: inline-block; align-self: start; padding: 3px 7px; border: 1px solid var(--line); border-radius: 3px; background: var(--bg); color: var(--quiet); font-size: 11px; font-weight: 500; }
@@ -442,7 +446,7 @@ const state = {
   explore: { skillName: null, interval: null },
   trends: { kind: 'top', count: 5 },
   content: { kind: 'unrequested' }, contentRequestId: 0, contentInterval: null, contentExpanded: new Set(), contentDetail: null, contentTrends: { kind: 'top', count: 5 },
-  contentMeasures: { resources: 'activity', both: 'activity' }, skillPresentation: { measure: 'successfulReads', split: 'skill', display: 'count' }, filterOptions: null,
+  contentMeasures: { resources: 'toolActivity', both: 'toolActivity' }, skillPresentation: { measure: 'successfulReads', split: 'skill', display: 'count' }, filterOptions: null,
   pages: { activity: 0, skills: 0, columns: 0, relationships: 0, routes: 0, steps: 0, catalog: 0, identities: 0, evidence: 0, resources: 0 },
 };
 let activityView = null;
@@ -1020,9 +1024,9 @@ function mountTimeBrush(plot, activity, readout, onChange, onReadout) {
     selected = next; paint(selected); publish();
   };
 }
-const metricUnit = () => ({ successfulReads: 'read', activity: 'record', fsOpens: 'filesystem open', fsAccesses: 'filesystem access' })[presentation().measure] || measureLabels[presentation().measure].toLowerCase().replace(/s$/, '');
+const metricUnit = () => ({ successfulReads: 'read', inferredReads: 'inferred read', toolActivity: 'tool record', activity: 'record', fsOpens: 'filesystem open', fsAccesses: 'filesystem access' })[presentation().measure] || measureLabels[presentation().measure].toLowerCase().replace(/s$/, '');
 const metricCount = value => count(value, metricUnit(), presentation().measure === 'fsAccesses' ? 'filesystem accesses' : undefined);
-const measureLabels = { successfulReads: 'Successful reads', failedReads: 'Read failures', uses: 'Skill uses', invocations: 'Native invocations', invocationFailures: 'Invocation failures', readAttempts: 'Read attempts', requests: 'Requests', wrappers: 'Wrappers', ...Object.fromEntries(Object.entries(contentMeasures).map(([key, value]) => [key, value.label])) };
+const measureLabels = { failedReads: 'Read failures', uses: 'Skill uses', invocations: 'Native invocations', invocationFailures: 'Invocation failures', readAttempts: 'Read attempts', requests: 'Requests', wrappers: 'Wrappers', ...Object.fromEntries(Object.entries(contentMeasures).map(([key, value]) => [key, value.label])), get successfulReads() { return isContentView() ? contentMeasures.successfulReads.label : 'Successful reads'; } };
 const contentMode = () => $('metric-content').value;
 const isContentView = () => contentMode() !== 'skills';
 const contentReport = () => state.content.kind === 'unrequested' ? null : state.content.report;
@@ -1038,6 +1042,7 @@ function configureContentControls() {
   $('metric-measure').value = selected;
   $('metric-display').value = content ? 'count' : state.skillPresentation.display;
   $('metric-display').disabled = content;
+  $('tool-coverage').hidden = !content || state.content.kind !== 'ready';
   $('metric-split').querySelector('[value="skill"]').textContent = content ? 'Item / total ranking' : 'Skill / total ranking';
   $('metrics-heading').textContent = contentMode() === 'skills' ? 'Skill metrics' : contentMode() === 'resources' ? 'Resource metrics' : 'Skill and resource metrics';
   $('skills-heading').textContent = contentMode() === 'skills' ? 'Compare skills' : contentMode() === 'resources' ? 'Compare resources' : 'Compare skills and resources';
@@ -1062,6 +1067,7 @@ function contentParams() {
 }
 function renderContentStatus() {
   const status = $('content-status'); const content = state.content;
+  $('tool-coverage').hidden = !isContentView() || content.kind !== 'ready';
   status.hidden = content.kind === 'ready'; status.replaceChildren();
   if (content.kind === 'loading') status.append(node('span', state.contentInterval ? 'Loading selected counts…' : 'Loading content activity…'));
   if (content.kind === 'error') status.append(node('span', content.error), button('Retry content activity', () => loadContentAnalytics(Boolean(content.report)), 'quiet'));
@@ -1112,19 +1118,36 @@ function contentMetricView(report) {
 function renderContentMetrics(redraw = true) {
   const report = contentReport(); state.metricView = contentMetricView(report);
   const p = presentation(); document.querySelector('.overview-grid').classList.toggle('matrix-layout', p.split !== 'skill');
-  $('metric-explanation').textContent = p.measure === 'activity' ? 'Recorded evidence, including failures. Repeated events count separately. Filesystem activity does not confirm a tool read.'
+  $('metric-explanation').textContent = p.measure === 'toolActivity' ? 'Agent tool reads, attempts, failures, and native invocations. Repeated operations count separately.'
+    : p.measure === 'activity' ? 'All recorded evidence, including filesystem activity, requests, and wrappers. Catalog polling can appear here.'
     : p.measure === 'readAttempts' ? 'Unconfirmed tool read attempts. The outcome is unknown.'
     : p.measure === 'fsOpens' || p.measure === 'fsAccesses' ? 'Filesystem observations. Repeated events count separately.'
-    : p.measure === 'successfulReads' ? 'Successful tool reads. Repeated reads count separately.' : measureLabels[p.measure] + ' in the selected content.';
+    : p.measure === 'successfulReads' ? 'Successful native read results. Returned portions can be unknown.'
+    : p.measure === 'inferredReads' ? 'Recognized literal read commands with successful tool outcomes. Returned portions can be unknown.' : measureLabels[p.measure] + ' in the selected content.';
   const summary = report.selection;
   const entries = [[measureLabels[p.measure], number(summary.count)], ['Compared items', number(summary.rows.filter(row => row.count > 0).length)],
     ['Latest evidence (UTC)', summary.lastEvidenceAt ? timeLabel(summary.lastEvidenceAt) : 'None'], ['Read failures', number(summary.counts.failedReads)]];
   $('overview-cards').hidden = false;
   $('overview-cards').replaceChildren(...entries.map(([label, value]) => { const card = node('article', null, 'metric-card'); card.append(node('span', label, 'metric-label'), node('strong', value, label.startsWith('Latest') ? 'content-latest' : 'metric-value')); return card; }));
   $('evidence-context').hidden = false; $('evidence-context').replaceChildren();
-  for (const [key, value] of Object.entries(summary.counts)) if (value) $('evidence-context').append(node('span', number(value) + ' ' + measureLabels[key].toLowerCase()));
+  for (const [key, value] of Object.entries(summary.counts)) if (value && (p.measure !== 'toolActivity' || !['fsOpens', 'fsAccesses', 'requests', 'wrappers'].includes(key))) $('evidence-context').append(node('span', number(value) + ' ' + measureLabels[key].toLowerCase()));
+  renderToolCoverage(report.coverage.selection);
   if (redraw) renderActivity();
   renderContentComparison(); renderContentDetail(); renderContentStatus(); updateActivitySelection();
+}
+function renderToolCoverage(coverage) {
+  const target = $('tool-coverage-content'); target.replaceChildren();
+  $('tool-coverage-summary').textContent = coverage.observedOperations
+    ? 'Tool coverage · ' + count(coverage.observedOperations, 'observed operation') + ' · ' + number(coverage.opaqueOperations) + ' with unresolved file access'
+    : 'Tool coverage · not reported in this scope';
+  if (!coverage.observedOperations) {
+    target.append(node('p', 'Historical reads can have no coverage record. Missing coverage does not mean that all reads were captured.'));
+    return;
+  }
+  target.append(node('p', count(coverage.recognizedOperations, 'recognized operation') + ' · ' + count(coverage.outcomes.unknown, 'unknown outcome') + ' · ' + count(coverage.outcomes.error, 'failed operation')));
+  const reasons = { 'unsupported-syntax': 'Unsupported command syntax', 'missing-input': 'Input unavailable', 'unsupported-tool': 'Unsupported tool', limit: 'Recognition limit' };
+  for (const [key, value] of Object.entries(coverage.opaqueReasons)) if (value) target.append(node('p', reasons[key] + ': ' + number(value)));
+  target.append(node('p', 'Only observed tool operations are counted. Unresolved file access is not assigned to a skill or resource. Coverage completeness is unknown.'));
 }
 function contentRowPath(row) { return row.identity.kind === 'skill' ? row.identity.canonicalPath || '' : row.identity.location.canonicalPath; }
 function contentRowMatches(row, query) { return [row.label, contentRowPath(row), row.identity.kind === 'skill' ? row.identity.name : row.identity.location.machineId].some(value => value.toLowerCase().includes(query)); }
@@ -1218,15 +1241,35 @@ function renderContentDetail() {
   target.append(node('p', measureLabels[presentation().measure] + (column ? ' · ' + trendName(column.key) : '') + ': ' + number(stats.count)));
   if (state.contentInterval) target.append(node('p', intervalLabel(state.contentInterval.startAt, state.contentInterval.endAt) + ' UTC', 'footnote'));
   const breakdown = node('div', null, 'content-breakdown');
-  for (const [key, label] of Object.entries(contentMeasures)) if (key !== 'activity' && (contentMode() === 'both' || label.resources)) { const value = node('div'); value.append(node('strong', number(stats.counts[key] || 0)), node('span', label.label)); breakdown.append(value); }
+  for (const [key, label] of Object.entries(contentMeasures)) if (key !== 'activity' && key !== 'toolActivity' && (contentMode() === 'both' || label.resources)) { const value = node('div'); value.append(node('strong', number(stats.counts[key] || 0)), node('span', label.label)); breakdown.append(value); }
   target.append(breakdown);
   const identity = row.identity; const location = identity.kind === 'skill' ? identity : identity.location;
   for (const [label, value] of [['File', location.canonicalPath || 'Not recorded in skill evidence'], ['Machine', location.machineId], ['Account source', location.sourceId], ['Filesystem', identity.kind === 'skill' ? 'Not recorded in skill evidence' : location.filesystemId]]) target.append(node('p', label + ': ' + value, 'content-location'));
   if (identity.kind === 'skill') target.append(node('p', 'Observed path: Not recorded in skill evidence', 'content-location'));
   if (identity.kind === 'file') target.append(node('p', 'Observed path: ' + identity.observedPath, 'content-location'), node('p', 'Owning skill: ' + (identity.ownerSkillPath || 'None'), 'content-location'));
+  if (identity.kind === 'owner') target.append(node('p', 'Select a file to see requested and returned portions.', 'footnote'));
+  else if (stats.readDetails?.groups.length) {
+    target.append(node('h3', 'Read portions'));
+    const portions = table(['Evidence', 'Count', 'Requested', 'Returned', 'Revision'], 'Requested and returned file portions');
+    for (const group of stats.readDetails.groups) {
+      const returned = group.delivery.kind === 'unknown' ? 'Unknown' : portionLabel(group.delivery.returned) + (group.delivery.truncated ? ' · Truncated' : ' · Not truncated');
+      const line = node('tr');
+      for (const value of [measureLabels[group.category], number(group.count), portionLabel(group.requested), returned, group.revision.kind === 'unknown' ? 'Unknown' : group.revision.value]) line.append(node('td', value));
+      portions.tBodies[0].append(line);
+    }
+    const wrapper = node('div', null, 'table-wrap'); wrapper.tabIndex = 0; wrapper.setAttribute('aria-label', 'Read portion details'); wrapper.append(portions); target.append(wrapper);
+    if (stats.readDetails.omittedCount) target.append(node('p', count(stats.readDetails.omittedCount, 'additional read') + ' omitted from this portion summary.', 'footnote'));
+  }
   target.append(node('p', 'First evidence: ' + (stats.firstEvidenceAt ? timeLabel(stats.firstEvidenceAt) + ' UTC' : 'None in this selection'), 'content-location'), node('p', 'Latest evidence: ' + (stats.lastEvidenceAt ? timeLabel(stats.lastEvidenceAt) + ' UTC' : 'None in this selection'), 'content-location'));
   const attributions = { session: 'Session attributed', harness: 'Agent attributed', unknown: 'Unknown attribution', 'non-agent': 'Non-agent', none: 'No attribution' };
   target.append(node('p', Object.entries(stats.attributionCounts).filter(([, value]) => value).map(([key, value]) => attributions[key] + ': ' + number(value)).join(' · '), 'footnote'));
+}
+function portionLabel(portion) {
+  if (portion.kind === 'unknown') return 'Unknown';
+  if (portion.kind === 'whole') return 'Whole file';
+  if (portion.count === null) return 'Lines ' + number(portion.start) + ' onward';
+  if (portion.count === 0) return 'No lines from ' + number(portion.start);
+  return portion.count === 1 ? 'Line ' + number(portion.start) : 'Lines ' + number(portion.start) + '–' + number(portion.start + portion.count - 1);
 }
 function changeContentMode() {
   cancelContentRequest(); state.content = { kind: 'unrequested' }; state.contentInterval = null; state.contentExpanded.clear(); state.contentDetail = null; state.contentTrends = { kind: 'top', count: 5 };
@@ -1810,7 +1853,7 @@ function renderResources() {
     $('resource-pagination').replaceChildren();
     return;
   }
-  const listing = table(['File', 'Observation', 'Reads', 'Failures', 'Attempts', 'Opens', 'Accesses', 'Attribution', 'Last access'], 'Inventory and access evidence');
+  const listing = table(['File', 'Observation', 'Confirmed', 'Inferred', 'Failures', 'Attempts', 'Opens', 'Accesses', 'Attribution', 'Last access'], 'Inventory and access evidence');
   listing.className = 'resource-table';
   for (const row of pageItems(rows, 'resources', 25)) {
     const item = node('tr'); item.dataset.resourceId = row.resourceId; item.dataset.observation = row.observation;
@@ -1825,7 +1868,7 @@ function renderResources() {
     if (row.observation === 'not-observed') status.append(node('span', 'Covered ' + date(row.coverageFrom, true) + ' to ' + date(row.coverageTo, true) + ' UTC', 'resource-meta'));
     else if (row.observation === 'unknown') status.append(node('span', row.unattributedAccessCount ? 'Access could not be assigned to this scope.' : 'Availability or observation coverage is incomplete.', 'resource-meta'));
     item.append(status);
-    for (const value of [row.successfulReadCount, row.failedReadCount, row.attemptCount, row.openCount, row.accessCount]) item.append(node('td', number(value)));
+    for (const value of [row.successfulReadCount, row.inferredReadCount, row.failedReadCount, row.attemptCount, row.openCount, row.accessCount]) item.append(node('td', number(value)));
     const attribution = node('td');
     for (const [label, value] of [['Agent', row.attributedAccessCount], ['Unknown', row.unattributedAccessCount], ['Non-agent', row.nonAgentAccessCount]]) attribution.append(node('span', label + ': ' + number(value), 'resource-meta'));
     const lastAccess = node('td'); lastAccess.append(node('span', row.lastAccessAt ? date(row.lastAccessAt, true) + ' UTC' : 'None observed', 'resource-meta'));
@@ -1985,7 +2028,7 @@ document.fonts.ready.then(() => { updateWorkspaceMarker(false); updateRouteMarke
 $('filter-form').addEventListener('submit', (event) => { event.preventDefault(); loadDashboard(); });
 $('refresh-data').addEventListener('click', loadDashboard);
 $('metric-content').addEventListener('change', changeContentMode);
-$('reset-filters').addEventListener('click', () => { cancelContentRequest(); state.content = { kind: 'unrequested' }; $('metric-content').value = 'skills'; state.skillPresentation = { measure: 'successfulReads', split: 'skill', display: 'count' }; configureContentControls(); $('filter-form').reset(); $('time-preset').value = '7'; $('metric-measure').value = 'successfulReads'; $('metric-split').value = 'skill'; $('metric-display').value = 'count'; state.trends = { kind: 'top', count: 5 }; resetSelections(); loadDashboard(); });
+$('reset-filters').addEventListener('click', () => { cancelContentRequest(); state.content = { kind: 'unrequested' }; $('metric-content').value = 'both'; state.contentMeasures = { resources: 'toolActivity', both: 'toolActivity' }; state.skillPresentation = { measure: 'successfulReads', split: 'skill', display: 'count' }; configureContentControls(); $('filter-form').reset(); $('time-preset').value = '7'; $('metric-split').value = 'skill'; $('metric-display').value = 'count'; state.trends = { kind: 'top', count: 5 }; resetSelections(); loadDashboard(); });
 for (const id of ['host-filter', 'model-filter']) $(id).addEventListener('change', () => loadDashboard());
 $('machine-filter').addEventListener('change', () => loadDashboard());
 $('toggle-filters').addEventListener('click', () => { const panel = $('scope-panel'); const before = panel.hidden ? 0 : panel.getBoundingClientRect().height; motion.cancel(panel); panel.hidden = !panel.hidden; $('toggle-filters').setAttribute('aria-expanded', String(!panel.hidden)); motion.expand(panel, before); });
@@ -2010,5 +2053,6 @@ $('explore-models').addEventListener('click', () => selectSkill(state.explore.sk
 $('explore-all-paths').addEventListener('click', () => explorePaths());
 $('back-to-explorer').addEventListener('click', () => { showWorkspace('metrics', true); $('explorer-panel').focus(); $('explorer-panel').scrollIntoView({ block: 'nearest' }); });
 $('clear-path-focus').addEventListener('click', () => { state.focus = { kind: 'all' }; state.pages.routes = 0; state.routeKey = null; $('route-search').value = ''; $('route-model').value = ''; renderPaths(); });
+configureContentControls();
 loadDashboard();
 `;

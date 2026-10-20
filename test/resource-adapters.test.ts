@@ -40,9 +40,9 @@ test("Codex literal multi-file reads create separate retry-safe resource attempt
   const { directory, reference, principle, env } = fixtureData;
   const hook = { hook_event_name: "PostToolUse", session_id: "session", cwd: directory, tool_use_id: "operation", tool_name: "Bash", tool_response: "OUTPUT_CANARY" };
   const facts = parseCodexHook({ ...hook, tool_input: { command: `cat '${reference}' '${principle}'` } }, "2026-10-18T00:00:00.000Z", env);
-  assert.equal(facts.length, 2);
+  assert.equal(facts.length, 3);
   for (const fact of facts) {
-    assert.equal(fact.evidence.kind, "resource-access");
+    assert.ok(fact.evidence.kind === "resource-access" || fact.evidence.kind === "tool-coverage");
     assert.deepEqual(await captureFact({ fact, env }), { kind: "recorded", accepted: 1, duplicate: 0, dropped: 0 });
     assert.deepEqual(await captureFact({ fact, env }), { kind: "recorded", accepted: 0, duplicate: 1, dropped: 0 });
   }
@@ -53,9 +53,9 @@ test("Codex literal multi-file reads create separate retry-safe resource attempt
     assert.ok(rows.every((row) => row.attemptCount === 1 && row.successfulReadCount === 0));
   } finally { await store.close(); }
   assert.equal(JSON.stringify(facts).includes("CANARY"), false);
-  assert.equal(parseCodexHook({ ...hook, tool_input: { command: `sed -n '1,20p' '${reference}'` } }, undefined, env).length, 1);
+  assert.equal(parseCodexHook({ ...hook, tool_input: { command: `sed -n '1,20p' '${reference}'` } }, undefined, env).length, 2);
   for (const command of [`cat '${reference}' && true`, `cat $(echo '${reference}')`, `cat '${reference}' | head`, `cat '${reference}' > output`]) {
-    assert.deepEqual(parseCodexHook({ ...hook, tool_input: { command } }, undefined, env), []);
+    assert.deepEqual(parseCodexHook({ ...hook, tool_input: { command } }, undefined, env).map((fact) => fact.evidence.kind), ["tool-coverage"]);
   }
 });
 
@@ -165,7 +165,7 @@ test("OpenCode v2 advertised custom skill roots qualify references and inventory
   } finally { db.close(); }
 });
 
-test("the native CLI retains physical and alias read operands and continues to the next file", async (t) => {
+test("the native CLI merges alias operands within an operation and continues to the next file", async (t) => {
   const data = fixture();
   t.after(() => rmSync(data.directory, { recursive: true, force: true }));
   const alias = join(data.root, "reference-alias.md");
@@ -186,7 +186,7 @@ test("the native CLI retains physical and alias read operands and continues to t
   try {
     const rows = (await store.queryResources({ sessionId: "alias-session" })).rows;
     assert.equal(rows.length, 2);
-    assert.equal(rows.find((row) => row.resource.canonicalPath === data.reference)?.attemptCount, 2);
+    assert.equal(rows.find((row) => row.resource.canonicalPath === data.reference)?.attemptCount, 1);
     assert.equal(rows.find((row) => row.resource.canonicalPath === data.principle)?.attemptCount, 1);
   } finally { await store.close(); }
   await delay(100);
@@ -222,10 +222,12 @@ test("every native read adapter gates legacy and resource facts with the same pr
         ? extractOpenCodeV1Facts({ tool: "read", sessionID: "scope-session", callID: "read", args: { filePath: path } }, { output: "OUTPUT_CANARY" }, context)
         : extractOpenCodeV2Facts({ tool: "read", sessionID: "scope-session", id: "read", input: { path }, status: "completed", result: {} }, context);
     };
-    assert.deepEqual(read(skill).map((fact) => fact.evidence.kind), [host === "codex" ? "read-attempt" : "read-result", "resource-access"], host);
-    assert.equal(read(join(root, "missing", "SKILL.md")).length, 2, `${host} missing in-scope skill`);
-    assert.deepEqual(read(hidden).map((fact) => fact.evidence.kind), ["resource-access"], `${host} hidden artifact`);
-    for (const path of [outside, ancestor, ...excluded, join(escape, "SKILL.md")]) assert.deepEqual(read(path), [], `${host}: ${path}`);
+    assert.deepEqual(read(skill).map((fact) => fact.evidence.kind), [host === "codex" ? "read-attempt" : "read-result", "resource-access", "tool-coverage"], host);
+    assert.equal(read(join(root, "missing", "SKILL.md")).length, 3, `${host} missing in-scope skill`);
+    assert.deepEqual(read(hidden).map((fact) => fact.evidence.kind), ["resource-access", "tool-coverage"], `${host} hidden artifact`);
+    for (const path of [outside, ancestor, ...excluded, join(escape, "SKILL.md")]) {
+      assert.deepEqual(read(path).map((fact) => fact.evidence.kind), ["tool-coverage"], `${host}: ${path}`);
+    }
   }
 });
 
@@ -306,8 +308,8 @@ test("OpenCode v2 advertises a standalone catalog entrypoint without authorizing
   assert.equal(invocation?.evidence.kind, "skill-invocation");
   if (invocation?.evidence.kind === "skill-invocation") assert.equal(invocation.evidence.skill.canonicalPath, entrypoint);
   const read = (path: string) => extractOpenCodeV2Facts({ tool: "read", sessionID: "catalog-session", id: "read", input: { path }, status: "completed", result: {} }, context);
-  assert.deepEqual(read(entrypoint).map((fact) => fact.evidence.kind), ["resource-access"]);
-  assert.deepEqual(read(sibling), []);
+  assert.deepEqual(read(entrypoint).map((fact) => fact.evidence.kind), ["resource-access", "tool-coverage"]);
+  assert.deepEqual(read(sibling).map((fact) => fact.evidence.kind), ["tool-coverage"]);
 });
 
 test("the local OpenCode capture worker rechecks serialized file evidence and advertised package proof", async (t) => {

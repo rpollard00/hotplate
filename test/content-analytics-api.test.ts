@@ -37,14 +37,26 @@ test("content endpoint validates its discriminated parameters, preserves securit
   } finally { await server.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
-test("content endpoint exposes compact aggregates and queries no inventory, coverage, or skill chains", async () => {
+test("content endpoint defaults to tool activity and exposes compact aggregates without querying inventory or skill chains", async () => {
   const directory = await mkdtemp(join(tmpdir(), "hotplate-content-api-data-"));
   const databasePath = join(directory, "capture.sqlite");
   const store = openHotplateStore({ databasePath });
   const observation: Observation = { id: "resource", producerId: "resource", sequence: 0, observedAt: "2026-10-20T01:01:00.000Z", host: "claude-code",
     scope: { projectCwd: "/project", sessionId: "session", sessionFile: null, segmentId: "segment", segmentReason: "unknown", runId: null, turnId: null, leafId: null },
-    evidence: { kind: "resource-access", resource: { filesystemId: "namespace", canonicalPath: "/skills/mako/references/file.md", observedPath: "/skills/mako/references/file.md", rootPath: "/skills", ownerSkillPath: "/skills/mako/SKILL.md", kind: "reference" }, operationId: "read", mechanism: "host-tool", access: "read", outcome: "success", model: { provider: "resource-only", id: "model" }, process: null, attribution: "session" } };
-  await store.record(observation); await store.close();
+    evidence: { kind: "resource-access", resource: { filesystemId: "namespace", canonicalPath: "/skills/mako/references/file.md", observedPath: "/skills/mako/references/file.md", rootPath: "/skills", ownerSkillPath: "/skills/mako/SKILL.md", kind: "reference" }, operationId: "read", mechanism: "host-tool", access: "read", outcome: "success", model: { provider: "resource-only", id: "model" }, process: null, attribution: "session",
+      toolRead: { kind: "structured-read", requested: { kind: "lines", start: 10, count: 20 }, delivery: { kind: "known", returned: { kind: "lines", start: 10, count: 5 }, truncated: true }, revision: { kind: "unknown" } } } };
+  await store.record([
+    observation,
+    { ...observation, id: "opaque", sequence: 1, evidence: { kind: "tool-coverage", operationId: "opaque", family: "python", outcome: "unknown",
+      model: { provider: "resource-only", id: "model" }, recognition: { kind: "opaque", reason: "unsupported-syntax" } } },
+    ...Array.from({ length: 100 }, (_, index): Observation => ({
+      ...observation, id: `poll-${index}`, sequence: index + 2, host: "pi", evidence: {
+        kind: "resource-access", resource: { filesystemId: "namespace", canonicalPath: "/skills/polling/SKILL.md", observedPath: "/skills/polling/SKILL.md", rootPath: "/skills", ownerSkillPath: "/skills/polling/SKILL.md", kind: "skill" },
+        operationId: `poll-${index}`, mechanism: "fanotify", access: "access", outcome: "unknown", model: null, process: null, attribution: "harness",
+      },
+    })),
+  ]);
+  await store.close();
   const opened = openHotplateReadStore({ databasePath }); assert.equal(opened.kind, "ready"); if (opened.kind !== "ready") return;
   const prototype: unknown = Object.getPrototypeOf(opened.store); assert.ok(prototype !== null && typeof prototype === "object"); await opened.store.close();
   const descriptors = new Map<string, PropertyDescriptor>(); const calls: string[] = [];
@@ -55,17 +67,27 @@ test("content endpoint exposes compact aggregates and queries no inventory, cove
   }
   const server = await startDashboardServer({ databasePath, port: 0 });
   try {
-    const endpoint = `${server.url}/api/content-analytics?content=both&split=agent-model`;
+    const endpoint = `${server.url}/api/content-analytics?split=agent-model`;
     const response = await fetch(endpoint); const body = await response.text(); const payload = object(JSON.parse(body));
     assert.equal(payload.kind, "ready"); assert.deepEqual(calls, ["queryContentAnalytics"]);
     const report = object(payload.report);
     assert.equal("filterOptions" in payload, false);
     assert.partialDeepStrictEqual(report.filterOptions, { agentModelPairs: [{ host: "claude-code", model: { provider: "resource-only", id: "model" } }] });
-    assert.partialDeepStrictEqual(report, { query: { content: "both", measure: "activity", split: "agent-model", selection: { kind: "all" } }, overall: { count: 1 }, displayed: { count: 1 }, selection: { count: 1, rows: [{ identity: { kind: "owner" }, count: 1, children: [{ identity: { kind: "file" }, count: 1 }] }] } });
+    assert.partialDeepStrictEqual(report, { query: { content: "both", measure: "toolActivity", split: "agent-model", selection: { kind: "all" } },
+      overall: { count: 1 }, displayed: { count: 1 }, coverage: { completeness: "unknown", selection: { observedOperations: 1, opaqueOperations: 1, outcomes: { unknown: 1 } } },
+      selection: { count: 1, rows: [{ identity: { kind: "owner" }, count: 1, children: [{ identity: { kind: "file" }, count: 1,
+        readDetails: { groups: [{ requested: { kind: "lines", start: 10, count: 20 }, delivery: { kind: "known", returned: { kind: "lines", start: 10, count: 5 }, truncated: true }, revision: { kind: "unknown" } }] },
+      }] }] } });
     assert.ok(!body.includes('"producerId"') && !body.includes('"operationId"') && !body.includes('"process"') && !body.includes('"routes"'));
     const selectedPayload = object(await fetch(`${endpoint}&selectionFrom=2026-10-20T01:00:00Z&selectionTo=2026-10-20T01:01:00Z`).then(result => result.json()));
     const selectedReport = object(selectedPayload.report);
     assert.deepEqual(selectedReport.displayed, report.displayed); assert.equal(object(selectedReport.selection).count, 0);
+    assert.equal(object(object(selectedReport.coverage).selection).observedOperations, 0);
+    const diagnostic = object(await fetch(`${endpoint}&measure=activity`).then(result => result.json()));
+    assert.equal(object(object(diagnostic.report).overall).count, 101);
+    const html = await fetch(server.url).then(result => result.text());
+    assert.match(html, /value="both" selected/);
+    assert.match(html, /id="tool-coverage"/);
     calls.length = 0;
     await fetch(`${server.url}/api/dashboard?scope=skills`);
     assert.deepEqual(calls.toSorted(), ["queryFilterOptions", "querySkillChain", "querySkillTable"]);

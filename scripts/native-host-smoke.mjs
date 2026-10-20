@@ -18,12 +18,16 @@ const config = join(root, "config");
 const databasePath = join(root, "capture.sqlite");
 const skillPath = host === "codex" ? ".agents/skills/hotplate-probe/SKILL.md" : ".claude/skills/hotplate-probe/SKILL.md";
 const referencePath = join(skillPath, "..", "references", "guide.md");
+const shadowPath = join(referencePath, "..", "shadow.md");
+const commandDirectory = join(project, "alternate");
+const workdirCanary = "HOTPLATE_SMOKE_WORKDIR_CANARY";
 const missingPath = join(skillPath, "..", "..", "absent", "SKILL.md");
 const outsidePath = "source/uninstalled/SKILL.md";
 const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
 let child;
 let requestCount = 0;
 let providerFailure = false;
+let sawWorkdirRead = false;
 const requestPaths = [];
 const server = createServer(async (request, response) => {
   try {
@@ -36,15 +40,17 @@ const server = createServer(async (request, response) => {
       return;
     }
     const input = JSON.parse(body);
+    if (host === "codex" && JSON.stringify(input.input).includes(workdirCanary)) sawWorkdirRead = true;
     requestCount++;
     response.writeHead(200, { "content-type": "text/event-stream" });
     let sequence = 0;
     const emit = (type, data) => response.write(`event: ${type}\ndata: ${JSON.stringify({ type, sequence_number: sequence++, ...data })}\n\n`);
     if (host === "codex") {
       const names = input.tools?.map(tool => tool.name) ?? [];
-      const item = requestCount <= 4
+      const item = requestCount <= 5
         ? { type: "function_call", id: `fc_${requestCount}`, call_id: `call_${requestCount}`, name: "exec_command",
-          arguments: JSON.stringify({ cmd: `cat ${join(project, requestCount === 1 ? skillPath : requestCount === 2 ? missingPath : requestCount === 3 ? referencePath : outsidePath)}`, workdir: project }) }
+          arguments: JSON.stringify(requestCount === 5 ? { cmd: `cat ${shadowPath}`, workdir: commandDirectory }
+            : { cmd: `cat ${join(project, requestCount === 1 ? skillPath : requestCount === 2 ? missingPath : requestCount === 3 ? referencePath : outsidePath)}`, workdir: project }) }
         : { type: "message", id: "msg_done", role: "assistant", status: "completed", content: [{ type: "output_text", text: "Probe done.", annotations: [] }] };
       assert.ok(names.includes("exec_command"));
       const result = { id: `resp_${requestCount}`, object: "response", created_at: 1, status: "in_progress", model: "probe", output: [] };
@@ -80,6 +86,11 @@ try {
   await mkdir(join(project, referencePath, ".."), { recursive: true });
   await writeFile(join(project, skillPath), "---\nname: hotplate-probe\ndescription: Synthetic smoke fixture\n---\nHOTPLATE_SMOKE_CONTENT_CANARY\n");
   await writeFile(join(project, referencePath), "HOTPLATE_SMOKE_REFERENCE_CANARY\n");
+  if (host === "codex") {
+    await writeFile(join(project, shadowPath), "HOTPLATE_SMOKE_SHADOW_CANARY\n");
+    await mkdir(join(commandDirectory, shadowPath, ".."), { recursive: true });
+    await writeFile(join(commandDirectory, shadowPath), `${workdirCanary}\n`);
+  }
   await mkdir(join(project, outsidePath, ".."), { recursive: true });
   await writeFile(join(project, outsidePath), "HOTPLATE_SMOKE_OUTSIDE_CANARY\n");
   await writeFile(join(root, "resources.json"), JSON.stringify({ version: 1, roots: [] }));
@@ -129,6 +140,7 @@ try {
       assert.equal(overview.readAttemptCount, 2);
       assert.equal(overview.successfulReadCount, 0);
       assert.equal(overview.failedReadCount, 0);
+      assert.equal(sawWorkdirRead, true, "The relative read did not execute in its explicit workdir");
     } else {
       assert.equal(overview.skillInvocationCount, 1, JSON.stringify({ requestCount, overview }));
       assert.equal(overview.successfulReadCount, 1);
@@ -152,6 +164,11 @@ try {
     assert.equal(reference.resource.kind, "reference");
     assert.equal(host === "codex" ? reference.attemptCount : reference.successfulReadCount, 1);
     assert.equal(host === "codex" ? skill.attemptCount : skill.successfulReadCount, 1);
+    if (host === "codex") {
+      const shadow = resources.find(row => row.resource.canonicalPath === join(project, shadowPath));
+      assert.ok(shadow, "The in-scope shadow fixture was not inventoried");
+      assert.equal(shadow.attemptCount, 0, "A relative command was attributed to the session directory's shadow file");
+    }
     assert.ok(missing, "An in-scope missing skill did not produce resource evidence");
     assert.equal(host === "codex" ? missing.attemptCount : missing.failedReadCount, 1);
     assert.equal(resources.some(row => row.resource.canonicalPath === join(project, outsidePath)), false, "An out-of-scope read produced resource evidence");
@@ -167,12 +184,19 @@ try {
     assert.equal(persisted.includes("HOTPLATE_SMOKE_REFERENCE_CANARY"), false);
     assert.equal(persisted.includes(join(project, outsidePath)), false, "An out-of-scope read produced legacy evidence");
     assert.equal(persisted.includes("HOTPLATE_SMOKE_OUTSIDE_CANARY"), false);
+    assert.equal(persisted.includes(workdirCanary), false);
+    if (host === "codex") {
+      const coverage = persistedDb.prepare("SELECT payload FROM resource_events WHERE json_extract(payload, '$.evidence.kind') = 'tool-coverage'").all()
+        .map(row => JSON.parse(row.payload).evidence).find(evidence => evidence.operationId === "call_5");
+      assert.deepEqual(coverage?.recognition, { kind: "opaque", reason: "missing-input" });
+    }
   } finally { persistedDb.close(); }
   process.stdout.write(`${JSON.stringify({ host, provider: "deterministic-local", requestCount, elapsedMs: Math.round(performance.now() - started),
     legacy: { attempts: overview.readAttemptCount, successfulReads: overview.successfulReadCount, failedReads: overview.failedReadCount, invocations: overview.skillInvocationCount },
     resources: resources.filter(row => [join(project, skillPath), join(project, referencePath)].includes(row.resource.canonicalPath))
       .map(row => ({ kind: row.resource.kind, attempts: row.attemptCount, successfulReads: row.successfulReadCount, inventoried: row.lastInventoriedAt !== null })),
-    inventoriedResources: resources.filter(row => row.lastInventoriedAt !== null).length, completeInventories, canaryAbsent: true })}\n`);
+    inventoriedResources: resources.filter(row => row.lastInventoriedAt !== null).length, completeInventories,
+    ...(host === "codex" ? { relativeWorkdirRead: true, shadowMisattribution: false } : {}), canaryAbsent: true })}\n`);
 } finally {
   if (child?.pid) { try { process.kill(-child.pid, "SIGKILL"); } catch {} }
   server.closeAllConnections();
