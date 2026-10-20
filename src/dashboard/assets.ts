@@ -24,7 +24,7 @@ export const dashboardHtml = `<!doctype html>
     </nav>
     <div class="scope-bar">
       <p id="scope-summary" hidden></p>
-      <div class="scope-actions"><label class="inline-label">Agent<select id="host-filter" name="host" form="filter-form"><option value="">All agents</option></select></label><label class="inline-label">Model<select id="model-filter" name="model" form="filter-form"><option value="">All models</option></select></label><label class="inline-label">Period<select id="time-preset"><option value="all">All time</option><option value="7" selected>Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="custom">Custom dates</option></select></label><button type="button" id="toggle-filters" class="quiet" aria-expanded="false" aria-controls="scope-panel">More filters</button><button type="button" id="reset-filters" class="quiet">Reset</button></div>
+      <div class="scope-actions"><label class="inline-label">Agent<select id="host-filter" name="host" form="filter-form"><option value="">All agents</option></select></label><label class="inline-label">Model<select id="model-filter" name="model" form="filter-form"><option value="">All models</option></select></label><label class="inline-label">Period<select id="time-preset" form="filter-form"><option value="all">All time</option><option value="30m" data-duration-ms="1800000">Last 30 minutes</option><option value="1h" data-duration-ms="3600000">Last 1 hour</option><option value="4h" data-duration-ms="14400000" selected>Last 4 hours</option><option value="24h" data-duration-ms="86400000">Last 24 hours</option><option value="7" data-duration-ms="604800000">Last 7 days</option><option value="30" data-duration-ms="2592000000">Last 30 days</option><option value="90" data-duration-ms="7776000000">Last 90 days</option><option value="custom">Custom dates</option></select></label><button type="button" id="toggle-filters" class="quiet" aria-expanded="false" aria-controls="scope-panel">More filters</button><button type="button" id="reset-filters" class="quiet">Reset</button></div>
     </div>
     <section id="scope-panel" class="panel" hidden aria-label="Filters">
       <form id="filter-form" class="filter-grid">
@@ -44,7 +44,7 @@ export const dashboardHtml = `<!doctype html>
           <div class="page-heading"><div><h1 id="metrics-heading">Skill metrics</h1></div></div>
           <div id="overview-cards" class="metrics-grid" aria-label="Filtered totals"></div>
           <div id="evidence-context" class="evidence-context"></div>
-          <div class="metric-controls"><label>Content<select id="metric-content"><option value="skills">Skills</option><option value="resources">Resources</option><option value="both">Both</option></select></label><label>Measure<select id="metric-measure"><option value="successfulReads">Successful reads</option><option value="uses">Skill uses</option><option value="failedReads">Read failures</option><option value="invocations">Native invocations</option><option value="invocationFailures">Invocation failures</option><option value="readAttempts">Read attempts</option><option value="requests">Requests</option><option value="wrappers">Wrappers</option></select></label><label>Split by<select id="metric-split"><option value="skill">Skill / total ranking</option><option value="agent">Agent</option><option value="model">Model</option><option value="agent-model">Agent + model</option></select></label></div><p id="metric-explanation" class="footnote"></p><div id="content-status" class="content-status" role="status" hidden></div>
+          <div class="metric-controls"><label>Content<select id="metric-content" form="filter-form"><option value="skills">Skills</option><option value="resources">Resources</option><option value="both" selected>Both</option></select></label><label>Measure<select id="metric-measure"><option value="successfulReads">Successful reads</option><option value="uses">Skill uses</option><option value="failedReads">Read failures</option><option value="invocations">Native invocations</option><option value="invocationFailures">Invocation failures</option><option value="readAttempts">Read attempts</option><option value="requests">Requests</option><option value="wrappers">Wrappers</option></select></label><label>Split by<select id="metric-split"><option value="skill">Skill / total ranking</option><option value="agent">Agent</option><option value="model">Model</option><option value="agent-model">Agent + model</option></select></label></div><p id="metric-explanation" class="footnote"></p><div id="content-status" class="content-status" role="status" hidden></div>
           <div class="overview-grid">
             <section class="panel activity-panel" aria-labelledby="activity-heading"><div class="section-heading"><div><h2 id="activity-heading">Over time</h2></div><div class="activity-actions"><span class="small muted">UTC</span><button id="view-explorer" class="quiet" type="button" hidden>View selection</button></div></div><div id="activity-chart"></div></section>
             <section class="panel" aria-labelledby="skills-heading"><div class="section-heading"><h2 id="skills-heading">Compare skills</h2><label class="inline-label">Display<select id="metric-display"><option value="count">Count</option><option value="session-share">Session share</option></select></label></div><label class="search-label"><span class="sr-only">Find a skill</span><input id="skill-search" type="search" placeholder="Find a skill…"></label><div id="skill-table" class="table-wrap" tabindex="0" role="region" aria-label="Skill comparison"></div><p id="comparison-scroll-hint" class="matrix-scroll-hint footnote" hidden>Scroll horizontally to compare all columns.</p><div id="comparison-pagination"></div><p id="comparison-note" class="footnote"></p></section>
@@ -436,13 +436,14 @@ body:has(#status-text[data-kind=error]) .message { border-left-color: var(--bad)
 
 export const dashboardJs = 'const projectMetrics = ' + projectMetrics.toString() + ';\nconst contentMeasures = ' + JSON.stringify(contentMeasures) + ';\n' + String.raw`'use strict';
 const $ = (id) => document.getElementById(id);
+const defaultContentMeasures = { resources: 'activity', both: 'activity' };
 const state = {
   requestId: 0, controller: null, filterQuery: '', report: null, pathModels: [], resources: { kind: 'unrequested' }, workspace: 'metrics', metricView: null,
   focus: { kind: 'all' }, routeKey: null, skillSelection: null,
   explore: { skillName: null, interval: null },
   trends: { kind: 'top', count: 5 },
   content: { kind: 'unrequested' }, contentRequestId: 0, contentInterval: null, contentExpanded: new Set(), contentDetail: null, contentTrends: { kind: 'top', count: 5 },
-  contentMeasures: { resources: 'activity', both: 'activity' }, skillPresentation: { measure: 'successfulReads', split: 'skill', display: 'count' }, filterOptions: null,
+  contentMeasures: { ...defaultContentMeasures }, skillPresentation: { measure: 'successfulReads', split: 'skill', display: 'count' }, filterOptions: null,
   pages: { activity: 0, skills: 0, columns: 0, relationships: 0, routes: 0, steps: 0, catalog: 0, identities: 0, evidence: 0, resources: 0 },
 };
 let activityView = null;
@@ -762,12 +763,15 @@ function resetSelections() {
   for (const id of ['skill-search', 'route-search', 'catalog-search', 'route-model', 'resource-search', 'resource-kind', 'resource-observation']) $(id).value = '';
 }
 function applyTimePreset() {
-  const preset = $('time-preset').value;
+  const option = $('time-preset').selectedOptions[0];
+  const preset = option.value;
   if (preset === 'custom') return;
   if (preset === 'all') { $('from-filter').value = ''; $('to-filter').value = ''; return; }
+  const durationMs = Number(option.dataset.durationMs);
+  if (!Number.isSafeInteger(durationMs) || durationMs <= 0) throw new Error('Invalid period duration.');
   const now = Date.now();
   $('to-filter').value = new Date(now).toISOString().slice(0, -1);
-  $('from-filter').value = new Date(now - Number(preset) * 86400000).toISOString().slice(0, -1);
+  $('from-filter').value = new Date(now - durationMs).toISOString().slice(0, -1);
 }
 async function loadDashboard() {
   applyTimePreset();
@@ -1985,7 +1989,14 @@ document.fonts.ready.then(() => { updateWorkspaceMarker(false); updateRouteMarke
 $('filter-form').addEventListener('submit', (event) => { event.preventDefault(); loadDashboard(); });
 $('refresh-data').addEventListener('click', loadDashboard);
 $('metric-content').addEventListener('change', changeContentMode);
-$('reset-filters').addEventListener('click', () => { cancelContentRequest(); state.content = { kind: 'unrequested' }; $('metric-content').value = 'skills'; state.skillPresentation = { measure: 'successfulReads', split: 'skill', display: 'count' }; configureContentControls(); $('filter-form').reset(); $('time-preset').value = '7'; $('metric-measure').value = 'successfulReads'; $('metric-split').value = 'skill'; $('metric-display').value = 'count'; state.trends = { kind: 'top', count: 5 }; resetSelections(); loadDashboard(); });
+$('reset-filters').addEventListener('click', () => {
+  $('filter-form').reset();
+  cancelContentRequest(); state.content = { kind: 'unrequested' };
+  state.contentMeasures = { ...defaultContentMeasures };
+  state.skillPresentation = { measure: 'successfulReads', split: 'skill', display: 'count' };
+  $('metric-split').value = 'skill'; $('metric-display').value = 'count'; state.trends = { kind: 'top', count: 5 };
+  configureContentControls(); resetSelections(); loadDashboard();
+});
 for (const id of ['host-filter', 'model-filter']) $(id).addEventListener('change', () => loadDashboard());
 $('machine-filter').addEventListener('change', () => loadDashboard());
 $('toggle-filters').addEventListener('click', () => { const panel = $('scope-panel'); const before = panel.hidden ? 0 : panel.getBoundingClientRect().height; motion.cancel(panel); panel.hidden = !panel.hidden; $('toggle-filters').setAttribute('aria-expanded', String(!panel.hidden)); motion.expand(panel, before); });
@@ -2010,5 +2021,6 @@ $('explore-models').addEventListener('click', () => selectSkill(state.explore.sk
 $('explore-all-paths').addEventListener('click', () => explorePaths());
 $('back-to-explorer').addEventListener('click', () => { showWorkspace('metrics', true); $('explorer-panel').focus(); $('explorer-panel').scrollIntoView({ block: 'nearest' }); });
 $('clear-path-focus').addEventListener('click', () => { state.focus = { kind: 'all' }; state.pages.routes = 0; state.routeKey = null; $('route-search').value = ''; $('route-model').value = ''; renderPaths(); });
+configureContentControls();
 loadDashboard();
 `;

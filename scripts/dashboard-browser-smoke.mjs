@@ -139,6 +139,7 @@ try {
     async function click(selector) { await evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`); }
     async function input(id, value) { await evaluate(`document.getElementById(${JSON.stringify(id)}).value = ${JSON.stringify(value)}; document.getElementById(${JSON.stringify(id)}).dispatchEvent(new Event('input', { bubbles: true }));`); }
     async function change(id, value) { await evaluate(`document.getElementById(${JSON.stringify(id)}).value = ${JSON.stringify(value)}; document.getElementById(${JSON.stringify(id)}).dispatchEvent(new Event('change', { bubbles: true }));`); }
+    async function resetSkills() { await click('#reset-filters'); await until(ready); await change('metric-content', 'skills'); }
     const legendValues = () => evaluate('Array.from(document.querySelectorAll("#activity-chart .trend-label"), label => [label.dataset.skill, Number(label.querySelector("small").textContent.split(" ")[0].replaceAll(",", ""))])');
     const trendReadout = () => evaluate('document.querySelector("#activity-chart .trend-readout").textContent');
     const legendTotal = async () => (await legendValues()).reduce((sum, [, value]) => sum + value, 0);
@@ -231,15 +232,145 @@ try {
     async function noZeroPagers() { assert.equal(await evaluate('Array.from(document.querySelectorAll(".pagination")).filter(item => !item.hidden && item.textContent.includes("0–0 of 0")).length'), 0); }
     await command("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1100, deviceScaleFactor: 1, mobile: false });
     await command('Page.addScriptToEvaluateOnNewDocument', { source: `
-      window.smokeNow = Date.parse('2025-02-21T12:00:00.000Z');
+      window.smokeNow = Date.parse('2025-02-21T12:17:43.567Z');
       const NativeDate = Date;
       window.Date = class extends NativeDate {
         constructor(...args) { super(...(args.length ? args : [window.smokeNow])); }
         static now() { return window.smokeNow; }
       };
+      window.filterRequests = [];
+      const originalFetch = window.fetch;
+      window.fetch = (input, init) => {
+        const url = new URL(String(input), location.href);
+        if (['/api/dashboard', '/api/content-analytics'].includes(url.pathname)) window.filterRequests.push(url.href);
+        return originalFetch(input, init);
+      };
     ` });
     await command("Page.navigate", { url: rich.url });
     await until(ready);
+    measurements.periodRequests = [];
+    async function assertAppliedRange(preset, from, to, scope = {}) {
+      assert.equal(await evaluate('document.getElementById("time-preset").value'), preset);
+      const urls = (await evaluate('window.filterRequests.slice(-2)')).map(value => new URL(value));
+      assert.deepEqual(urls.map(url => url.pathname), ['/api/dashboard', '/api/content-analytics'], 'Global reloads request both analytics paths');
+      assert.equal(urls[0].searchParams.get('scope'), 'skills');
+      for (const url of urls) {
+        assert.equal(url.searchParams.get('fromObservedAt'), from, preset + ' exact start on ' + url.pathname);
+        assert.equal(url.searchParams.get('toObservedAt'), to, preset + ' exact end on ' + url.pathname);
+        for (const [key, value] of Object.entries(scope)) assert.equal(url.searchParams.get(key), value, 'The ' + key + ' scope keeps the selected period');
+      }
+      measurements.periodRequests.push({ preset, from, to, scope, requests: urls.map(url => url.pathname + url.search) });
+      return urls;
+    }
+    async function capturePeriod(name) {
+      for (const width of [1440, 390, 320]) {
+        await command('Emulation.setDeviceMetricsOverride', { width, height: width === 1440 ? 1100 : 844, deviceScaleFactor: 1, mobile: width !== 1440 });
+        await evaluate('(async () => { scrollTo(0, 0); document.activeElement?.blur(); await document.fonts.ready; await Promise.all(document.getAnimations().map(animation => animation.finished.catch(() => {}))); })()');
+        await noOverflow(); await screenshot(join(directory, name + '-' + width + '.png'));
+      }
+      await command('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1100, deviceScaleFactor: 1, mobile: false });
+    }
+    const firstRequests = await assertAppliedRange('4h', '2025-02-21T08:17:43.567Z', '2025-02-21T12:17:43.567Z');
+    assert.equal(firstRequests[1].searchParams.get('content'), 'both');
+    assert.equal(firstRequests[1].searchParams.get('measure'), 'activity');
+    assert.equal(await evaluate('document.getElementById("metric-content").value'), 'both');
+    assert.equal(await evaluate('document.getElementById("metric-measure").value'), 'activity');
+    assert.equal(await evaluate('document.getElementById("metric-measure").selectedOptions[0].textContent'), 'Recorded activity');
+    assert.equal(await evaluate('document.getElementById("metrics-heading").textContent'), 'Skill and resource metrics');
+    assert.equal(await evaluate('document.getElementById("skills-heading").textContent'), 'Compare skills and resources');
+    assert.equal(await evaluate('document.getElementById("metric-display").disabled'), true);
+    assert.equal(await evaluate('document.getElementById("metric-split").selectedOptions[0].textContent'), 'Item / total ranking');
+    assert.deepEqual(await evaluate('Array.from(document.getElementById("time-preset").options, option => [option.value, option.textContent])'), [
+      ['all', 'All time'], ['30m', 'Last 30 minutes'], ['1h', 'Last 1 hour'], ['4h', 'Last 4 hours'], ['24h', 'Last 24 hours'],
+      ['7', 'Last 7 days'], ['30', 'Last 30 days'], ['90', 'Last 90 days'], ['custom', 'Custom dates'],
+    ]);
+    const defaultCount = await evaluate('Number(document.querySelector(".metric-value").textContent.replaceAll(",", ""))');
+    const defaultContentNames = (await legendValues()).map(([name]) => name);
+    await input('skill-search', 'references/execution.md');
+    assert.match(await evaluate('document.getElementById("skill-table").textContent'), /mako.*references\/execution\.md/s, 'Both includes supporting files under their owning skill on startup');
+    assert.ok(await evaluate('document.querySelectorAll("#skill-table .content-child").length > 0'));
+    await input('skill-search', '');
+    await capturePeriod('default-both-4h');
+    await change('time-preset', '30m'); await until(ready);
+    await assertAppliedRange('30m', '2025-02-21T11:47:43.567Z', '2025-02-21T12:17:43.567Z');
+    await capturePeriod('both-30m');
+    for (const [now, cases] of [
+      ['2025-02-22T00:17:43.567Z', [
+        ['30m', '2025-02-21T23:47:43.567Z'], ['1h', '2025-02-21T23:17:43.567Z'],
+        ['4h', '2025-02-21T20:17:43.567Z'], ['24h', '2025-02-21T00:17:43.567Z'],
+      ]],
+      ['2025-02-21T12:00:00.000Z', [
+        ['30m', '2025-02-21T11:30:00.000Z'], ['1h', '2025-02-21T11:00:00.000Z'],
+        ['4h', '2025-02-21T08:00:00.000Z'], ['24h', '2025-02-20T12:00:00.000Z'],
+        ['7', '2025-02-14T12:00:00.000Z'], ['30', '2025-01-22T12:00:00.000Z'], ['90', '2024-11-23T12:00:00.000Z'],
+      ]],
+    ]) {
+      await evaluate(`window.smokeNow = Date.parse(${JSON.stringify(now)})`);
+      for (const [preset, from] of cases) {
+        await change('time-preset', preset); await until(ready);
+        await assertAppliedRange(preset, from, now);
+      }
+    }
+    await evaluate('window.smokeNow = Date.parse("2025-02-21T12:17:43.567Z")');
+    await change('time-preset', '4h'); await until(ready);
+    await evaluate('window.smokeNow = Date.parse("2025-02-21T12:18:44.890Z")');
+    await click('#refresh-data'); await until(ready);
+    await assertAppliedRange('4h', '2025-02-21T08:18:44.890Z', '2025-02-21T12:18:44.890Z');
+    await change('host-filter', 'claude-code'); await until(ready);
+    await assertAppliedRange('4h', '2025-02-21T08:18:44.890Z', '2025-02-21T12:18:44.890Z', { host: 'claude-code' });
+    const model = await evaluate('Array.from(document.getElementById("model-filter").options).find(option => option.value && option.value !== "unknown" && !option.disabled).value');
+    await change('model-filter', model); await until(ready);
+    await assertAppliedRange('4h', '2025-02-21T08:18:44.890Z', '2025-02-21T12:18:44.890Z', { host: 'claude-code', model });
+    await change('project-filter', payload.filterOptions.projects[0]); await click('#filter-form button[type=submit]'); await until(ready);
+    await assertAppliedRange('4h', '2025-02-21T08:18:44.890Z', '2025-02-21T12:18:44.890Z', { host: 'claude-code', model, projectCwd: payload.filterOptions.projects[0] });
+    await click('#reset-filters'); await until(ready);
+    await change('time-preset', 'custom'); await change('from-filter', '2025-02-21T11:00:00.123'); await change('to-filter', '2025-02-21T12:00:00.789');
+    await click('#filter-form button[type=submit]'); await until(ready);
+    await evaluate('window.smokeNow = Date.parse("2025-02-21T14:33:44.890Z")'); await click('#refresh-data'); await until(ready);
+    await assertAppliedRange('custom', '2025-02-21T11:00:00.123Z', '2025-02-21T12:00:00.789Z');
+    await change('from-filter', ''); await click('#filter-form button[type=submit]'); await until(ready);
+    await evaluate('window.smokeNow += 60000'); await click('#refresh-data'); await until(ready);
+    await assertAppliedRange('custom', null, '2025-02-21T12:00:00.789Z');
+    await change('from-filter', '2025-02-21T11:00:00.123'); await change('to-filter', ''); await click('#filter-form button[type=submit]'); await until(ready);
+    await evaluate('window.smokeNow += 60000'); await click('#refresh-data'); await until(ready);
+    await assertAppliedRange('custom', '2025-02-21T11:00:00.123Z', null);
+    await change('time-preset', 'all'); await until(ready);
+    await assertAppliedRange('all', null, null);
+    assert.ok(await evaluate('Number(document.querySelector(".metric-value").textContent.replaceAll(",", ""))') > defaultCount, 'All time recovers historical combined activity');
+    await change('metric-measure', 'successfulReads'); await until(ready);
+    await change('metric-content', 'resources'); await until(ready); await change('metric-measure', 'failedReads'); await until(ready);
+    await change('metric-content', 'both'); await until(ready);
+    assert.equal(await evaluate('document.getElementById("metric-measure").value'), 'successfulReads', 'Ordinary content switches remember the Both measure');
+    await change('metric-content', 'skills'); await change('metric-measure', 'uses'); await change('metric-split', 'model'); await change('metric-display', 'session-share');
+    await change('metric-content', 'resources'); await until(ready);
+    assert.equal(await evaluate('document.getElementById("metric-measure").value'), 'failedReads', 'Ordinary content switches remember the Resources measure');
+    await change('time-preset', 'custom'); await change('from-filter', '2025-02-21T09:30'); await change('to-filter', '2025-02-21T11:30'); await click('#filter-form button[type=submit]'); await until(ready);
+    await evaluate('document.querySelector("#activity-chart .trend-plot").focus()'); await key('End'); await key('Enter'); await until(ready);
+    assert.ok(await evaluate('new URL(window.filterRequests.at(-1)).searchParams.has("selectionFrom")'), 'Keyboard chart selection sends the local interval');
+    await evaluate('window.smokeNow = Date.parse("2025-02-21T12:17:43.567Z")');
+    await click('#reset-filters'); await until(ready);
+    const resetRequests = await assertAppliedRange('4h', '2025-02-21T08:17:43.567Z', '2025-02-21T12:17:43.567Z');
+    assert.equal(resetRequests[1].searchParams.get('content'), 'both');
+    assert.equal(resetRequests[1].searchParams.get('measure'), 'activity');
+    for (const url of resetRequests) for (const key of ['selectionFrom', 'selectionTo', 'host', 'model', 'projectCwd']) assert.equal(url.searchParams.has(key), false);
+    assert.equal(await evaluate('document.getElementById("metric-content").value'), 'both');
+    assert.equal(await evaluate('document.getElementById("metric-measure").value'), 'activity');
+    assert.equal(await evaluate('document.getElementById("metric-split").value'), 'skill');
+    assert.equal(await evaluate('document.getElementById("metric-display").value'), 'count');
+    assert.equal(await evaluate('document.getElementById("metric-display").disabled'), true);
+    assert.equal(await evaluate('document.querySelector(".brush-band")?.hidden ?? true'), true);
+    assert.deepEqual((await legendValues()).map(([name]) => name), defaultContentNames, 'Reset restores the default content trends');
+    await change('metric-content', 'resources'); await until(ready);
+    assert.equal(await evaluate('document.getElementById("metric-measure").value'), 'activity', 'Reset restores the remembered Resources default');
+    await change('metric-content', 'both'); await until(ready);
+    assert.equal(await evaluate('document.getElementById("metric-measure").value'), 'activity', 'Reset restores the remembered Both default');
+    await change('metric-content', 'skills');
+    assert.equal(await evaluate('document.getElementById("metric-measure").value'), 'successfulReads');
+    assert.equal(await evaluate('document.getElementById("metric-split").value'), 'skill');
+    assert.equal(await evaluate('document.getElementById("metric-display").value'), 'count');
+    assert.equal(await evaluate('document.getElementById("metric-display").disabled'), false);
+    await evaluate('window.smokeNow = Date.parse("2025-02-21T12:00:00.000Z")');
+    await change('time-preset', '7'); await until(ready);
     assert.equal(await evaluate('document.getElementById("time-preset").value'), '7');
     const weekly = await fetch(new URL('/api/dashboard?fromObservedAt=2025-02-14T12:00:00.000Z&toObservedAt=2025-02-21T12:00:00.000Z', rich.url)).then(response => response.json());
     assert.equal(weekly.report.activity.binWidthMs, 3600000);
@@ -394,7 +525,7 @@ try {
     await click('#refresh-data'); await until(ready);
     assert.equal(await evaluate('document.querySelectorAll("#activity-chart .trend-label").length'), 0, 'Empty custom selection survives refresh');
     await evaluate('window.smokeNow = Date.parse("2025-02-21T12:00:00.000Z")');
-    await click('#reset-filters'); await until(ready);
+    await resetSkills(); await change('time-preset', '7'); await until(ready);
     assert.equal(await evaluate('document.querySelectorAll("#activity-chart .trend-label").length'), 5, 'Reset restores the default selection');
     assert.equal(await evaluate('document.getElementById("time-preset").value'), '7');
     assert.equal(await evaluate('document.querySelector(".metric-value").textContent'), weekly.report.counts.successfulReads.toLocaleString('en-US'));
@@ -443,7 +574,7 @@ try {
     await noOverflow(); await chartScreenshot('weekly-chooser-320.png');
     await command('Emulation.setTouchEmulationEnabled', { enabled: false });
     await command('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1100, deviceScaleFactor: 1, mobile: false });
-    await click('#reset-filters'); await until(ready);
+    await resetSkills();
     await change('time-preset', 'all'); await until(ready);
 
     assert.equal(await evaluate('document.getElementById("time-preset").value'), "all", "All time recovers historical data");
@@ -685,10 +816,10 @@ try {
     assert.match(await evaluate('document.querySelector("#model-filter option:checked").textContent'), /unavailable/);
     assert.doesNotMatch(await evaluate('document.querySelector("#model-filter option:checked").textContent'), /^\[/, 'Retained model keeps a readable provider/model label');
     await change('model-filter', ''); await until(ready); assert.equal(await evaluate('document.getElementById("model-filter").value'), '', 'All models can recover an unavailable selection');
-    await click('#reset-filters'); await until(ready); await change('time-preset', 'all'); await until(ready);
+    await resetSkills(); await change('time-preset', 'all'); await until(ready);
     await change('project-filter', payload.filterOptions.projects[0]); await evaluate('document.getElementById("filter-form").requestSubmit()'); await until(ready);
     await change('host-filter', 'pi'); await until(ready); assert.equal(await evaluate('document.getElementById("project-filter").value'), payload.filterOptions.projects[0], 'Agent changes preserve the project');
-    await click('#reset-filters'); await until(ready); await change('time-preset', 'all'); await until(ready);
+    await resetSkills(); await change('time-preset', 'all'); await until(ready);
     await change('model-filter', 'unknown'); await until(ready); await change('metric-measure', 'requests'); await change('metric-split', 'agent-model');
     assert.equal(await evaluate('document.querySelectorAll("#skill-table table").length'), 0, 'No zero-column matrix for a measure without model attribution');
     assert.match(await evaluate('document.getElementById("activity-chart").textContent'), /Requests have no model attribution/);
@@ -775,8 +906,7 @@ try {
     assert.ok(appliedDates.summary.includes(new Date(appliedDates.from + 'Z').toISOString()));
     assert.ok(appliedDates.summary.includes(new Date(appliedDates.to + 'Z').toISOString()));
     assert.doesNotMatch(appliedDates.summary, /All time|All projects|All machines/);
-    await click('#reset-filters');
-    await until(ready);
+    await resetSkills();
     await change('time-preset', 'all'); await until(ready);
     assert.equal(await evaluate('document.querySelector(".metric-value").textContent'), payload.report.counts.successfulReads.toLocaleString("en-US"));
     assert.equal(await evaluate('document.getElementById("scope-summary").hidden'), true, 'All time hides the date summary after Reset');
@@ -797,8 +927,7 @@ try {
     await click('#filter-form button[type=submit]');
     await until(ready);
     assert.match(await evaluate('document.getElementById("scope-summary").textContent'), /^2025-02-01T01:23:00.000Z to Latest record/);
-    await click('#reset-filters');
-    await until(ready);
+    await resetSkills();
     await change('time-preset', 'all'); await until(ready);
     await click('#toggle-filters');
 
@@ -818,8 +947,7 @@ try {
     assert.doesNotMatch(activeSummary, /All time|All projects|All machines/);
     await noOverflow();
     await screenshot(join(directory, 'filters-mobile.png'));
-    await click('#reset-filters');
-    await until(ready);
+    await resetSkills();
     await change('time-preset', 'all'); await until(ready);
     await helpFromEveryTab();
     await click('[data-workspace=metrics]');
@@ -898,7 +1026,7 @@ try {
     await click('#catalog-context summary');
     assert.ok(await evaluate('document.querySelectorAll("#catalog-list button.link").length > 0'), 'Catalog-only reports retain their catalog');
     await noOverflow(); await chartScreenshot('catalog-only-mobile.png');
-    await evaluate('window.fetch = window.smokeFetch; document.getElementById("reset-filters").click()'); await until(ready);
+    await evaluate('window.fetch = window.smokeFetch'); await resetSkills();
     await change('time-preset', 'all'); await until(ready);
     await evaluate(`window.fetch = async () => new Response(JSON.stringify(${JSON.stringify(repeatedPayload)})); document.getElementById('refresh-data').click();`);
     await until(ready);
@@ -1109,7 +1237,7 @@ try {
     assert.equal(await evaluate('document.getElementById("skill-detail").hidden'), true, 'No impossible skill selection placeholder');
     await noZeroPagers();
 
-    await click('#reset-filters'); await until(ready); await change('time-preset', 'all'); await until(ready);
+    await resetSkills(); await change('time-preset', 'all'); await until(ready);
     const contentExpected = async (content, measure = 'activity', split = 'item', extra = {}) => {
       const params = new URLSearchParams({ content, measure, split, ...extra });
       const result = await fetch(new URL('/api/content-analytics?' + params, rich.url)).then(response => response.json());
@@ -1234,17 +1362,19 @@ try {
     assert.equal(await evaluate('document.getElementById("metric-display").disabled'), false);
     assert.equal(await evaluate('document.getElementById("metric-measure").value'), 'successfulReads');
     assert.equal(await evaluate('document.getElementById("content-detail").hidden'), true);
-    await click('#reset-filters'); await until(ready);
+    await resetSkills();
 
     await command('Page.addScriptToEvaluateOnNewDocument', { source: 'window.smokeNow = Date.parse("2026-01-01T12:00:00.000Z");' });
     await command('Page.navigate', { url: rich.url }); await until(ready);
-    assert.equal(await evaluate('document.getElementById("time-preset").value'), '7');
-    assert.equal(await evaluate('document.querySelector(".metric-value").textContent'), '0', 'Historical database starts with an honest empty week');
-    await noOverflow(); await screenshot(join(directory, 'historical-empty-week.png'));
+    assert.equal(await evaluate('document.getElementById("time-preset").value'), '4h');
+    assert.equal(await evaluate('document.querySelector(".metric-value").textContent'), '0', 'Historical database starts with an honest empty recent window');
+    await noOverflow(); await screenshot(join(directory, 'historical-empty-4h.png'));
+    await change('metric-content', 'skills');
     await change('time-preset', 'all'); await until(ready);
     assert.equal(await evaluate('document.querySelector(".metric-value").textContent'), payload.report.counts.successfulReads.toLocaleString('en-US'), 'All time recovers historical data');
     await command("Page.navigate", { url: empty.url });
     await until(ready);
+    await change('metric-content', 'skills');
     await change('time-preset', 'all'); await until(ready);
     assert.equal(await evaluate('document.querySelector(".metric-value").textContent'), "0");
     assert.match(await evaluate('document.getElementById("activity-chart").textContent'), /No activity recorded yet/);

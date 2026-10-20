@@ -8,7 +8,7 @@ The dashboard shows recorded skill and file evidence, plus session paths. It doe
 
 ## Metrics
 
-Skills is the default Content. Select a Measure to show successful reads, skill uses, read failures, native invocations, invocation failures, read attempts, requests, or wrappers. Native invocations counts successful invocations. Read attempts remain unconfirmed.
+Both is the default Content, with Recorded activity as its measure. Select Skills to show successful reads, skill uses, read failures, native invocations, invocation failures, read attempts, requests, or wrappers. Native invocations counts successful invocations. Read attempts remain unconfirmed.
 
 Split by selects Skill / total ranking, Agent, Model, or Agent + model. The trend stacks counts for the selected measure. The comparison shows a total ranking or a matrix. Matrix columns contain observed cohorts, including Unknown model and No model attribution where applicable. It never constructs all possible agent/model combinations.
 
@@ -20,7 +20,7 @@ Skill names retain their exact recorded form, including plugin prefixes. This ch
 
 The unit for session share is one host session on one machine and account source. Records without a session use their segment identity. Claude Code subagents share their parent session. OpenCode subagents use child sessions.
 
-The default trend shows successful reads for five skills. Open Skills to search exact names and add or remove layers. Custom names survive refreshes and filter changes without substitution. Each name keeps its color while the page remains open. Agent, Model, and Agent + model show all observed series. Exact counts follow in View activity data, with 24 intervals per page. Undated evidence stays in the comparison and is omitted from the trend.
+In Skills, the default trend shows successful reads for five skills. Open Skills to search exact names and add or remove layers. Custom names survive refreshes and filter changes without substitution. Each name keeps its color while the page remains open. Agent, Model, and Agent + model show all observed series. Exact counts follow in View activity data, with 24 intervals per page. Undated evidence stays in the comparison and is omitted from the trend.
 
 Legend counts total the displayed range, or the selected dates after a selection. Pointer hover and keyboard inspection temporarily show one interval. Leaving inspection restores range totals. The readout names the scope for these counts.
 
@@ -58,7 +58,9 @@ Agent, Model, and Period remain visible in every workspace. Select All agents or
 
 The slicers allow observed agent/model combinations in the current machine, project, source, and date context. Incompatible options are disabled. A selection that becomes unavailable stays visible until you clear it or broaden the scope. Changing an agent or model preserves the project.
 
-More filters contains machine, project, command source, and custom UTC dates. Source applies to requests only. The summary shows applied restrictions. Last 7 days is the default. Refresh recalculates relative periods and keeps custom UTC dates fixed. Reset restores Last 7 days, successful reads, the total ranking, and the top five trends. Select All time to recover older records.
+More filters contains machine, project, command source, and custom UTC dates. Source applies to requests only. The summary shows applied restrictions.
+
+Last 4 hours is the default Period. The presets also include Last 30 minutes, Last 1 hour, Last 24 hours, and the existing day ranges. Refresh recalculates relative periods and keeps custom UTC dates fixed. Reset restores Last 4 hours, Both, Recorded activity, Count, the total ranking, and the top five trends. Reset also restores each content mode's default measure. Select All time to recover older records.
 
 Windows up to seven days use UTC hours. Longer windows use daily or adaptive bins without truncation. About this data remains available from every workspace.
 
@@ -101,7 +103,7 @@ The script starts disposable previews and a private headless browser. It removes
 It prints the retained screenshot directory and response-size measurements.
 Set `CHROMIUM` to select a browser executable. Set `HOTPLATE_SCREENSHOT_DIR` to choose an artifact directory.
 
-The checks freeze browser time for weekly defaults and retain historical All time scenarios. They cover desktop, mobile, 320px layouts, editable rows, hourly edges, missing periods, and repeated reads. Mouse, touch, and keyboard checks cover continuous selection, resize, move, cancellation, and path navigation. They also cover comparison counts, linked rankings and models, applied filters, hostile text, empty states, failed refreshes, and retry.
+The checks freeze browser time for recent defaults and retain weekly Skills and historical All time scenarios. They verify exact preset bounds on both analytics paths, Refresh, custom dates, Reset, and remembered content measures. They cover desktop, mobile, 320px layouts, editable rows, hourly edges, missing periods, and repeated reads. Mouse, touch, and keyboard checks cover continuous selection, resize, move, cancellation, and path navigation. They also cover comparison counts, linked rankings and models, applied filters, hostile text, empty states, failed refreshes, and retry.
 A larger controlled response checks bounded rendering. It is not a production storage-load benchmark.
 
 ## What the evidence means
