@@ -1,4 +1,5 @@
 import { projectMetrics } from "./metrics.js";
+import { contentMeasures } from "../content-analytics.js";
 
 export const dashboardHtml = `<!doctype html>
 <html lang="en">
@@ -43,7 +44,7 @@ export const dashboardHtml = `<!doctype html>
           <div class="page-heading"><div><h1 id="metrics-heading">Skill metrics</h1></div></div>
           <div id="overview-cards" class="metrics-grid" aria-label="Filtered totals"></div>
           <div id="evidence-context" class="evidence-context"></div>
-          <div class="metric-controls"><label>Measure<select id="metric-measure"><option value="successfulReads">Successful reads</option><option value="uses">Skill uses</option><option value="failedReads">Read failures</option><option value="invocations">Native invocations</option><option value="invocationFailures">Invocation failures</option><option value="readAttempts">Read attempts</option><option value="requests">Requests</option><option value="wrappers">Wrappers</option></select></label><label>Split by<select id="metric-split"><option value="skill">Skill / total ranking</option><option value="agent">Agent</option><option value="model">Model</option><option value="agent-model">Agent + model</option></select></label></div><p id="metric-explanation" class="footnote"></p>
+          <div class="metric-controls"><label>Content<select id="metric-content"><option value="skills">Skills</option><option value="resources">Resources</option><option value="both">Both</option></select></label><label>Measure<select id="metric-measure"><option value="successfulReads">Successful reads</option><option value="uses">Skill uses</option><option value="failedReads">Read failures</option><option value="invocations">Native invocations</option><option value="invocationFailures">Invocation failures</option><option value="readAttempts">Read attempts</option><option value="requests">Requests</option><option value="wrappers">Wrappers</option></select></label><label>Split by<select id="metric-split"><option value="skill">Skill / total ranking</option><option value="agent">Agent</option><option value="model">Model</option><option value="agent-model">Agent + model</option></select></label></div><p id="metric-explanation" class="footnote"></p><div id="content-status" class="content-status" role="status" hidden></div>
           <div class="overview-grid">
             <section class="panel activity-panel" aria-labelledby="activity-heading"><div class="section-heading"><div><h2 id="activity-heading">Over time</h2></div><div class="activity-actions"><span class="small muted">UTC</span><button id="view-explorer" class="quiet" type="button" hidden>View selection</button></div></div><div id="activity-chart"></div></section>
             <section class="panel" aria-labelledby="skills-heading"><div class="section-heading"><h2 id="skills-heading">Compare skills</h2><label class="inline-label">Display<select id="metric-display"><option value="count">Count</option><option value="session-share">Session share</option></select></label></div><label class="search-label"><span class="sr-only">Find a skill</span><input id="skill-search" type="search" placeholder="Find a skill…"></label><div id="skill-table" class="table-wrap" tabindex="0" role="region" aria-label="Skill comparison"></div><p id="comparison-scroll-hint" class="matrix-scroll-hint footnote" hidden>Scroll horizontally to compare all columns.</p><div id="comparison-pagination"></div><p id="comparison-note" class="footnote"></p></section>
@@ -56,7 +57,7 @@ export const dashboardHtml = `<!doctype html>
             <div class="explore-layout"><section id="explore-comparison" aria-label="Period comparison"></section><div class="explore-side"><section aria-labelledby="explore-path-heading"><div class="section-heading"><h3 id="explore-path-heading">Matching paths</h3><button id="explore-all-paths" class="link" type="button">View all</button></div><div id="explore-paths"></div></section><section aria-labelledby="explore-model-heading"><h3 id="explore-model-heading">Models in selection</h3><p class="footnote">Successful reads matching the selected skill and UTC dates.</p><div id="explore-model-list"></div></section></div></div>
             <p id="explore-announcement" class="sr-only" role="status" aria-live="polite"></p>
           </section>
-          <section id="skill-detail" class="panel" aria-live="polite" hidden></section>
+          <section id="skill-detail" class="panel" aria-live="polite" hidden></section><section id="content-detail" class="panel" aria-live="polite" hidden></section>
           <details class="panel" id="read-patterns"><summary id="relationships-heading">Read patterns</summary><div class="section-heading"><button type="button" id="browse-paths" class="quiet">View session paths</button></div><div id="relationship-view"></div></details>
           <details class="panel" id="catalog-context"><summary>Skill catalog</summary><p class="footnote">The catalog follows machine, project, and date filters only.</p><label class="search-label">Find a catalog skill<input id="catalog-search" type="search" placeholder="Search names…"></label><div id="catalog-list"></div></details>
         </section>
@@ -214,6 +215,19 @@ p { color: var(--muted); }
 .overview-grid { display: grid; grid-template-columns: minmax(0,1.55fr) minmax(330px,1fr); gap: 18px; }
 .overview-grid.matrix-layout { grid-template-columns: minmax(0,1fr); }
 .matrix th { overflow-wrap: anywhere; }
+.content-status { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; font-size: 12px; }
+.content-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.content-name .link { overflow-wrap: anywhere; text-align: left; min-width: 0; }
+.content-label { min-width: 0; }
+.content-toggle { flex: 0 0 36px; width: 36px; min-height: 40px; padding: 4px; }
+.content-child .content-name { padding-left: 22px; }
+.content-latest { display: block; font-size: 15px; line-height: 1.6; overflow-wrap: anywhere; margin-top: 10px; }
+.content-location { overflow-wrap: anywhere; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.content-breakdown { display: flex; flex-wrap: wrap; gap: 10px 24px; margin: 14px 0; }
+.content-breakdown > div { min-width: 110px; }
+.content-breakdown strong, .content-breakdown span { display: block; }
+.content-breakdown span { color: var(--muted); font-size: 11px; }
+.content-detail-heading { overflow-wrap: anywhere; min-width: 0; }
 .activity-actions { display: flex; align-items: center; gap: 12px; }
 .activity-actions button { font-size: 11px; padding: 5px 8px; }
 .trend-layout { display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 0 10px; margin-top: 14px; }
@@ -420,13 +434,15 @@ body:has(#status-text[data-kind=error]) .message { border-left-color: var(--bad)
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
 `;
 
-export const dashboardJs = 'const projectMetrics = ' + projectMetrics.toString() + ';\n' + String.raw`'use strict';
+export const dashboardJs = 'const projectMetrics = ' + projectMetrics.toString() + ';\nconst contentMeasures = ' + JSON.stringify(contentMeasures) + ';\n' + String.raw`'use strict';
 const $ = (id) => document.getElementById(id);
 const state = {
   requestId: 0, controller: null, filterQuery: '', report: null, pathModels: [], resources: { kind: 'unrequested' }, workspace: 'metrics', metricView: null,
   focus: { kind: 'all' }, routeKey: null, skillSelection: null,
   explore: { skillName: null, interval: null },
   trends: { kind: 'top', count: 5 },
+  content: { kind: 'unrequested' }, contentRequestId: 0, contentInterval: null, contentExpanded: new Set(), contentDetail: null, contentTrends: { kind: 'top', count: 5 },
+  contentMeasures: { resources: 'activity', both: 'activity' }, skillPresentation: { measure: 'successfulReads', split: 'skill', display: 'count' }, filterOptions: null,
   pages: { activity: 0, skills: 0, columns: 0, relationships: 0, routes: 0, steps: 0, catalog: 0, identities: 0, evidence: 0, resources: 0 },
 };
 let activityView = null;
@@ -445,6 +461,7 @@ const hostLabel = (host) => hostLabels[host] || host;
 const hostColor = (host) => hostColors[host] || hostColors.unknown;
 class DashboardFetchError extends Error {}
 const pageLabels = { skills: 'skill rows', columns: 'comparison columns' };
+const pageLabel = key => key === 'skills' && isContentView() ? 'item rows' : pageLabels[key] || key;
 const motion = (() => {
   const preference = matchMedia('(prefers-reduced-motion: reduce)');
   const scopes = new Map(); const remembered = new WeakMap();
@@ -632,13 +649,13 @@ function pagination(key, total, size, render) {
     const previous = button('Previous', () => { state.pages[key]--; render(); restorePagerFocus(key, 'Previous'); });
     const next = button('Next', () => { state.pages[key]++; render(); restorePagerFocus(key, 'Next'); });
     previous.disabled = state.pages[key] === 0; next.disabled = state.pages[key] === pages - 1;
-    previous.setAttribute('aria-label', 'Previous ' + (pageLabels[key] || key)); next.setAttribute('aria-label', 'Next ' + (pageLabels[key] || key));
+    previous.setAttribute('aria-label', 'Previous ' + pageLabel(key)); next.setAttribute('aria-label', 'Next ' + pageLabel(key));
     controls.append(previous, next); wrap.append(controls);
   }
   return wrap;
 }
 function restorePagerFocus(key, direction) {
-  const label = pageLabels[key] || key;
+  const label = pageLabel(key);
   const target = document.querySelector('[aria-label="' + direction + ' ' + label + '"]:not(:disabled)') || document.querySelector('[aria-label$=" ' + label + '"]:not(:disabled)');
   target?.focus();
 }
@@ -696,6 +713,7 @@ function showDashboardError(error) {
   $('message-panel').append(disclosure('Error details', node('p', error instanceof Error ? error.message : String(error))));
 }
 function showWorkspaceStatus() {
+  if (state.workspace === 'metrics' && isContentView()) { renderScope(); $('message-panel').hidden = true; $('dashboard-content').hidden = false; renderContentStatus(); return; }
   if (state.workspace !== 'resources' || state.resources.kind === 'ready') {
     renderScope(); $('message-panel').hidden = true; $('dashboard-content').hidden = false;
     $('workspace').setAttribute('aria-busy', 'false'); setStatus('ready', 'Ready');
@@ -753,6 +771,7 @@ function applyTimePreset() {
 }
 async function loadDashboard() {
   applyTimePreset();
+  cancelContentRequest(); state.content = { kind: 'unrequested' }; state.contentInterval = null; state.contentDetail = null; state.contentTrends = { kind: 'top', count: 5 };
   motion.cancel($('dashboard-content'));
   const requestId = ++state.requestId;
   state.controller?.abort(); state.controller = new AbortController();
@@ -767,7 +786,7 @@ async function loadDashboard() {
   try {
     const payload = await fetchDashboard('skills', state.filterQuery, state.controller.signal);
     if (requestId !== state.requestId) return;
-    renderFilterOptions(payload.filterOptions);
+    state.filterOptions = payload.filterOptions; renderFilterOptions(payload.filterOptions);
     if (payload.kind === 'missing') {
       showMissingDatabase(payload.databasePath); return;
     }
@@ -777,6 +796,7 @@ async function loadDashboard() {
     for (const measure of ['uses', 'invocationFailures']) for (const series of projectMetrics(state.report, { measure, split: 'model', display: 'count' }).series) { if (series.attribution !== 'none' && !models.some(column => sameModel(column.model, series.model))) models.push({ model: series.model }); }
     state.pathModels = models;
     resetSelections();
+    setOptions($('route-model'), 'All models', state.pathModels.map((column, index) => ({ value: String(index), label: modelLabel(column.model) })));
     renderMetrics(); renderPaths();
     if (state.workspace === 'resources') void loadResources();
   } catch (error) {
@@ -846,6 +866,8 @@ function renderScope() {
   $('scope-summary').hidden = parts.length === 0;
 }
 function renderMetrics() {
+  if (isContentView()) { loadContentAnalytics(); return; }
+  $('overview-cards').hidden = false; $('evidence-context').hidden = false;
   updateMetricProjection();
   const report = state.report;
   const metrics = [
@@ -863,7 +885,6 @@ function renderMetrics() {
   if (report.counts.invocations) $('evidence-context').append(node('span', count(report.counts.invocations, 'native skill invocation')));
   for (const [label, value] of [['request', report.counts.requests], ['wrapper', report.counts.wrappers]]) $('evidence-context').append(node('span', count(value, label)));
   renderActivity(); renderExplore(); renderRelationships(); renderCatalog(); renderSkillDetail();
-  setOptions($('route-model'), 'All models', state.pathModels.map((column, index) => ({ value: String(index), label: modelLabel(column.model) })));
   const coverage = report.coverage;
   $('evidence-context').append(node('span', count(coverage.captureGaps, 'capture gap') + ' · ' + count(coverage.droppedObservations, 'record') + ' lost · ' + count(coverage.filteredOmissions, 'record') + ' hidden by filters'));
 }
@@ -885,7 +906,7 @@ function mountTimeBrush(plot, activity, readout, onChange, onReadout) {
   });
   plot.append(before, after, band, ...handles);
   plot.tabIndex = 0; plot.setAttribute('role', 'group');
-  plot.setAttribute('aria-label', 'Skill trends. Drag to select dates. Arrow keys inspect intervals. Enter selects. Shift extends. Escape clears.');
+  plot.setAttribute('aria-label', (isContentView() ? 'Content trends. Drag' : 'Skill trends. Drag') + ' to select dates. Arrow keys inspect intervals. Enter selects. Shift extends. Escape clears.');
   let selected = null; let gesture = null; let focus = { kind: 'summary', index: activity.bins.length - 1 };
   function publish(announce = false) {
     onReadout(focus.kind === 'inspection' ? { kind: 'inspection', index: focus.index } : selected === null ? { kind: 'displayed' } : { kind: 'selected', interval: interval(...selected) }, announce);
@@ -999,8 +1020,222 @@ function mountTimeBrush(plot, activity, readout, onChange, onReadout) {
     selected = next; paint(selected); publish();
   };
 }
-const metricUnit = () => presentation().measure === 'successfulReads' ? 'read' : measureLabels[presentation().measure].toLowerCase().replace(/s$/, '');
-const measureLabels = { successfulReads: 'Successful reads', failedReads: 'Read failures', uses: 'Skill uses', invocations: 'Native invocations', invocationFailures: 'Invocation failures', readAttempts: 'Read attempts', requests: 'Requests', wrappers: 'Wrappers' };
+const metricUnit = () => ({ successfulReads: 'read', activity: 'record', fsOpens: 'filesystem open', fsAccesses: 'filesystem access' })[presentation().measure] || measureLabels[presentation().measure].toLowerCase().replace(/s$/, '');
+const metricCount = value => count(value, metricUnit(), presentation().measure === 'fsAccesses' ? 'filesystem accesses' : undefined);
+const measureLabels = { successfulReads: 'Successful reads', failedReads: 'Read failures', uses: 'Skill uses', invocations: 'Native invocations', invocationFailures: 'Invocation failures', readAttempts: 'Read attempts', requests: 'Requests', wrappers: 'Wrappers', ...Object.fromEntries(Object.entries(contentMeasures).map(([key, value]) => [key, value.label])) };
+const contentMode = () => $('metric-content').value;
+const isContentView = () => contentMode() !== 'skills';
+const contentReport = () => state.content.kind === 'unrequested' ? null : state.content.report;
+const activeInterval = () => isContentView() ? state.contentInterval : state.explore.interval;
+const activeTrends = () => isContentView() ? state.contentTrends : state.trends;
+function setActiveTrends(value) { if (isContentView()) state.contentTrends = value; else state.trends = value; }
+const skillMeasureOptions = Array.from($('metric-measure').options, option => ({ value: option.value, label: option.textContent }));
+function configureContentControls() {
+  const content = isContentView();
+  const options = content ? Object.entries(contentMeasures).filter(([, item]) => contentMode() === 'both' || item.resources).map(([value, item]) => ({ value, label: item.label })) : skillMeasureOptions;
+  const selected = content ? state.contentMeasures[contentMode()] : state.skillPresentation.measure;
+  $('metric-measure').replaceChildren(...options.map(({ value, label }) => { const option = node('option', label); option.value = value; return option; }));
+  $('metric-measure').value = selected;
+  $('metric-display').value = content ? 'count' : state.skillPresentation.display;
+  $('metric-display').disabled = content;
+  $('metric-split').querySelector('[value="skill"]').textContent = content ? 'Item / total ranking' : 'Skill / total ranking';
+  $('metrics-heading').textContent = contentMode() === 'skills' ? 'Skill metrics' : contentMode() === 'resources' ? 'Resource metrics' : 'Skill and resource metrics';
+  $('skills-heading').textContent = contentMode() === 'skills' ? 'Compare skills' : contentMode() === 'resources' ? 'Compare resources' : 'Compare skills and resources';
+  $('comparison-note').textContent = '';
+  $('skill-search').placeholder = contentMode() === 'skills' ? 'Find a skill…' : contentMode() === 'resources' ? 'Find a resource…' : 'Find a skill or resource…';
+  $('skill-search').previousElementSibling.textContent = $('skill-search').placeholder.replace('…', '');
+  $('skill-table').setAttribute('aria-label', content ? 'Content comparison' : 'Skill comparison');
+  for (const id of ['read-patterns', 'catalog-context']) $(id).hidden = content;
+  $('content-detail').hidden = true; $('content-status').hidden = true;
+  if (content) { $('explorer-panel').hidden = true; $('skill-detail').hidden = true; }
+}
+function cancelContentRequest() {
+  if (state.content.kind === 'loading') state.content.controller.abort();
+  state.contentRequestId += 1;
+}
+function contentParams() {
+  const params = new URLSearchParams(state.filterQuery);
+  params.set('content', contentMode()); params.set('measure', $('metric-measure').value);
+  params.set('split', $('metric-split').value === 'skill' ? 'item' : $('metric-split').value);
+  if (state.contentInterval) { params.set('selectionFrom', state.contentInterval.startAt); params.set('selectionTo', state.contentInterval.endAt); }
+  return params;
+}
+function renderContentStatus() {
+  const status = $('content-status'); const content = state.content;
+  status.hidden = content.kind === 'ready'; status.replaceChildren();
+  if (content.kind === 'loading') status.append(node('span', state.contentInterval ? 'Loading selected counts…' : 'Loading content activity…'));
+  if (content.kind === 'error') status.append(node('span', content.error), button('Retry content activity', () => loadContentAnalytics(Boolean(content.report)), 'quiet'));
+  if (state.workspace !== 'metrics') return;
+  $('workspace').setAttribute('aria-busy', String(content.kind === 'loading'));
+  setStatus(content.kind === 'loading' ? 'loading' : content.kind === 'error' ? 'error' : 'ready', content.kind === 'loading' ? 'Loading' : content.kind === 'error' ? 'Error' : 'Ready');
+}
+async function loadContentAnalytics(retainChart = false) {
+  if (!state.report || !isContentView()) return;
+  const previous = retainChart ? contentReport() : null;
+  cancelContentRequest(); const requestId = state.contentRequestId; const controller = new AbortController();
+  const params = contentParams();
+  state.content = { kind: 'loading', controller, report: previous };
+  $('overview-cards').hidden = true; $('evidence-context').hidden = true; $('content-detail').hidden = true;
+  $('skill-table').replaceChildren(empty('Loading counts…')); $('comparison-pagination').replaceChildren(); $('comparison-scroll-hint').hidden = true;
+  if (!previous) { motion.cancel($('activity-chart')); $('activity-chart').replaceChildren(empty('Loading activity…')); activityView = null; }
+  renderContentStatus(); updateActivitySelection();
+  try {
+    if (retainChart) await new Promise(resolve => {
+      const cancel = () => { clearTimeout(timer); resolve(); };
+      const timer = setTimeout(() => { controller.signal.removeEventListener('abort', cancel); resolve(); }, 140);
+      controller.signal.addEventListener('abort', cancel, { once: true });
+    });
+    if (requestId !== state.contentRequestId || controller.signal.aborted) return;
+    const response = await fetch('/api/content-analytics?' + params, { signal: controller.signal, headers: { Accept: 'application/json' } });
+    if (!response.ok) throw new Error('Content request failed (HTTP ' + response.status + ').');
+    const payload = await response.json();
+    if (requestId !== state.contentRequestId || !isContentView()) return;
+    if (payload.kind === 'missing') throw new Error('No Hotplate database found.');
+    if (payload.kind === 'error') throw new Error(payload.message);
+    if (payload.kind !== 'ready' || !Array.isArray(payload.report?.selection?.rows) || !Array.isArray(payload.report?.displayed?.series)) throw new Error('The content report is unavailable.');
+    const sameChart = previous !== null && JSON.stringify(previous.displayed) === JSON.stringify(payload.report.displayed);
+    if (previous && !sameChart && presentation().split === 'skill') state.contentTrends = { kind: 'custom', names: displayedTrendNames() };
+    state.content = { kind: 'ready', report: payload.report };
+    renderFilterOptions(payload.report.filterOptions);
+    renderContentMetrics(!sameChart);
+  } catch (error) {
+    if (requestId !== state.contentRequestId || !isContentView()) return;
+    state.content = { kind: 'error', report: previous, error: error instanceof TypeError ? 'Could not reach the dashboard server.' : error.message };
+    $('skill-table').replaceChildren(empty('Content counts are unavailable. Retry to load this selection.'));
+    renderContentStatus(); updateActivitySelection();
+  }
+}
+function contentMetricView(report) {
+  return { series: report.displayed.series.map(series => ({ ...series, attribution: series.modelAttribution })),
+    timeline: report.displayed.activity.kind === 'bucketed' ? report.displayed.activity.bins : [], undatedCount: report.overall.undatedCount };
+}
+function renderContentMetrics(redraw = true) {
+  const report = contentReport(); state.metricView = contentMetricView(report);
+  const p = presentation(); document.querySelector('.overview-grid').classList.toggle('matrix-layout', p.split !== 'skill');
+  $('metric-explanation').textContent = p.measure === 'activity' ? 'Recorded evidence, including failures. Repeated events count separately. Filesystem activity does not confirm a tool read.'
+    : p.measure === 'readAttempts' ? 'Unconfirmed tool read attempts. The outcome is unknown.'
+    : p.measure === 'fsOpens' || p.measure === 'fsAccesses' ? 'Filesystem observations. Repeated events count separately.'
+    : p.measure === 'successfulReads' ? 'Successful tool reads. Repeated reads count separately.' : measureLabels[p.measure] + ' in the selected content.';
+  const summary = report.selection;
+  const entries = [[measureLabels[p.measure], number(summary.count)], ['Compared items', number(summary.rows.filter(row => row.count > 0).length)],
+    ['Latest evidence (UTC)', summary.lastEvidenceAt ? timeLabel(summary.lastEvidenceAt) : 'None'], ['Read failures', number(summary.counts.failedReads)]];
+  $('overview-cards').hidden = false;
+  $('overview-cards').replaceChildren(...entries.map(([label, value]) => { const card = node('article', null, 'metric-card'); card.append(node('span', label, 'metric-label'), node('strong', value, label.startsWith('Latest') ? 'content-latest' : 'metric-value')); return card; }));
+  $('evidence-context').hidden = false; $('evidence-context').replaceChildren();
+  for (const [key, value] of Object.entries(summary.counts)) if (value) $('evidence-context').append(node('span', number(value) + ' ' + measureLabels[key].toLowerCase()));
+  if (redraw) renderActivity();
+  renderContentComparison(); renderContentDetail(); renderContentStatus(); updateActivitySelection();
+}
+function contentRowPath(row) { return row.identity.kind === 'skill' ? row.identity.canonicalPath || '' : row.identity.location.canonicalPath; }
+function contentRowMatches(row, query) { return [row.label, contentRowPath(row), row.identity.kind === 'skill' ? row.identity.name : row.identity.location.machineId].some(value => value.toLowerCase().includes(query)); }
+function contentRowName(row, child = false) {
+  if (child && row.identity.kind === 'skill') return 'Skill evidence · ' + hostLabel(row.identity.host);
+  if (!child || row.identity.kind !== 'file' || !row.identity.ownerSkillPath) return row.label;
+  const root = row.identity.ownerSkillPath.slice(0, -'SKILL.md'.length);
+  return row.identity.location.canonicalPath.startsWith(root) ? row.identity.location.canonicalPath.slice(root.length) : row.label;
+}
+function contentRowAction(row, child = false) {
+  const name = node('div', null, 'content-name');
+  if (row.children.length) {
+    const expanded = state.contentExpanded.has(row.key) || Boolean($('skill-search').value.trim());
+    const toggle = button(expanded ? '▾' : '▸', () => { if (state.contentExpanded.has(row.key)) state.contentExpanded.delete(row.key); else state.contentExpanded.add(row.key); renderContentComparison(); }, 'quiet content-toggle');
+    toggle.disabled = Boolean($('skill-search').value.trim());
+    toggle.setAttribute('aria-label', (expanded ? 'Collapse ' : 'Expand ') + row.label); toggle.setAttribute('aria-expanded', String(expanded)); name.append(toggle);
+  }
+  const title = node('div', null, 'content-label'); title.append(button(contentRowName(row, child), () => selectContentDetail(row), 'link'));
+  if (!child) {
+    const identity = row.identity; const location = identity.kind === 'skill' ? identity : identity.location;
+    const duplicate = contentReport().selection.rows.some(other => other.key !== row.key && other.label === row.label);
+    const context = identity.kind === 'skill' ? ['Unresolved file association', hostLabel(identity.host), ...(location.canonicalPath ? [location.canonicalPath] : [])] : [location.canonicalPath];
+    if (duplicate) context.push(location.machineId, location.sourceId);
+    title.append(node('div', context.join(' · '), 'content-location'));
+  }
+  name.append(title); return name;
+}
+function renderContentComparison() {
+  if (state.content.kind !== 'ready') return;
+  const report = contentReport(); const query = $('skill-search').value.trim().toLowerCase();
+  const rows = report.selection.rows.filter(row => row.count > 0 && (!query || contentRowMatches(row, query) || row.children.some(child => contentRowMatches(child, query))));
+  $('skills-heading').textContent = contentMode() === 'resources' ? 'Compare resources' : 'Compare skills and resources';
+  $('comparison-note').textContent = contentMode() === 'both' ? 'Expand a skill to compare its files. Parent totals include their children once. Select a count for evidence and location details.' : 'All files with matching activity, including SKILL.md. Select a count for evidence and location details.';
+  const target = $('skill-table'); const before = motion.capture(target); target.replaceChildren(); const pager = $('comparison-pagination'); pager.replaceChildren();
+  const split = presentation().split; $('comparison-scroll-hint').hidden = split === 'skill';
+  if (!rows.length) {
+    $('comparison-scroll-hint').hidden = true; target.append(empty(query ? 'No skills or resources match this search.' : metricEmptyText()));
+    if (state.report.scope.source) target.append(button('Clear command source filter', () => { $('source-filter').value = ''; loadDashboard(); }, 'link'));
+    target.append(button('View resource inventory', () => showWorkspace('resources', true), 'link')); return;
+  }
+  const max = Math.max(1, ...rows.map(row => row.count));
+  const page = pageItems(rows, 'skills', split === 'skill' ? 8 : 12);
+  const visible = page.flatMap(row => [{ row, child: false }, ...(row.children.length && (state.contentExpanded.has(row.key) || query) ? row.children.filter(child => !query || contentRowMatches(row, query) || contentRowMatches(child, query)).map(child => ({ row: child, child: true })) : [])]);
+  if (split === 'skill') {
+    for (const { row, child } of visible) {
+      const line = node('div', null, 'rank-row' + (child ? ' content-child' : '')); line.dataset.contentKey = row.key; line.dataset.motionKey = row.key;
+      line.append(node('span', child ? '↳' : '', 'rank-number'));
+      const name = node('div'); name.append(contentRowAction(row, child));
+      if (row.identity.kind === 'file' && !row.identity.ownerSkillPath) name.append(node('div', 'No owning skill', 'content-location'));
+      const track = node('div', null, 'rank-track'); const fill = node('div', null, 'rank-fill'); fill.style.width = row.count / max * 100 + '%'; track.append(fill); name.append(track);
+      const value = node('strong'); value.append(button(number(row.count), () => selectContentDetail(row), 'link')); line.append(name, value); target.append(line);
+    }
+  } else {
+    const columns = pageItems(report.displayed.series, 'columns', 6);
+    const matrix = table(['Item', ...columns.map(series => trendName(series.key))], measureLabels[presentation().measure] + ' by item and ' + split.replace('-', ' + ')); matrix.className = 'matrix';
+    const maximum = Math.max(1, ...rows.flatMap(row => row.cells.map(cell => cell.count)));
+    for (const { row, child } of visible) {
+      const line = node('tr', null, child ? 'content-child' : ''); line.dataset.contentKey = row.key; line.dataset.motionKey = row.key;
+      const heading = node('th'); heading.scope = 'row'; heading.append(contentRowAction(row, child)); line.append(heading);
+      for (const column of columns) {
+        const cell = row.cells.find(value => value.key === column.key);
+        const value = cell?.count || 0; const item = node('td');
+        const action = button(number(value), () => selectContentDetail(row, column), 'heat-' + (value ? Math.max(1, Math.ceil(value / maximum * 4)) : 0));
+        action.setAttribute('aria-label', row.label + ', ' + trendName(column.key) + ': ' + metricCount(value)); item.append(action); line.append(item);
+      }
+      matrix.lastChild.append(line);
+    }
+    target.append(matrix); if (report.displayed.series.length > 6) pager.append(pagination('columns', report.displayed.series.length, 6, renderContentComparison));
+  }
+  pager.append(pagination('skills', rows.length, split === 'skill' ? 8 : 12, renderContentComparison)); motion.reflow(target, before);
+}
+function emptyContentStats() { return { count: 0, counts: {}, firstEvidenceAt: null, lastEvidenceAt: null, attributionCounts: {} }; }
+function selectContentDetail(row, series = null) {
+  state.contentDetail = { rowKey: row.key, columnKey: series?.key || null }; renderContentDetail();
+  $('content-detail').tabIndex = -1; $('content-detail').focus(); $('content-detail').scrollIntoView({ block: 'nearest' });
+}
+function renderContentDetail() {
+  const target = $('content-detail'); target.replaceChildren(); target.hidden = true;
+  if (!isContentView() || state.content.kind !== 'ready' || !state.contentDetail) return;
+  const report = contentReport(); const rows = report.selection.rows.flatMap(row => [row, ...row.children]);
+  const row = rows.find(value => value.key === state.contentDetail.rowKey);
+  if (!row) {
+    const series = report.displayed.series.find(value => value.key === state.contentDetail.rowKey);
+    if (series) { target.hidden = false; target.append(node('h2', series.label), empty('No matching evidence in the selected dates.')); }
+    return;
+  }
+  const column = report.displayed.series.find(value => value.key === state.contentDetail.columnKey);
+  const stats = column ? row.cells.find(value => value.key === column.key) || emptyContentStats() : row;
+  target.hidden = false; const heading = node('div', null, 'section-heading');
+  heading.append(node('h2', row.identity.kind === 'skill' ? row.label + ' · ' + hostLabel(row.identity.host) : row.label, 'content-detail-heading'), button('Close details', () => { state.contentDetail = null; target.hidden = true; }, 'quiet')); target.append(heading);
+  target.append(node('p', measureLabels[presentation().measure] + (column ? ' · ' + trendName(column.key) : '') + ': ' + number(stats.count)));
+  if (state.contentInterval) target.append(node('p', intervalLabel(state.contentInterval.startAt, state.contentInterval.endAt) + ' UTC', 'footnote'));
+  const breakdown = node('div', null, 'content-breakdown');
+  for (const [key, label] of Object.entries(contentMeasures)) if (key !== 'activity' && (contentMode() === 'both' || label.resources)) { const value = node('div'); value.append(node('strong', number(stats.counts[key] || 0)), node('span', label.label)); breakdown.append(value); }
+  target.append(breakdown);
+  const identity = row.identity; const location = identity.kind === 'skill' ? identity : identity.location;
+  for (const [label, value] of [['File', location.canonicalPath || 'Not recorded in skill evidence'], ['Machine', location.machineId], ['Account source', location.sourceId], ['Filesystem', identity.kind === 'skill' ? 'Not recorded in skill evidence' : location.filesystemId]]) target.append(node('p', label + ': ' + value, 'content-location'));
+  if (identity.kind === 'skill') target.append(node('p', 'Observed path: Not recorded in skill evidence', 'content-location'));
+  if (identity.kind === 'file') target.append(node('p', 'Observed path: ' + identity.observedPath, 'content-location'), node('p', 'Owning skill: ' + (identity.ownerSkillPath || 'None'), 'content-location'));
+  target.append(node('p', 'First evidence: ' + (stats.firstEvidenceAt ? timeLabel(stats.firstEvidenceAt) + ' UTC' : 'None in this selection'), 'content-location'), node('p', 'Latest evidence: ' + (stats.lastEvidenceAt ? timeLabel(stats.lastEvidenceAt) + ' UTC' : 'None in this selection'), 'content-location'));
+  const attributions = { session: 'Session attributed', harness: 'Agent attributed', unknown: 'Unknown attribution', 'non-agent': 'Non-agent', none: 'No attribution' };
+  target.append(node('p', Object.entries(stats.attributionCounts).filter(([, value]) => value).map(([key, value]) => attributions[key] + ': ' + number(value)).join(' · '), 'footnote'));
+}
+function changeContentMode() {
+  cancelContentRequest(); state.content = { kind: 'unrequested' }; state.contentInterval = null; state.contentExpanded.clear(); state.contentDetail = null; state.contentTrends = { kind: 'top', count: 5 };
+  $('skill-search').value = ''; state.pages.skills = 0; state.pages.columns = 0;
+  configureContentControls();
+  if (!isContentView()) { $('metric-split').value = state.skillPresentation.split; if (state.filterOptions) renderFilterOptions(state.filterOptions); renderMetrics(); showWorkspaceStatus(); }
+  else loadContentAnalytics();
+}
+
 function presentation() { return { measure: $('metric-measure').value, split: $('metric-split').value, display: $('metric-display').value }; }
 function updateMetricProjection() {
   const p = presentation();
@@ -1011,17 +1246,17 @@ function updateMetricProjection() {
   const notes = { successfulReads: 'Repeated successful reads count separately.', uses: 'Successful reads, successful native invocations, and unconfirmed read attempts. Failures are excluded.', failedReads: 'Reads with a recorded error.', invocations: 'Successful native skill invocations.', invocationFailures: 'Native invocations with a recorded error.', readAttempts: 'Unconfirmed read attempts. The outcome is unknown.', requests: 'Recorded skill commands. Requests have no model attribution.', wrappers: 'Skill text found in input. Wrappers have no model attribution.' };
   $('metric-explanation').textContent = notes[p.measure] + (p.measure !== 'successfulReads' ? ' Date selections below explore successful reads in the same interval.' : '');
 }
-function trendKey(series) { return presentation().split === 'skill' ? series.label : series.key; }
-function trendName(key) { const series = state.metricView.series.find(series => trendKey(series) === key); if (!series) return key; return presentation().split === 'agent' ? hostLabel(series.host) : presentation().split === 'agent-model' ? hostLabel(series.host) + ' · ' + (series.attribution === 'none' ? 'No model attribution' : modelLabel(series.model)) : series.label; }
+function trendKey(series) { return !isContentView() && presentation().split === 'skill' ? series.label : series.key; }
+function trendName(key) { const series = state.metricView.series.find(series => trendKey(series) === key); if (!series) return key; if (isContentView() && (presentation().split === 'skill' || series.actor !== 'agent')) return series.label; return presentation().split === 'agent' ? hostLabel(series.host) : presentation().split === 'agent-model' ? hostLabel(series.host) + ' · ' + (series.attribution === 'none' ? 'No model attribution' : modelLabel(series.model)) : series.label; }
 function metricActivity() {
-  const original = state.report.activity;
+  const original = isContentView() ? contentReport().displayed.activity : state.report.activity;
   if (original.kind === 'empty') return original;
   return { ...original, bins: state.metricView.timeline.map((bin, index) => ({ ...original.bins[index], skills: state.metricView.series.map(series => ({ name: trendKey(series), successfulReads: bin.values.find(value => value.key === series.key)?.count || 0 })), metricCount: bin.count })) };
 }
 function availableTrendNames() { return state.metricView.series.map(trendKey); }
 function displayedTrendNames() {
   if ($('metric-split').value !== 'skill') return availableTrendNames();
-  return state.trends.kind === 'top' ? availableTrendNames().slice(0, state.trends.count) : state.trends.names;
+  const trends = activeTrends(); return trends.kind === 'top' ? availableTrendNames().slice(0, trends.count) : trends.names;
 }
 function addTrend(name) {
   const names = displayedTrendNames();
@@ -1079,19 +1314,19 @@ function buildStack(activity, names) {
 }
 function mountTrendControls(target) {
   const controls = node('div', null, 'trend-controls');
-  const catalog = [...new Set([...state.report.skillGroups.map(group => group.name), ...displayedTrendNames()])].sort((a, b) => a.localeCompare(b));
+  const catalog = isContentView() ? availableTrendNames() : [...new Set([...state.report.skillGroups.map(group => group.name), ...displayedTrendNames()])].sort((a, b) => a.localeCompare(b));
   catalog.forEach(skillColor);
   controls.hidden = catalog.length === 0;
   const chooser = node('details', null, 'trend-chooser');
   const summary = node('summary');
-  const searchLabel = node('label', 'Find a skill', 'search-label');
-  const search = node('input'); search.type = 'search'; search.placeholder = 'Search skill names'; searchLabel.append(search);
+  const searchLabel = node('label', isContentView() ? 'Find an item' : 'Find a skill', 'search-label');
+  const search = node('input'); search.type = 'search'; search.placeholder = isContentView() ? 'Search item names' : 'Search skill names'; searchLabel.append(search);
   const results = node('div', null, 'trend-options');
   const status = node('p', null, 'sr-only'); status.setAttribute('role', 'status');
   let limit = 20;
   function choices() {
     const names = displayedTrendNames();
-    const candidates = catalog.filter(name => name.toLowerCase().includes(search.value.toLowerCase()));
+    const candidates = catalog.filter(name => (isContentView() ? trendName(name) : name).toLowerCase().includes(search.value.toLowerCase()));
     results.replaceChildren();
     for (const name of candidates.slice(0, limit)) {
       const label = node('label', null, 'trend-option');
@@ -1099,13 +1334,13 @@ function mountTrendControls(target) {
       const swatch = node('span', null, 'trend-swatch'); swatch.style.setProperty('--skill-color', skillColor(name));
       checkbox.addEventListener('change', () => {
         const current = displayedTrendNames();
-        state.trends = { kind: 'custom', names: checkbox.checked ? [...new Set([...current, name])] : current.filter(value => value !== name) };
+        setActiveTrends({ kind: 'custom', names: checkbox.checked ? [...new Set([...current, name])] : current.filter(value => value !== name) });
         updateActivitySelection();
-        status.textContent = name + (checkbox.checked ? ' added to chart.' : ' removed from chart.');
+        status.textContent = trendName(name) + (checkbox.checked ? ' added to chart.' : ' removed from chart.');
       });
-      label.append(checkbox, swatch, node('span', name)); results.append(label);
+      label.append(checkbox, swatch, node('span', isContentView() ? trendName(name) : name)); results.append(label);
     }
-    if (!candidates.length) results.append(empty('No skills match this search.'));
+    if (!candidates.length) results.append(empty(isContentView() ? 'No items match this search.' : 'No skills match this search.'));
     if (candidates.length > limit) results.append(button('More results', () => {
       const firstNew = limit; limit += 20; choices();
       results.querySelectorAll('input')[firstNew]?.focus({ preventScroll: true });
@@ -1118,7 +1353,7 @@ function mountTrendControls(target) {
   controls.append(chooser); target.append(controls);
   return () => {
     const names = displayedTrendNames();
-    summary.textContent = 'Skills (' + names.length + ')';
+    summary.textContent = (isContentView() ? 'Items (' : 'Skills (') + names.length + ')';
     results.querySelectorAll('input').forEach(checkbox => { checkbox.checked = names.includes(checkbox.dataset.skill); });
   };
 }
@@ -1142,7 +1377,7 @@ function renderActivity() {
     plot.append(svg, cursor);
     const scale = node('div', null, 'trend-scale');
     layout.append(scale, plot, chartAxis(activity));
-    const noTrends = empty((state.metricView.series.length || state.trends.kind === 'custom' && presentation().split === 'skill') ? 'Select skills to show their activity.' : metricEmptyText()); target.append(noTrends);
+    const noTrends = empty((state.metricView.series.length || activeTrends().kind === 'custom' && presentation().split === 'skill') ? (isContentView() ? 'Select items to show their activity.' : 'Select skills to show their activity.') : metricEmptyText()); target.append(noTrends);
     const readout = node('p', null, 'trend-readout'); const rangeReadout = node('p', null, 'brush-range');
     const announcement = node('p', null, 'sr-only'); announcement.setAttribute('role', 'status'); announcement.setAttribute('aria-live', 'polite');
     const explanation = node('p', measureLabels[presentation().measure] + ' per UTC interval', 'small muted');
@@ -1155,6 +1390,9 @@ function renderActivity() {
       const scope = (focus.kind === 'inspection' ? 'Interval' : focus.kind === 'selected' ? 'Selected range' : 'Displayed range') + ' · ' + intervalLabel(range.startAt, range.endAt) + ' UTC';
       let counts;
       if (focus.kind === 'inspection') counts = binSkills[focus.index];
+      else if (isContentView()) {
+        counts = focus.kind === 'selected' && state.content.kind !== 'ready' ? null : new Map((focus.kind === 'selected' ? contentReport().selection.series : contentReport().displayed.series).map(series => [series.key, series.datedCount]));
+      }
       else {
         let view = state.metricView;
         if (focus.kind === 'selected') {
@@ -1168,11 +1406,11 @@ function renderActivity() {
       }
       cursor.hidden = focus.kind !== 'inspection';
       if (!cursor.hidden) cursor.style.left = cursorOffset(activity, range);
-      readout.textContent = scope + ' · ' + count(shown.reduce((total, name) => total + (counts.get(name) || 0), 0), metricUnit());
+      readout.textContent = scope + ' · ' + (counts === null ? state.content.kind === 'error' ? 'Selected counts unavailable' : 'Loading selected counts…' : metricCount(shown.reduce((total, name) => total + (counts.get(name) || 0), 0)));
       labels.querySelectorAll('.trend-label').forEach((label, row) => {
-        const reads = counts.get(shown[row]) || 0;
-        label.querySelector('small').textContent = count(reads, metricUnit());
-        label.title = trendName(shown[row]) + ': ' + count(reads, metricUnit()) + ' · ' + scope;
+        const value = counts === null ? state.content.kind === 'error' ? 'Unavailable' : 'Loading…' : metricCount(counts.get(shown[row]) || 0);
+        label.querySelector('small').textContent = value;
+        label.title = trendName(shown[row]) + ': ' + value + ' · ' + scope;
       });
       announcement.textContent = announce ? readout.textContent + '. ' + Array.from(labels.querySelectorAll('.trend-label'), (label) => label.title).join('. ') : '';
     }
@@ -1182,7 +1420,7 @@ function renderActivity() {
         const index = state.pages.activity * 24 + offset;
         const row = node('tr'); const cell = node('td');
         const action = button(intervalLabel(bin.startAt, bin.endAt), (event) => selectActivityBin(index, event.shiftKey), 'link activity-choice');
-        action.dataset.bin = index; action.setAttribute('aria-pressed', String(state.explore.interval !== null && bin.startAt >= state.explore.interval.startAt && bin.endAt <= state.explore.interval.endAt));
+        action.dataset.bin = index; action.setAttribute('aria-pressed', String(activeInterval() !== null && bin.startAt >= activeInterval().startAt && bin.endAt <= activeInterval().endAt));
         action.setAttribute('aria-label', 'Select ' + intervalLabel(bin.startAt, bin.endAt) + ' UTC'); cell.append(action); row.append(cell);
         for (const name of shown) {
           row.append(node('td', binSkills[index].get(name) || 0));
@@ -1210,7 +1448,7 @@ function renderActivity() {
         drawScale(scale, svg, stack.maximum);
         for (const layer of stack.layers) {
           const series = state.metricView.series.find(series => trendKey(series) === layer.name);
-          const color = presentation().split === 'agent' && series ? hostColor(series.host) : skillColor(layer.name); const label = presentation().split === 'skill' ? button('', () => { if (presentation().measure === 'successfulReads') selectExploreSkill(layer.name); else { const row = comparisonView().skills.find(row => row.name === layer.name) || state.metricView.skills.find(row => row.name === layer.name); if (row) selectMetricSkill(row, row, null); } }, 'trend-label') : node('div', null, 'trend-label');
+          const color = presentation().split === 'agent' && series ? hostColor(series.host) : skillColor(layer.name); const label = presentation().split === 'skill' ? button('', () => { if (isContentView()) { if (state.content.kind === 'ready') selectContentDetail({ key: layer.name }); } else if (presentation().measure === 'successfulReads') selectExploreSkill(layer.name); else { const row = comparisonView().skills.find(row => row.name === layer.name) || state.metricView.skills.find(row => row.name === layer.name); if (row) selectMetricSkill(row, row, null); } }, 'trend-label') : node('div', null, 'trend-label');
           label.dataset.skill = layer.name; label.style.setProperty('--skill-color', color); label.append(node('span', trendName(layer.name)), node('small')); labels.append(label);
           svg.append(svgNode('path', { d: stepPath(activity, layer.lower, layer.upper, stack.maximum), fill: color, class: 'trend-area', 'data-skill': layer.name }));
         }
@@ -1222,7 +1460,7 @@ function renderActivity() {
       setRange(selection.interval);
     };
   }
-  if (state.metricView.undatedCount > 0) target.append(node('p', count(state.metricView.undatedCount, 'matching record') + ' without a usable timestamp. Included in comparison, omitted from the trend.', 'footnote'));
+  if (state.metricView.undatedCount > 0) target.append(node('p', count(state.metricView.undatedCount, 'matching record') + (isContentView() ? ' without a usable timestamp. Available in the full comparison, omitted from the trend and date selections.' : ' without a usable timestamp. Included in comparison, omitted from the trend.'), 'footnote'));
 }
 function timeLabel(value) {
   return value.replace('T', ' ').replace(/\.000Z$/, '').replace(/Z$/, '');
@@ -1235,6 +1473,11 @@ function intervalLabel(startAt, endAt) {
   return startAt.slice(0, 10) === last.slice(0, 10) ? date(startAt) : date(startAt) + ' – ' + date(last);
 }
 function selectExploreInterval(interval, extend = false) {
+  if (isContentView()) {
+    const current = state.contentInterval;
+    state.contentInterval = extend && interval && current ? { startAt: interval.startAt < current.startAt ? interval.startAt : current.startAt, endAt: interval.endAt > current.endAt ? interval.endAt : current.endAt } : interval;
+    state.pages.skills = 0; state.pages.columns = 0; loadContentAnalytics(true); return;
+  }
   const current = state.explore.interval;
   state.explore.interval = extend && interval && current ? {
     startAt: interval.startAt < current.startAt ? interval.startAt : current.startAt,
@@ -1243,7 +1486,7 @@ function selectExploreInterval(interval, extend = false) {
   renderExplore();
 }
 function selectActivityBin(index, extend = false) {
-  const bin = state.report.activity.bins[index];
+  const bin = metricActivity().bins[index];
   selectExploreInterval({ startAt: bin.startAt, endAt: bin.endAt }, extend);
 }
 function focusExploration() {
@@ -1258,11 +1501,11 @@ function selectExploreSkill(name) {
   renderExplore(); focusExploration();
 }
 function updateActivitySelection() {
-  const interval = state.explore.interval;
-  $('view-explorer').hidden = !interval && !state.explore.skillName;
-  activityView?.(state.explore);
+  const interval = activeInterval();
+  $('view-explorer').hidden = isContentView() || !interval && !state.explore.skillName;
+  activityView?.(isContentView() ? { interval, skillName: null } : state.explore);
   $('activity-chart').querySelectorAll('.activity-choice').forEach((action) => {
-    const bin = state.report.activity.bins[Number(action.dataset.bin)];
+    const bin = metricActivity().bins[Number(action.dataset.bin)];
     action.setAttribute('aria-pressed', String(interval !== null && bin.startAt >= interval.startAt && bin.endAt <= interval.endAt));
   });
 }
@@ -1382,6 +1625,7 @@ function renderComparison() {
   motion.reflow(target, before);
 }
 function renderExplore() {
+  if (isContentView()) return;
   const selection = state.explore; const active = selection.skillName !== null || selection.interval !== null;
   const panel = $('explorer-panel'); const before = panel.hidden ? 0 : panel.getBoundingClientRect().height; motion.cancel(panel); panel.hidden = !active;
   state.pages.skills = 0; renderSkillComparison(); updateActivitySelection();
@@ -1447,6 +1691,7 @@ function selectMetricSkill(row, cell, series) {
   state.pages.identities = 0; renderSkillDetail(); showWorkspace('metrics'); $('skill-detail').tabIndex = -1; $('skill-detail').focus();
 }
 function renderSkillComparison() {
+  if (isContentView()) { renderContentComparison(); return; }
   const query = $('skill-search').value.toLowerCase(); const p = presentation(); const view = comparisonView();
   const share = p.display === 'session-share';
   $('comparison-scroll-hint').hidden = p.split === 'skill';
@@ -1739,7 +1984,8 @@ updateWorkspaceMarker(false);
 document.fonts.ready.then(() => { updateWorkspaceMarker(false); updateRouteMarker(false); });
 $('filter-form').addEventListener('submit', (event) => { event.preventDefault(); loadDashboard(); });
 $('refresh-data').addEventListener('click', loadDashboard);
-$('reset-filters').addEventListener('click', () => { $('filter-form').reset(); $('time-preset').value = '7'; $('metric-measure').value = 'successfulReads'; $('metric-split').value = 'skill'; $('metric-display').value = 'count'; state.trends = { kind: 'top', count: 5 }; resetSelections(); loadDashboard(); });
+$('metric-content').addEventListener('change', changeContentMode);
+$('reset-filters').addEventListener('click', () => { cancelContentRequest(); state.content = { kind: 'unrequested' }; $('metric-content').value = 'skills'; state.skillPresentation = { measure: 'successfulReads', split: 'skill', display: 'count' }; configureContentControls(); $('filter-form').reset(); $('time-preset').value = '7'; $('metric-measure').value = 'successfulReads'; $('metric-split').value = 'skill'; $('metric-display').value = 'count'; state.trends = { kind: 'top', count: 5 }; resetSelections(); loadDashboard(); });
 for (const id of ['host-filter', 'model-filter']) $(id).addEventListener('change', () => loadDashboard());
 $('machine-filter').addEventListener('change', () => loadDashboard());
 $('toggle-filters').addEventListener('click', () => { const panel = $('scope-panel'); const before = panel.hidden ? 0 : panel.getBoundingClientRect().height; motion.cancel(panel); panel.hidden = !panel.hidden; $('toggle-filters').setAttribute('aria-expanded', String(!panel.hidden)); motion.expand(panel, before); });
@@ -1751,7 +1997,11 @@ $('time-preset').addEventListener('change', () => {
 for (const id of ['from-filter', 'to-filter']) $(id).addEventListener('change', () => { $('time-preset').value = 'custom'; });
 for (const [id, key, render] of [['skill-search', 'skills', renderSkillComparison], ['catalog-search', 'catalog', renderCatalog], ['route-search', 'routes', renderPaths], ['resource-search', 'resources', renderResources]]) $(id).addEventListener('input', () => { state.pages[key] = 0; if (key === 'resources' ? state.resources.kind === 'ready' : state.report) render(); });
 for (const id of ['resource-kind', 'resource-observation']) $(id).addEventListener('change', () => { state.pages.resources = 0; if (state.resources.kind === 'ready') renderResources(); });
-for (const id of ['metric-measure', 'metric-split', 'metric-display']) $(id).addEventListener('change', () => { if (!state.report) return; state.pages.skills = 0; state.pages.columns = 0; updateMetricProjection(); renderActivity(); renderExplore(); });
+for (const id of ['metric-measure', 'metric-split', 'metric-display']) $(id).addEventListener('change', () => {
+  if (!state.report) return; state.pages.skills = 0; state.pages.columns = 0;
+  if (isContentView()) { state.contentMeasures[contentMode()] = $('metric-measure').value; state.contentDetail = null; state.contentTrends = { kind: 'top', count: 5 }; loadContentAnalytics(); }
+  else { updateMetricProjection(); state.skillPresentation = presentation(); renderActivity(); renderExplore(); }
+});
 $('route-model').addEventListener('change', () => { state.pages.routes = 0; state.routeKey = null; renderPaths(); });
 $('browse-paths').addEventListener('click', () => showWorkspace('paths', true));
 $('view-explorer').addEventListener('click', () => { $('explorer-panel').focus(); $('explorer-panel').scrollIntoView({ block: 'nearest' }); });
