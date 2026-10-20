@@ -22,6 +22,8 @@ The unit for session share is one host session on one machine and account source
 
 The default trend shows successful reads for five skills. Open Skills to search exact names and add or remove layers. Custom names survive refreshes and filter changes without substitution. Each name keeps its color while the page remains open. Agent, Model, and Agent + model show all observed series. Exact counts follow in View activity data, with 24 intervals per page. Undated evidence stays in the comparison and is omitted from the trend.
 
+Legend counts total the displayed range, or the selected dates after a selection. Pointer hover and keyboard inspection temporarily show one interval. Leaving inspection restores range totals. The readout names the scope for these counts.
+
 ## Selection and paths
 
 Select a skill in the successful-read ranking or legend to explore its successful reads. A skill outside the default five adds a trend layer. Drag across the chart to select UTC dates. The comparison follows these dates. Changing Measure, Split by, or Display preserves the interval and does not fetch another report.

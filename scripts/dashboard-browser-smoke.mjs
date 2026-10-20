@@ -38,6 +38,7 @@ try {
   let sparsePayload;
   let oneBinPayload;
   let adaptivePayload;
+  let boundaryPayload;
   let catalogOnlyPayload;
   let manySkillsPayload;
   let invocationModelsPayload;
@@ -126,6 +127,11 @@ try {
     adaptivePayload = { ...payload, report: buildDashboardReport({ filter: { fromObservedAt: '2024-10-02T00:00:00.000Z', toObservedAt: '2025-02-21T12:00:00.000Z' }, skills, chains: repeatedChains }), chains: repeatedChains };
     const sparseChains = { runs: [...repeatedChains.runs.slice(0, 2), { ...makoRun, segmentId: 'before-gap', steps: [controlledStep([makoRead], '2025-02-19T10:00:00.000Z')] }] };
     sparsePayload = { ...payload, report: buildDashboardReport({ filter: {}, skills, chains: sparseChains }), chains: sparseChains };
+    const boundaryChains = { runs: [{ ...makoRun, segmentId: 'legend-boundaries', steps: [
+      '2025-02-21T09:00:00.000Z', '2025-02-21T10:15:00.000Z', '2025-02-21T10:30:00.000Z',
+      '2025-02-21T11:00:00.000Z', '2025-02-21T12:00:00.000Z', undefined,
+    ].map(at => controlledStep([makoRead], at)) }] };
+    boundaryPayload = { ...payload, report: buildDashboardReport({ filter: { fromObservedAt: '2025-02-21T09:30:00.000Z', toObservedAt: '2025-02-21T11:29:59.999Z' }, skills, chains: boundaryChains }), chains: boundaryChains };
   } finally { await opened.store.close(); }
 
   await withBrowser(async ({ command, evaluate, until, screenshot, errors }) => {
@@ -133,6 +139,9 @@ try {
     async function click(selector) { await evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`); }
     async function input(id, value) { await evaluate(`document.getElementById(${JSON.stringify(id)}).value = ${JSON.stringify(value)}; document.getElementById(${JSON.stringify(id)}).dispatchEvent(new Event('input', { bubbles: true }));`); }
     async function change(id, value) { await evaluate(`document.getElementById(${JSON.stringify(id)}).value = ${JSON.stringify(value)}; document.getElementById(${JSON.stringify(id)}).dispatchEvent(new Event('change', { bubbles: true }));`); }
+    const legendValues = () => evaluate('Array.from(document.querySelectorAll("#activity-chart .trend-label"), label => [label.dataset.skill, Number(label.querySelector("small").textContent.split(" ")[0].replaceAll(",", ""))])');
+    const trendReadout = () => evaluate('document.querySelector("#activity-chart .trend-readout").textContent');
+    const legendTotal = async () => (await legendValues()).reduce((sum, [, value]) => sum + value, 0);
     async function noOverflow() { assert.ok(await evaluate('document.documentElement.scrollWidth <= innerWidth'), "No page-level horizontal overflow"); }
     async function chartScreenshot(name) {
       const clip = await evaluate('(() => { const r=document.querySelector(".activity-panel").getBoundingClientRect(); return {x:r.x+scrollX,y:r.y+scrollY,width:r.width,height:r.height,scale:1}; })()');
@@ -248,7 +257,32 @@ try {
       assert.ok(expected.timeline.some(bin => bin.count > 0));
       const legend = await evaluate('Array.from(document.querySelectorAll("#activity-chart .trend-label"), label => [label.dataset.skill, Number(label.querySelector("small").textContent.split(" ")[0].replaceAll(",", ""))])');
       assert.deepEqual(legend, expected.series.map(series => [series.key, expected.timeline.reduce((sum, bin) => sum + (bin.values.find(value => value.key === series.key)?.count || 0), 0)]), split + ' idle legend totals the displayed period, including activity before the empty latest hour');
+      assert.match(await trendReadout(), /^Displayed range/);
+      assert.equal(await evaluate('document.querySelector("#activity-chart .trend-cursor").hidden'), true);
     }
+    const weeklyLegend = await legendValues();
+    await evaluate('document.querySelector("#activity-chart .trend-plot").scrollIntoView({block:"center"})');
+    const inspectPoint = await evaluate('(() => { const r = document.querySelector("#activity-chart .trend-plot").getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()');
+    await command('Input.dispatchMouseEvent', { type: 'mouseMoved', ...inspectPoint });
+    assert.match(await trendReadout(), /^Interval/);
+    await command('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 1, y: 1 });
+    assert.deepEqual(await legendValues(), weeklyLegend, 'Leaving pointer inspection restores the displayed totals');
+    await command('Input.dispatchMouseEvent', { type: 'mouseMoved', ...inspectPoint });
+    await evaluate('document.querySelector("#activity-chart .trend-plot").focus()'); await key('End');
+    assert.equal(await legendTotal(), 0, 'Keyboard inspection still shows the empty final hour');
+    await command('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 1, y: 1 });
+    assert.match(await trendReadout(), /^Interval/, 'Pointer exit preserves keyboard inspection');
+    assert.equal(await evaluate('document.querySelector("#activity-chart .trend-cursor").hidden'), false);
+    await evaluate('document.getElementById("metric-split").focus()');
+    assert.deepEqual(await legendValues(), weeklyLegend, 'Leaving keyboard inspection restores the displayed totals');
+    await command('Input.dispatchMouseEvent', { type: 'mouseMoved', ...inspectPoint });
+    await command('Input.dispatchMouseEvent', { type: 'mousePressed', ...inspectPoint, button: 'left', clickCount: 1 });
+    assert.match(await trendReadout(), /^Displayed range/, 'Starting a brush exits inspection before preview');
+    await key('Escape');
+    await command('Input.dispatchMouseEvent', { type: 'mouseReleased', ...inspectPoint, button: 'left', clickCount: 1 });
+    assert.deepEqual(await legendValues(), weeklyLegend, 'Cancelled brushing retains the displayed totals');
+    await command('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 1, y: 1 });
+    await chartScreenshot('agent-model-range-desktop.png');
     await change('metric-measure', 'successfulReads'); await change('metric-split', 'skill');
     const weeklyNames = await evaluate('Array.from(document.querySelectorAll("#activity-chart .trend-label"), item => item.dataset.skill)');
     await assertStack(weekly.report.activity);
@@ -389,10 +423,13 @@ try {
     await command('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [hourlyTouchPoint(75.8)] });
     await command('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
     assert.deepEqual(await edgeValues(), [40, 76], 'Touch brushing selects UTC hours in the weekly chart');
+    assert.match(await trendReadout(), /^Selected range/);
+    const touchLegend = await legendValues();
     await command('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [hourlyTouchPoint(55)] });
     await command('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [hourlyTouchPoint(75)] });
     await command('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] });
     assert.deepEqual(await edgeValues(), [40, 76], 'Cancelling an hourly touch move restores the committed range');
+    assert.deepEqual(await legendValues(), touchLegend, 'Touch cancellation restores selected-range totals');
     assert.equal(await evaluate('document.querySelector("#activity-chart .trend-plot").dataset.dragging'), 'false');
     await chartScreenshot('weekly-touch-320.png');
     await evaluate('document.querySelector(".trend-chooser summary").scrollIntoView({block:"center"})');
@@ -561,6 +598,12 @@ try {
     await command('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'ArrowRight', code: 'ArrowRight', windowsVirtualKeyCode: 39 });
     await command('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, modifiers: 8 });
     assert.equal((await selection()).length, 2, 'Shift+Enter extends the range');
+    assert.match(await trendReadout(), /^Selected range/);
+    const extendedLegend = await legendValues();
+    for (const [name, value] of extendedLegend) assert.equal(value, payload.report.activity.bins.slice(0, 2).reduce((sum, bin) => sum + (bin.skills.find(skill => skill.name === name)?.successfulReads || 0), 0), 'Extended selection totals use the final committed interval');
+    await key('Home'); await key('ArrowRight'); await key('Enter', 8);
+    assert.deepEqual(await legendValues(), extendedLegend, 'Committing the same extended interval exits inspection');
+    assert.match(await trendReadout(), /^Selected range/);
     await evaluate('document.querySelector(".brush-band").focus()');
     await command('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'ArrowRight', code: 'ArrowRight', windowsVirtualKeyCode: 39 });
     assert.match((await selection())[0], /Feb 2/);
@@ -586,6 +629,7 @@ try {
         assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#skill-table thead th"), item => item.textContent)'), expected.skills.length ? ['Skill', ...expected.series.slice(0, 6).map(series => split === 'agent' ? hostLabels[series.host] : split === 'agent-model' ? hostLabels[series.host] + ' · ' + (series.attribution === 'none' ? 'No model attribution' : series.model === null ? 'Unknown model' : series.model.provider + ' / ' + series.model.id) : series.label)] : [], measure + ' / ' + split + ' observed columns');
         assert.deepEqual(await metricCells(), expected.skills.slice(0, 12).map(row => [row.name, ...expected.series.slice(0, 6).map(series => (row.cells.find(cell => cell.key === series.key)?.count || 0).toLocaleString('en-US'))]), 'Exact cells for ' + measure + ' / ' + split);
         assert.equal(await evaluate('document.querySelectorAll("#activity-chart .trend-area").length'), expected.series.length, 'The same trend reshapes locally');
+        assert.deepEqual(await legendValues(), expected.series.map(series => [series.key, expected.timeline.reduce((sum, bin) => sum + (bin.values.find(value => value.key === series.key)?.count || 0), 0)]), 'Displayed legend counts for ' + measure + ' / ' + split);
         if (measure === 'uses' && split === 'agent-model') { await noOverflow(); await screenshot(join(directory, 'metrics-agent-model-desktop.png')); }
       }
     }
@@ -897,6 +941,28 @@ try {
     await evaluate(`window.fetch = async () => new Response(JSON.stringify(${JSON.stringify(adaptivePayload)})); document.getElementById('refresh-data').click();`);
     await until(ready);
     await assertStack(adaptive);
+    await key('End'); await enter();
+    await evaluate('document.querySelector(".brush-band").focus()'); await key('ArrowLeft');
+    assert.equal(await legendTotal(), 1, 'A one-day selection inside an adaptive bin counts only that day');
+    assert.match(await trendReadout(), /^Selected range/);
+
+    await click('#clear-explorer');
+    await evaluate(`window.fetch = async () => new Response(JSON.stringify(${JSON.stringify(boundaryPayload)})); document.getElementById('refresh-data').click();`);
+    await until(ready);
+    assert.equal(boundaryPayload.report.counts.successfulReads, 6);
+    assert.equal(await legendTotal(), 3, 'Displayed totals omit undated and out-of-scope context records');
+    assert.match(await evaluate('document.getElementById("activity-chart").textContent'), /1 matching record without a usable timestamp/);
+    await evaluate('Array.from(document.querySelectorAll("#activity-chart .trend-label")).find(label => label.dataset.skill === "mako").click()');
+    await click('#explore-comparison .section-heading button');
+    assert.equal(await legendTotal(), 2, 'Partial-hour selection includes its start and only matching timestamps');
+    assert.match(await trendReadout(), /Selected range.*10:30:00.*11:30:00/);
+    await evaluate('document.querySelector(".brush-band").focus()'); await key('ArrowLeft');
+    assert.equal(await legendTotal(), 1, 'Partial-hour selection excludes a record exactly at its end');
+    assert.match(await trendReadout(), /Selected range.*09:30:00.*10:30:00/);
+    assert.ok((await evaluate('Array.from(document.querySelectorAll("#activity-chart .trend-label"), label => label.title)')).every(title => title.includes('Selected range') && title.includes('10:30:00')), 'Legend titles describe the same selected range as the readout');
+    await chartScreenshot('partial-range-mobile.png');
+    await click('#clear-explorer');
+    assert.equal(await legendTotal(), 3);
 
     await evaluate('window.fetch = window.smokeFetch; document.getElementById("refresh-data").click()');
     await until(ready);

@@ -868,7 +868,7 @@ function renderMetrics() {
   $('evidence-context').append(node('span', count(coverage.captureGaps, 'capture gap') + ' · ' + count(coverage.droppedObservations, 'record') + ' lost · ' + count(coverage.filteredOmissions, 'record') + ' hidden by filters'));
 }
 function svgNode(tag, attrs) { const item = document.createElementNS('http://www.w3.org/2000/svg', tag); for (const [key, value] of Object.entries(attrs)) item.setAttribute(key, String(value)); return item; }
-function mountTimeBrush(plot, activity, readout, onChange, onInspect) {
+function mountTimeBrush(plot, activity, readout, onChange, onReadout) {
   const stepMs = Math.min(activity.binWidthMs, 86400000); const start = Date.parse(activity.startAt);
   const steps = (Date.parse(activity.endAt) - start) / stepMs;
   const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -886,7 +886,12 @@ function mountTimeBrush(plot, activity, readout, onChange, onInspect) {
   plot.append(before, after, band, ...handles);
   plot.tabIndex = 0; plot.setAttribute('role', 'group');
   plot.setAttribute('aria-label', 'Skill trends. Drag to select dates. Arrow keys inspect intervals. Enter selects. Shift extends. Escape clears.');
-  let selected = null; let gesture = null; let inspected = activity.bins.length - 1;
+  let selected = null; let gesture = null; let focus = { kind: 'summary', index: activity.bins.length - 1 };
+  function publish(announce = false) {
+    onReadout(focus.kind === 'inspection' ? { kind: 'inspection', index: focus.index } : selected === null ? { kind: 'displayed' } : { kind: 'selected', interval: interval(...selected) }, announce);
+  }
+  function summarize() { focus = { kind: 'summary', index: focus.index }; publish(); }
+  function commit(value, extend = false) { focus = { kind: 'summary', index: focus.index }; onChange(value, extend); }
   function paint(range, preview = false) {
     for (const element of [before, after, band, ...handles]) element.hidden = range === null;
     plot.dataset.dragging = String(preview);
@@ -921,11 +926,12 @@ function mountTimeBrush(plot, activity, readout, onChange, onInspect) {
     if (gesture === null) return;
     const pointer = gesture.pointer; gesture = null;
     if (plot.hasPointerCapture(pointer)) plot.releasePointerCapture(pointer);
-    paint(selected);
+    paint(selected); summarize();
   }
   plot.addEventListener('pointerdown', (event) => {
     if (!event.isPrimary || event.button !== 0 || gesture !== null) return;
     motion.cancel($('activity-chart'));
+    summarize();
     const anchor = position(event); let mode = event.target.dataset.mode || 'create';
     if (selected && (mode === 'start' || mode === 'end')) mode = Math.abs(anchor - selected[0]) < Math.abs(anchor - selected[1]) ? 'start' : 'end';
     gesture = { mode, anchor, range: selected, pointer: event.pointerId };
@@ -935,9 +941,10 @@ function mountTimeBrush(plot, activity, readout, onChange, onInspect) {
   plot.addEventListener('pointermove', (event) => {
     if (gesture !== null && event.pointerId !== gesture.pointer) return;
     const step = position(event);
-    inspected = Math.min(activity.bins.length - 1, Math.floor(step * stepMs / activity.binWidthMs)); onInspect(inspected);
-    if (gesture !== null) paint(preview(step), true);
+    if (gesture !== null) { paint(preview(step), true); return; }
+    focus = { kind: 'inspection', source: 'pointer', index: Math.min(activity.bins.length - 1, Math.floor(step * stepMs / activity.binWidthMs)) }; publish();
   });
+  plot.addEventListener('pointerleave', () => { if (focus.kind === 'inspection' && focus.source === 'pointer') summarize(); });
   plot.addEventListener('pointerup', (event) => {
     if (gesture === null || event.pointerId !== gesture.pointer) return;
     const step = position(event); const movement = Math.round(step - gesture.anchor);
@@ -950,17 +957,17 @@ function mountTimeBrush(plot, activity, readout, onChange, onInspect) {
       from = clamp(selected[0] + movement, 0, steps - width); to = from + width;
     }
     else { from = clamp(Math.floor(range[0]), 0, steps - 1); to = clamp(Math.ceil(range[1]), from + 1, steps); }
-    onChange(interval(from, to), event.shiftKey && mode === 'create');
+    commit(interval(from, to), event.shiftKey && mode === 'create');
   });
   plot.addEventListener('pointercancel', cancel); plot.addEventListener('lostpointercapture', cancel);
-  plot.addEventListener('blur', () => { delete plot.dataset.pointer; });
+  plot.addEventListener('blur', () => { delete plot.dataset.pointer; summarize(); });
   plot.addEventListener('keydown', (event) => {
     motion.cancel($('activity-chart'));
     delete plot.dataset.pointer;
     if (event.key === 'Escape') {
       event.preventDefault();
       if (gesture !== null) cancel();
-      else { onChange(null); plot.focus({ preventScroll: true }); }
+      else { commit(null); plot.focus({ preventScroll: true }); }
       return;
     }
     if (gesture !== null) return;
@@ -975,20 +982,21 @@ function mountTimeBrush(plot, activity, readout, onChange, onInspect) {
         const width = to - from;
         from = event.key === 'Home' ? 0 : event.key === 'End' ? steps - width : clamp(from + delta, 0, steps - width); to = from + width;
       }
-      onChange(interval(from, to)); return;
+      commit(interval(from, to)); return;
     }
     if (event.target !== plot) return;
     if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
       event.preventDefault();
-      inspected = event.key === 'Home' ? 0 : event.key === 'End' ? activity.bins.length - 1 : clamp(inspected + (event.key === 'ArrowLeft' ? -1 : 1), 0, activity.bins.length - 1);
-      onInspect(inspected, true);
+      const index = event.key === 'Home' ? 0 : event.key === 'End' ? activity.bins.length - 1 : clamp(focus.index + (event.key === 'ArrowLeft' ? -1 : 1), 0, activity.bins.length - 1);
+      focus = { kind: 'inspection', source: 'keyboard', index }; publish(true);
     } else if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault(); const bin = activity.bins[inspected]; onChange({ startAt: bin.startAt, endAt: bin.endAt }, event.shiftKey);
+      event.preventDefault(); const bin = activity.bins[focus.index]; commit({ startAt: bin.startAt, endAt: bin.endAt }, event.shiftKey);
     }
   });
   return (value) => {
-    selected = value === null ? null : [(Date.parse(value.startAt) - start) / stepMs, (Date.parse(value.endAt) - start) / stepMs];
-    paint(selected);
+    const next = value === null ? null : [(Date.parse(value.startAt) - start) / stepMs, (Date.parse(value.endAt) - start) / stepMs];
+    if (selected?.[0] !== next?.[0] || selected?.[1] !== next?.[1]) focus = { kind: 'summary', index: focus.index };
+    selected = next; paint(selected); publish();
   };
 }
 const metricUnit = () => presentation().measure === 'successfulReads' ? 'read' : measureLabels[presentation().measure].toLowerCase().replace(/s$/, '');
@@ -1141,17 +1149,32 @@ function renderActivity() {
     const noReads = node('p', 'No ' + measureLabels[presentation().measure].toLowerCase() + ' in this period.', 'footnote');
     target.append(explanation, layout, noReads, labels, readout, rangeReadout, announcement);
     const scroll = node('div', null, 'table-wrap'); const details = disclosure('View activity data', scroll); target.append(details);
-    let shown = []; let inspected = activity.bins.length - 1;
-    function inspect(index, announce = false) {
-      inspected = index; const bin = activity.bins[index];
-      cursor.style.left = cursorOffset(activity, bin);
-      readout.textContent = intervalLabel(bin.startAt, bin.endAt) + ' · ' + count(shown.reduce((total, name) => total + (binSkills[index].get(name) || 0), 0), metricUnit());
+    let shown = [];
+    function showReadout(focus, announce = false) {
+      const range = focus.kind === 'inspection' ? activity.bins[focus.index] : focus.kind === 'selected' ? focus.interval : activity;
+      const scope = (focus.kind === 'inspection' ? 'Interval' : focus.kind === 'selected' ? 'Selected range' : 'Displayed range') + ' · ' + intervalLabel(range.startAt, range.endAt) + ' UTC';
+      let counts;
+      if (focus.kind === 'inspection') counts = binSkills[focus.index];
+      else {
+        let view = state.metricView;
+        if (focus.kind === 'selected') {
+          const routes = report.routes.map(route => ({ ...route, steps: route.steps.map(step => step.kind === 'observations' ? { ...step, items: step.items.filter(item => inInterval(item.observedAt, range)) } : step) }));
+          view = projectMetrics({ ...report, routes }, presentation());
+        }
+        const names = new Map(view.series.map(series => [series.key, trendKey(series)])); counts = new Map();
+        for (const bin of view.timeline) for (const value of bin.values) {
+          const name = names.get(value.key); counts.set(name, (counts.get(name) || 0) + value.count);
+        }
+      }
+      cursor.hidden = focus.kind !== 'inspection';
+      if (!cursor.hidden) cursor.style.left = cursorOffset(activity, range);
+      readout.textContent = scope + ' · ' + count(shown.reduce((total, name) => total + (counts.get(name) || 0), 0), metricUnit());
       labels.querySelectorAll('.trend-label').forEach((label, row) => {
-        const reads = binSkills[index].get(shown[row]) || 0;
+        const reads = counts.get(shown[row]) || 0;
         label.querySelector('small').textContent = count(reads, metricUnit());
-        label.title = trendName(shown[row]) + ': ' + count(reads, metricUnit()) + ' · ' + intervalLabel(bin.startAt, bin.endAt);
+        label.title = trendName(shown[row]) + ': ' + count(reads, metricUnit()) + ' · ' + scope;
       });
-      if (announce) announcement.textContent = readout.textContent + '. ' + Array.from(labels.querySelectorAll('.trend-label'), (label) => label.title).join('. ');
+      announcement.textContent = announce ? readout.textContent + '. ' + Array.from(labels.querySelectorAll('.trend-label'), (label) => label.title).join('. ') : '';
     }
     function renderData() {
       const data = table(['UTC interval', ...shown.map(trendName), 'Total'], measureLabels[presentation().measure] + ' in each UTC interval.'); data.className = 'activity-data';
@@ -1170,7 +1193,7 @@ function renderActivity() {
       scroll.replaceChildren(data, pagination('activity', activity.bins.length, 24, renderData));
     }
     details.addEventListener('toggle', () => { if (details.open) renderData(); });
-    const setRange = mountTimeBrush(plot, activity, rangeReadout, selectExploreInterval, inspect);
+    const setRange = mountTimeBrush(plot, activity, rangeReadout, selectExploreInterval, showReadout);
     activityView = (selection) => {
       updateControls();
       const names = displayedTrendNames();
@@ -1196,7 +1219,7 @@ function renderActivity() {
         else scroll.replaceChildren();
       }
       labels.querySelectorAll('.trend-label').forEach((label) => label.setAttribute('aria-pressed', String(label.dataset.skill === selection.skillName)));
-      inspect(inspected); setRange(selection.interval);
+      setRange(selection.interval);
     };
   }
   if (state.metricView.undatedCount > 0) target.append(node('p', count(state.metricView.undatedCount, 'matching record') + ' without a usable timestamp. Included in comparison, omitted from the trend.', 'footnote'));
