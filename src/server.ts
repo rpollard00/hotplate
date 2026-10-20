@@ -4,6 +4,7 @@ import { parseHostId, parseMachineId } from "./observation.js";
 import { dashboardCss, dashboardHtml, dashboardJs } from "./dashboard/assets.js";
 import { archivoFont, fontLicenses, jetbrainsMonoFont } from "./dashboard/fonts.js";
 import { buildDashboardReport, type DashboardReport } from "./dashboard/analytics.js";
+import { isContentMeasure, isResourceMeasure, type ContentInterval, type ContentQuery, type ContentReport } from "./content-analytics.js";
 import {
   openHotplateReadStore,
   resolveHotplateDatabasePath,
@@ -167,12 +168,57 @@ export async function respondDashboard(args: { request: IncomingMessage; respons
     sendJson(response, 200, payload, request.method === "HEAD");
     return;
   }
+  if (url.pathname === "/api/content-analytics") {
+    const payload = await readContentPayload(databasePath, url.searchParams);
+    sendJson(response, 200, payload, request.method === "HEAD");
+    return;
+  }
   if (url.pathname === "/health") {
     sendJson(response, 200, { ok: true }, request.method === "HEAD");
     return;
   }
 
   sendText(response, 404, "Not found");
+}
+
+async function readContentPayload(databasePath: string, params: URLSearchParams): Promise<
+  | { kind: "ready"; databasePath: string; report: ContentReport }
+  | { kind: "missing"; databasePath: string }
+  | { kind: "error"; databasePath: string; message: string }
+> {
+  let reader: HotplateReadonlyStore | undefined;
+  try {
+    const query = parseContentParams(params);
+    const opened = openHotplateReadStore({ databasePath });
+    if (opened.kind === "missing") return opened;
+    reader = opened.store;
+    return { kind: "ready", databasePath: opened.databasePath, report: await reader.queryContentAnalytics(query) };
+  } catch (error) {
+    return { kind: "error", databasePath, message: error instanceof Error ? error.message : "Unknown content analytics error" };
+  } finally { await reader?.close(); }
+}
+
+function parseContentParams(params: URLSearchParams): ContentQuery {
+  const { filter } = parseDashboardParams(params);
+  const content = params.get("content") ?? "resources";
+  if (content !== "resources" && content !== "both") throw new Error("content must be resources or both");
+  const measure = params.get("measure") ?? "activity";
+  if (!isContentMeasure(measure)) throw new Error("Invalid content measure");
+  const split = params.get("split") ?? "item";
+  if (split !== "item" && split !== "agent" && split !== "model" && split !== "agent-model") throw new Error("split must be item, agent, model, or agent-model");
+  const from = params.get("selectionFrom"); const to = params.get("selectionTo");
+  let selection: ContentInterval = { kind: "all" };
+  if (from !== null || to !== null) {
+    if (from === null || to === null) throw new Error("selectionFrom and selectionTo must be provided together");
+    const startAt = parseObservedAt(from, "selectionFrom"); const endAt = parseObservedAt(to, "selectionTo");
+    if (Date.parse(startAt) >= Date.parse(endAt)) throw new Error("selectionFrom must be before selectionTo");
+    selection = { kind: "interval", startAt, endAt };
+  }
+  if (content === "resources") {
+    if (!isResourceMeasure(measure)) throw new Error("This measure requires content=both");
+    return { content, filter, measure, split, selection };
+  }
+  return { content, filter, measure, split, selection };
 }
 
 async function readDashboardPayload(databasePath: string, params: URLSearchParams): Promise<DashboardPayload> {

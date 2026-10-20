@@ -1,4 +1,5 @@
 import type { ResourceEvidence, ResourceView, ResourceCoverageView } from "./resource-domain.js";
+import type { ContentQuery, ContentReport } from "./content-analytics.js";
 
 export type HostId = "pi" | "codex" | "claude-code" | "opencode-v1" | "opencode-v2" | "unknown";
 export type NativeHostId = Exclude<HostId, "pi" | "unknown">;
@@ -259,6 +260,7 @@ export interface HotplateStore {
   queryCaptureHealth(filter: DashboardFilter): Promise<CaptureHealthView>;
   queryResources(filter: DashboardFilter): Promise<ResourceView>;
   queryResourceCoverage(filter: DashboardFilter): Promise<ResourceCoverageView>;
+  queryContentAnalytics(query: ContentQuery): Promise<ContentReport>;
 
   close(): Promise<void>;
 }
