@@ -10,12 +10,14 @@ The dashboard shows recorded skill and file evidence, plus session paths. It doe
 
 **Both** is the default Content, and **Tool activity** is the default Measure.
 This view includes skill entrypoints, supporting files, and native skill invocations.
-Tool activity counts confirmed reads, inferred reads, attempts, read failures, and successful or failed native invocations.
+Tool activity counts confirmed reads, inferred reads, attempts, read failures, executions, and successful or failed native invocations.
 It excludes filesystem events, requests, wrappers, and catalog discovery.
 
 Select **Confirmed reads** to show successful structured read results.
 Select **Inferred reads** to show recognized literal read commands with successful tool outcomes.
-**Read attempts** have no confirmed read outcome. Each measure keeps those distinctions visible.
+**Read attempts** have no confirmed read outcome.
+Select **Executions** to show recognized commands that ran a file under a skill root, such as a bundled script. An execution is not a read, and it does not establish that the agent used the output.
+Each measure keeps those distinctions visible.
 
 Skills retains its legacy measures, including **Successful reads** and **Skill uses**.
 Native invocations counts successful invocations. Invocation failures remain separate.
@@ -48,6 +50,7 @@ Both counts a mirrored native skill read and resource read once. Independent fil
 **All recorded activity** retains the diagnostic total, including filesystem events, requests, and wrappers.
 Catalog polling can appear in filesystem events without an agent tool read.
 **Filesystem opens** and **Filesystem accesses** remain separate diagnostic measures.
+The resource inventory table shows Confirmed, Inferred, Failures, Attempts, Executions, Opens, and Accesses in separate columns.
 Both also offers the skill evidence measures. Session share remains available only in Skills. Each content mode remembers its measure.
 
 Comparison rows show item names and counts. A labeled file count expands an owner's files. Absolute paths and installation identifiers appear in Location details, which is closed initially.

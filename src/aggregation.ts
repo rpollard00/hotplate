@@ -2,7 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { SourceIdentity } from "./domain.js";
 import { readAggregationCredentials, type AggregationConfiguration } from "./network-config.js";
-import { committedAcknowledgment, ingestTokenDigest, MAX_ENROLLMENT_BYTES, MAX_ENVELOPE_BYTES, parseEnrollmentRequest, parseEnvelope, REQUEST_DEADLINE_MS, type TokenDigest } from "./network-protocol.js";
+import { committedAcknowledgment, ingestTokenDigest, MAX_ENROLLMENT_BYTES, MAX_ENVELOPE_BYTES, parseEnrollmentRequest, parseEnvelope, protocolCapabilities, REQUEST_DEADLINE_MS, type TokenDigest } from "./network-protocol.js";
 import { respondDashboard } from "./server.js";
 import { openAggregateStore } from "./store.js";
 
@@ -66,7 +66,8 @@ export async function startAggregationServer(args: { configuration: AggregationC
       if (tokenDigest) source = store.authenticate(tokenDigest);
     }
     if (!enrolling && !source) { reply(response, 401, "unauthorized"); return; }
-    if (request.method !== "POST") { response.setHeader("allow", "POST"); reply(response, 405, "method-not-allowed"); return; }
+    if (!enrolling && request.method === "GET" && request.url === "/api/ingest") { reply(response, 200, protocolCapabilities()); return; }
+    if (request.method !== "POST") { response.setHeader("allow", enrolling ? "POST" : "GET, POST"); reply(response, 405, "method-not-allowed"); return; }
     if (request.url !== (enrolling ? "/api/enroll" : "/api/ingest")) { reply(response, 400, "invalid-request"); return; }
     if (request.headers["content-encoding"] !== undefined) { reply(response, 415, "unsupported-encoding"); return; }
     if (!/^application\/json(?:;\s*charset=utf-8)?$/i.test(request.headers["content-type"] ?? "")) { reply(response, 415, "unsupported-content-type"); return; }

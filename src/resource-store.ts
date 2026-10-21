@@ -117,6 +117,7 @@ export function queryResources(db: DatabaseSync, filter: DashboardFilter): Resou
     else if (evidence.access === "read" && evidence.outcome === "success") row.successfulReadCount += count;
     else if (evidence.access === "inferred-read") row.inferredReadCount += count;
     else if (evidence.access === "read" && evidence.outcome === "error") row.failedReadCount += count;
+    else if (evidence.access === "execute") row.executeCount += count;
     else if (evidence.access === "open") row.openCount += count;
     else if (evidence.access === "access") row.accessCount += count;
     if (evidence.attribution === "session" || evidence.attribution === "harness") row.attributedAccessCount += count;
@@ -285,7 +286,7 @@ function resourceState(resources: Map<string, ResourceState>, source: StoredSour
   if (!state) {
     state = { latestLocationOrder: order, roots: new Map(), row: {
       resourceId: id, ...source, resource, rootPaths: [], presence: "unknown", firstInventoriedAt: null, lastInventoriedAt: null,
-      lastAccessAt: null, attemptCount: 0, successfulReadCount: 0, inferredReadCount: 0, failedReadCount: 0, openCount: 0, accessCount: 0,
+      lastAccessAt: null, attemptCount: 0, successfulReadCount: 0, inferredReadCount: 0, failedReadCount: 0, executeCount: 0, openCount: 0, accessCount: 0,
       attributedAccessCount: 0, unattributedAccessCount: 0, nonAgentAccessCount: 0, observation: "unknown", coverageFrom: null, coverageTo: null,
     } };
     resources.set(id, state);

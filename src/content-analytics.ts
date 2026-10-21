@@ -9,6 +9,7 @@ export const contentMeasures = {
   inferredReads: { label: "Inferred reads", resources: true },
   failedReads: { label: "Read failures", resources: true },
   readAttempts: { label: "Read attempts", resources: true },
+  executions: { label: "Executions", resources: true },
   activity: { label: "All recorded activity", resources: true },
   fsOpens: { label: "Filesystem opens", resources: true },
   fsAccesses: { label: "Filesystem accesses", resources: true },
@@ -343,6 +344,7 @@ function categoryOf(evidence: ContentFact["evidence"]): EvidenceCategory {
         case "read": return evidence.outcome === "success" ? "successfulReads" : "failedReads";
         case "inferred-read": return "inferredReads";
         case "attempt": return "readAttempts";
+        case "execute": return "executions";
         case "open": return "fsOpens";
         case "access": return "fsAccesses";
         default: { const exhaustive: never = evidence; return exhaustive; }
@@ -418,7 +420,7 @@ function cohortFor(item: Event, split: ContentSplit, rowKey: string, label: stri
 
 function stats(): ContentStats {
   return { count: 0, datedCount: 0, undatedCount: 0, firstEvidenceAt: null, lastEvidenceAt: null,
-    counts: { successfulReads: 0, inferredReads: 0, failedReads: 0, readAttempts: 0, fsOpens: 0, fsAccesses: 0, invocations: 0, invocationFailures: 0, requests: 0, wrappers: 0 },
+    counts: { successfulReads: 0, inferredReads: 0, failedReads: 0, readAttempts: 0, executions: 0, fsOpens: 0, fsAccesses: 0, invocations: 0, invocationFailures: 0, requests: 0, wrappers: 0 },
     attributionCounts: { session: 0, harness: 0, "non-agent": 0, unknown: 0, none: 0 } };
 }
 function targets(item: Event, measure: ContentMeasure): boolean {

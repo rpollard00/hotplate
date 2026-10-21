@@ -8,7 +8,7 @@ import { test } from "node:test";
 import type { Evidence, Observation } from "../src/domain.js";
 import type { ResourceAccessEvidence, ToolCoverageEvidence } from "../src/resource-domain.js";
 import { captureFact, type CaptureFact } from "../src/capture.js";
-import { encodeEnvelope, parseEnvelope } from "../src/network-protocol.js";
+import { encodeEnvelope, parseEnvelope, parseProtocolCapabilities } from "../src/network-protocol.js";
 import { parseCollectorOrigin, parseMachineId, parseObservation, parseSourceId, serializeObservation } from "../src/observation.js";
 import { openAggregateStore, openCaptureStore, openHotplateReadStore, openHotplateStore, openRelayStore } from "../src/store.js";
 import { removeAnalyticsProjectionSchema } from "./fixtures/legacy-database.js";
@@ -22,6 +22,8 @@ const legacyRead = { kind: "resource-access", resource, operationId: "operation"
 const inferredRead = { ...legacyRead, access: "inferred-read", toolRead: {
   kind: "literal-command", requested: { kind: "lines", start: 2, count: 5 }, delivery: { kind: "unknown" }, revision: { kind: "unknown" },
 } } satisfies ResourceAccessEvidence;
+const execution = { ...legacyRead, resource: { ...resource, canonicalPath: "/skills/example/scripts/log.sh", observedPath: "/skills/example/scripts/log.sh", kind: "script" },
+  access: "execute", outcome: "success" } satisfies ResourceAccessEvidence;
 const coverage: ToolCoverageEvidence = { kind: "tool-coverage", operationId: "opaque-op", family: "python", outcome: "success", model: null,
   recognition: { kind: "opaque", reason: "unsupported-syntax" } };
 function observation(evidence: Evidence, id: string = evidence.kind): Observation {
@@ -103,9 +105,10 @@ test("schema six migration preserves historical payloads, native receipts, outbo
     assert.equal((await upgraded.queryResources({})).rows[0]?.successfulReadCount, 1);
     await upgraded.close();
     const db = new DatabaseSync(databasePath);
-    assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 8);
+    assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 9);
     assert.equal(db.prepare("SELECT payload FROM resource_events WHERE observation_id='legacy-resource'").get()?.payload, saved);
     assert.equal(db.prepare("SELECT payload FROM delivery_outbox").get()?.payload, outbox);
+    assert.equal(db.prepare("SELECT protocol_version FROM delivery_outbox").get()?.protocol_version, 3);
     assert.equal(db.prepare("SELECT digest FROM native_receipts WHERE id='native:old-receipt'").get()?.digest, "preserve-digest");
     assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='index' AND name IN ('observations_evidence_time_idx','observations_sequence_lookup_idx')").get()?.n, 2);
@@ -145,7 +148,7 @@ test("tool evidence survives relay, aggregate reopen and scoped content analytic
     await store.close();
     const opened = openRelayStore({ databasePath, enrollment });
     assert.ok(opened.kind === "ready");
-    const pending = await opened.store.selectPending({ maxCount: 100, maxPayloadBytes: 1_000_000 });
+    const pending = await opened.store.selectPending({ maxCount: 100, maxPayloadBytes: 1_000_000, maxVersion: 5 });
     const ready = pending.flatMap(item => item.kind === "ready" ? [item.observation] : []);
     assert.deepEqual(ready, events);
     const envelope = parseEnvelope(JSON.parse(encodeEnvelope(sourceId, ready)));
@@ -168,4 +171,63 @@ test("tool evidence survives relay, aggregate reopen and scoped content analytic
     assert.equal(other.coverage.displayed.opaqueOperations, 0);
     await read.store.close();
   } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("version five carries script executions while older envelopes and malformed executions are refused", () => {
+  for (const evidence of [execution, { ...execution, outcome: "unknown" } satisfies ResourceAccessEvidence]) {
+    const event = observation(evidence);
+    const encoded = encodeEnvelope(sourceId, [event, observation(inferredRead, "inferred")]);
+    assert.match(encoded, /^\{"version":5,/);
+    assert.deepEqual(parseEnvelope(JSON.parse(encoded)).observations[0], event);
+    for (const version of [1, 2, 3, 4]) assert.throws(() => parseEnvelope({ version, sourceId, observations: [event] }), /version 5/);
+  }
+  assert.match(encodeEnvelope(sourceId, [observation(inferredRead)]), /^\{"version":4,/);
+  for (const evidence of [
+    { ...execution, outcome: "error" },
+    { ...execution, toolRead: inferredRead.toolRead },
+    { ...execution, mechanism: "fanotify", outcome: "unknown" },
+  ]) assert.throws(() => parseObservation({ ...observation(coverage), evidence }), /Invalid observation/);
+});
+
+test("a read and an execution of one file in one operation keep distinct receipts and separate counts", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "hotplate-tool-execution-"));
+  const databasePath = join(directory, "capture.sqlite");
+  const aggregatePath = join(directory, "aggregate.sqlite");
+  const env = { HOTPLATE_DB: databasePath };
+  try {
+    const read = { ...inferredRead, resource: execution.resource };
+    assert.deepEqual(await captureFact({ fact: fact(read), env }), { kind: "recorded", accepted: 1, duplicate: 0, dropped: 0 });
+    assert.deepEqual(await captureFact({ fact: fact(execution), env }), { kind: "recorded", accepted: 1, duplicate: 0, dropped: 0 });
+    assert.deepEqual(await captureFact({ fact: { ...fact(execution), observedAt: "2026-10-19T03:00:00.000Z" }, env }), { kind: "recorded", accepted: 0, duplicate: 1, dropped: 0 });
+    const local = openHotplateReadStore({ databasePath });
+    assert.ok(local.kind === "ready");
+    const [row] = (await local.store.queryResources({})).rows;
+    assert.deepEqual([row?.inferredReadCount, row?.executeCount, row?.attemptCount, row?.successfulReadCount], [1, 1, 0, 0]);
+    await local.store.close();
+    const aggregate = openAggregateStore({ databasePath: aggregatePath });
+    const events = [observation(read, "read"), observation(execution, "execute")];
+    const envelope = parseEnvelope(JSON.parse(encodeEnvelope(sourceId, events)));
+    assert.deepEqual(await aggregate.ingest({ source: { sourceId, machineId }, observations: envelope.observations }), { kind: "committed", accepted: 2, duplicate: 0 });
+    await aggregate.close();
+    const reader = openHotplateReadStore({ databasePath: aggregatePath });
+    assert.ok(reader.kind === "ready");
+    try {
+      assert.equal((await reader.store.queryResources({})).rows[0]?.executeCount, 1);
+      const query = { content: "resources", measure: "executions", split: "agent", selection: { kind: "all" }, filter: {} } as const;
+      const report = await reader.store.queryContentAnalytics(query);
+      assert.equal(report.overall.count, 1);
+      assert.deepEqual([report.overall.counts.executions, report.overall.counts.inferredReads, report.overall.counts.readAttempts], [1, 1, 0]);
+      assert.equal((await reader.store.queryContentAnalytics({ ...query, measure: "toolActivity" })).overall.count, 2);
+      assert.equal((await reader.store.queryContentAnalytics({ ...query, measure: "inferredReads" })).overall.count, 1);
+    } finally { await reader.store.close(); }
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("receiver capabilities cap at this build's protocol and default older receivers to version four", () => {
+  assert.equal(parseProtocolCapabilities({ ok: true }), 4);
+  assert.equal(parseProtocolCapabilities({ ok: true, protocol: { versions: [1, 2, 3, 4] } }), 4);
+  assert.equal(parseProtocolCapabilities({ ok: true, protocol: { versions: [1, 2, 3, 4, 5, 6] } }), 5);
+  for (const value of [{ ok: false }, { ok: true, protocol: { versions: [6] } }, { ok: true, protocol: { versions: "5" } }, null]) {
+    assert.throws(() => parseProtocolCapabilities(value), /protocol capabilities|Expected object/);
+  }
 });

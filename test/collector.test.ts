@@ -114,7 +114,7 @@ test("pi SDK records failed SKILL.md reads without storing error bodies", async 
   }
 });
 
-test("pi SDK captures shell and Python reference reads, failures, and opaque scripts", async () => {
+test("pi SDK captures shell and Python reference reads, failures, and skill script executions", async () => {
   const fixture = await createFixture();
   const previousDb = process.env.HOTPLATE_DB;
   process.env.HOTPLATE_DB = fixture.databasePath;
@@ -128,12 +128,13 @@ test("pi SDK captures shell and Python reference reads, failures, and opaque scr
     try {
       const report = await open.store.queryContentAnalytics({ filter: { projectCwd: fixture.projectDir }, content: "resources",
         measure: "toolActivity", split: "model", selection: { kind: "all" } });
-      assert.equal(report.overall.count, 4);
+      assert.equal(report.overall.count, 5);
       assert.equal(report.overall.counts.successfulReads, 1);
       assert.equal(report.overall.counts.inferredReads, 2);
       assert.equal(report.overall.counts.readAttempts, 1);
+      assert.equal(report.overall.counts.executions, 1);
       assert.equal(report.coverage.overall.observedOperations, 5);
-      assert.equal(report.coverage.overall.opaqueOperations, 1);
+      assert.equal(report.coverage.overall.opaqueOperations, 0);
       assert.equal(report.coverage.overall.outcomes.error, 1);
       assert.ok(report.selection.series.every((series) => series.model?.id === fakeModel.id));
       assert.equal((await open.store.queryOverview({})).successfulReadCount, 0);
@@ -397,7 +398,7 @@ function assistantGeneralToolMessage(skillPath: string): AssistantMessage {
       { type: "toolCall", id: "read-reference", name: "read", arguments: { path: reference, offset: 2, limit: 2 } },
       { type: "toolCall", id: "shell-reference", name: "bash", arguments: { command: `sed -n '2,3p' '${reference}'` } },
       { type: "toolCall", id: "python-reference", name: "bash", arguments: { command: `python3 -c "print(open('${reference}').read())"` } },
-      { type: "toolCall", id: "opaque-script", name: "bash", arguments: { command: `python3 '${join(dirname(skillPath), "analyze.py")}'` } },
+      { type: "toolCall", id: "skill-script", name: "bash", arguments: { command: `python3 '${join(dirname(skillPath), "analyze.py")}'` } },
       { type: "toolCall", id: "failed-shell", name: "bash", arguments: { command: `cat '${join(dirname(reference), "missing.md")}'` } },
     ],
   };

@@ -217,7 +217,7 @@ test("resource projections, receipts, and outbox changes roll back together", as
     const relay = openRelayStore({ databasePath, enrollment });
     assert.equal(relay.kind, "ready");
     if (relay.kind === "ready") {
-      const pending = await relay.store.selectPending({ maxCount: 100, maxPayloadBytes: 1024 * 1024 });
+      const pending = await relay.store.selectPending({ maxCount: 100, maxPayloadBytes: 1024 * 1024, maxVersion: 5 });
       assert.equal(pending[0]?.kind, "ready");
       if (pending[0]?.kind === "ready") assert.deepEqual(pending[0].observation.evidence, first.evidence);
       await relay.store.close();

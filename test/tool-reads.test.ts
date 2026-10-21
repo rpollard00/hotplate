@@ -124,7 +124,7 @@ test("unsupported shell semantics produce only sanitized unknown execution cover
   try {
     for (const command of [
       "cat $SKILL", "cat $(pwd)/SKILL.md", "cat `pwd`/SKILL.md", "cat references/*.md", "cat references/{first,second}.md",
-      "cat ~user/SKILL.md", "cat -", "python analyze.py", "# cat references/second.md", "cat 'unclosed",
+      "cat ~user/SKILL.md", "cat -", "python -W ignore analyze.py", "# cat references/second.md", "cat 'unclosed",
       "cat --number references/second.md", "head -n 0 references/second.md", "sed -n '1p' references/second.md references/alias.md",
       "sed -n '2,1p' references/second.md", "PRIVATE_INPUT_CANARY references/second.md",
       "if true; then cat references/second.md; fi", "cat references/second.md &", "cat <(true)", "(cat references/second.md)",
@@ -236,6 +236,16 @@ test("shell steps stay independently readable around opaque words, variables, lo
       [`S=${root}; S=$(pwd); cat $S/example/SKILL.md`, undefined, [], unsupported],
       [`S=${root}; read S; cat $S/example/SKILL.md`, undefined, [], unsupported],
       [`true && S=${root}; cat $S/example/SKILL.md`, undefined, [], unsupported],
+      [`S=${root} && cat $S/example/SKILL.md`, undefined, [[entry, whole, "inferred-read"]], recognized(1)],
+      [`S=${root} && T=$S/example && cat $T/SKILL.md`, undefined, [[entry, whole, "inferred-read"]], recognized(1)],
+      [`export S=${root} && head -n 3 "$S/other/SKILL.md"`, undefined, [[other, lines(1, 3), "inferred-read"]], recognized(1)],
+      [`false && S=${root}; cat $S/example/SKILL.md`, undefined, [], unsupported],
+      [`S=${root} || true; cat $S/example/SKILL.md`, undefined, [], unsupported],
+      [`S=${root} && true || true && cat $S/example/SKILL.md`, undefined, [], unsupported],
+      [`true || S=${root}; cat $S/example/SKILL.md`, undefined, [], unsupported],
+      [`cd references && S=${root}; cat $S/example/SKILL.md`, undefined, [], unsupported],
+      [`export S=${root} || true; cat $S/example/SKILL.md`, undefined, [], unsupported],
+      [`S=${root}; true && T=$S; cat $S/example/SKILL.md`, undefined, [[entry, whole, "attempt"]], recognized(1)],
       [`S="${root} x"; cat $S/example/SKILL.md`, undefined, [], unsupported],
       [`for f in ${entry} ${other}; do head -n 5 "$f"; done`, undefined, [[entry, lines(1, 5), "attempt"], [other, lines(1, 5), "attempt"]], recognized(2)],
       ["for f in references/second.md\ndo\n  cat $f\ndone", undefined, [[second, whole, "attempt"]], recognized(1)],
@@ -297,6 +307,94 @@ test("shell steps stay independently readable around opaque words, variables, lo
       assert.deepEqual(evidence.at(-1)?.kind === "tool-coverage" ? evidence.at(-1) : null, { kind: "tool-coverage", operationId: "steps", family: "shell",
         outcome: "success", model: f.context.model, recognition }, command);
     }
+  } finally { f.close(); }
+});
+
+test("skill script executions follow command paths, interpreters, sourcing and read outcome rules", () => {
+  const f = fixture();
+  try {
+    const scripts = join(f.skill, "scripts");
+    mkdirSync(scripts);
+    const [log, py, mjs, ts, env] = ["log.sh", "x.py", "x.mjs", "x.ts", "env.sh"].map(name => join(scripts, name));
+    for (const path of [log, py, mjs, ts, env]) writeFileSync(path ?? "", "");
+    const entry = join(f.skill, "SKILL.md");
+    const unsupported = { kind: "opaque", reason: "unsupported-syntax" } as const;
+    const missing = { kind: "opaque", reason: "missing-input" } as const;
+    const recognized = (resourceCount: number) => ({ kind: "recognized", resourceCount }) as const;
+    const cases: [string, string | null, [string | undefined, string, string][], unknown][] = [
+      [`${log} file verify`, f.skill, [[log, "execute", "success"]], recognized(1)],
+      [`L=${log}; $L file verify --json`, f.skill, [[log, "execute", "unknown"]], recognized(1)],
+      ["~/.agents/skills/example/scripts/log.sh a b", null, [[log, "execute", "success"]], recognized(1)],
+      ['"$HOME/.agents/skills/example/scripts/log.sh" a', null, [[log, "execute", "success"]], recognized(1)],
+      [`cd '${f.skill}' && ./scripts/log.sh a`, f.directory, [[log, "execute", "success"]], recognized(1)],
+      ["./scripts/log.sh a", null, [], missing],
+      [`bash ${log} a`, null, [[log, "execute", "success"]], recognized(1)],
+      [`bash -eu -- ${log}`, null, [[log, "execute", "success"]], recognized(1)],
+      [`bash -c 'cat ${entry}'`, null, [], unsupported],
+      [`bash -n ${log}`, null, [], unsupported],
+      [`python3 -I ${py}`, null, [[py, "execute", "success"]], recognized(1)],
+      ["python3 -m mod", f.skill, [], unsupported],
+      ["toString x", f.skill, [], unsupported],
+      ["constructor x | hasOwnProperty", f.skill, [], unsupported],
+      ["python3 -W ignore scripts/x.py", f.skill, [], unsupported],
+      ["node scripts/x.mjs", f.skill, [[mjs, "execute", "success"]], recognized(1)],
+      ["node -e 'console.log(1)'", f.skill, [], unsupported],
+      [`uv run ${py}`, null, [[py, "execute", "success"]], recognized(1)],
+      ["uv run pytest", f.skill, [], unsupported],
+      ["bun run scripts/x.ts", f.skill, [[ts, "execute", "success"]], recognized(1)],
+      ["bun scripts/x.ts", f.skill, [[ts, "execute", "success"]], recognized(1)],
+      ["bun run build", f.skill, [], unsupported],
+      ["deno run scripts/x.ts", f.skill, [[ts, "execute", "success"]], recognized(1)],
+      ["npx tsx scripts/x.ts", f.skill, [[ts, "execute", "success"]], recognized(1)],
+      ["tsx scripts/x.ts", f.skill, [[ts, "execute", "success"]], recognized(1)],
+      [`source ${env}; cat ${entry}`, null, [[env, "execute", "unknown"]], unsupported],
+      [`. ${env} && cat ${entry}`, null, [[env, "execute", "unknown"]], unsupported],
+      [`cat ${entry}; source env.sh`, f.skill, [[entry, "attempt", "unknown"]], unsupported],
+      [`/usr/local/bin/tool ${entry}`, null, [], unsupported],
+      [`bash /usr/local/bin/tool`, null, [], unsupported],
+      [`bash ${f.skill}/../example/scripts/log.sh`, null, [], missing],
+      [`L=${log} && D=x.tsv && bash $L $D build`, null, [[log, "execute", "success"]], recognized(1)],
+      [`(cd /tmp) && L=${log} && S=x && $L file $S`, null, [[log, "execute", "unknown"]], unsupported],
+      [`false && L=${log}; $L a`, null, [], unsupported],
+      [`L=${log} || true; $L a`, null, [], unsupported],
+      [`cd ${f.skill} && L=${log}; $L a`, null, [], unsupported],
+      [`for d in a b; do test -d $d && L=${log}; done; $L`, null, [], unsupported],
+      [`L=/tmp/q.md; for d in a; do test -d $d && L=${entry}; done; cat $L`, null, [], unsupported],
+      [`for i in 1; do test -d a && L=${entry}; done && cat $L`, null, [], unsupported],
+      [`test -d a && for i in 1; do L=${entry}; done; cat $L`, null, [], unsupported],
+      [`false || for i in 1; do L=${entry}; done; cat $L`, null, [], unsupported],
+      [`test -d a && for i in 1; do L=${entry}; done && cat $L`, null, [[entry, "inferred-read", "success"]], recognized(1)],
+      [`for i in 1; do L=${entry}; done; cat $L`, null, [[entry, "attempt", "unknown"]], recognized(1)],
+      ["bash +x scripts/log.sh", f.skill, [], unsupported],
+      ["tsx watch scripts/x.ts", f.skill, [], unsupported],
+      ["node inspect scripts/x.mjs", f.skill, [], unsupported],
+      ["node --test scripts/x.mjs", f.skill, [], unsupported],
+      ["node test", f.skill, [], unsupported],
+      ["deno run main", f.skill, [], unsupported],
+      ["npx tsx watch scripts/x.ts", f.skill, [], unsupported],
+      [`cat ${log} && bash ${log}`, null, [[log, "inferred-read", "success"], [log, "execute", "success"]], recognized(2)],
+      [`bash ${log} | head -n 2`, null, [[log, "execute", "unknown"]], recognized(1)],
+      [`bash ${log}; bash ${log}`, null, [[log, "execute", "unknown"]], recognized(1)],
+      [`for s in ${log} ${py}; do bash $s; done`, null, [[log, "execute", "unknown"], [py, "execute", "unknown"]], recognized(2)],
+      ["bash scripts/lo*.sh", f.skill, [[log, "execute", "success"]], recognized(1)],
+      ["bash scripts/zz*.sh", f.skill, [], recognized(0)],
+    ];
+    for (const [command, cwd, expected, recognition] of cases) {
+      const evidence = captureToolReads({ operationId: "execute", context: { ...f.context, glob: shellGlob }, tool: { kind: "shell", cwd, command, outcome: success } });
+      const accesses = evidence.filter(item => item.kind === "resource-access");
+      assert.deepEqual(accesses.map(item => [item.resource.canonicalPath, item.access, item.outcome]), expected, command);
+      assert.ok(accesses.every(item => item.access !== "execute" || item.toolRead === undefined), command);
+      assert.deepEqual(evidence.at(-1)?.kind === "tool-coverage" ? evidence.at(-1) : null, { kind: "tool-coverage", operationId: "execute", family: "shell",
+        outcome: "success", model: f.context.model, recognition }, command);
+    }
+    for (const outcome of [{ kind: "failed" }, { kind: "unreported" }] as const) {
+      const evidence = captureToolReads({ operationId: "failed", context: f.context, tool: { kind: "shell", cwd: null, command: `bash ${log}`, outcome } });
+      assert.deepEqual(evidence.filter(item => item.kind === "resource-access").map(item => [item.access, item.outcome]), [["execute", "unknown"]]);
+    }
+    const both = captureToolReads({ operationId: "both", context: f.context, tool: { kind: "shell", cwd: null, command: `cat ${log} && bash ${log}`, outcome: success } });
+    const scope = { projectCwd: f.directory, sessionId: "session", sessionFile: null, segmentId: "segment", segmentReason: "unknown", runId: null, turnId: null, leafId: null } as const;
+    const ids = both.filter(item => item.kind === "resource-access").map(evidence => toolObservationIdentity({ host: "pi", scope, evidence }).id);
+    assert.equal(new Set(ids).size, 2);
   } finally { f.close(); }
 });
 

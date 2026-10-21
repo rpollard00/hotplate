@@ -1,7 +1,7 @@
 import { readNativeAccountConfiguration } from "./integrations/native-settings.js";
 import { createHash } from "node:crypto";
 import type { CaptureWriteSummary, Evidence, NativeHostId, ObservationScope } from "./domain.js";
-import { parseObservation, requiresToolProtocol4, validateObservationMetadata } from "./observation.js";
+import { evidenceProtocolVersion, parseObservation, validateObservationMetadata } from "./observation.js";
 import { openCaptureStore, openHotplateStore, resolveHotplateDatabasePath } from "./store.js";
 
 export type CaptureFact = {
@@ -42,11 +42,12 @@ export async function captureFact(args: { fact: CaptureFact; env?: NodeJS.Proces
   if (env.HOTPLATE_DISABLED === "1" || env.HOTPLATE_DISABLED === "true") return { kind: "disabled" };
   const fact = parseCaptureFact(args.fact);
   const identity = [fact.host, fact.sessionId, fact.actorId, fact.occurrenceId, fact.evidence.kind];
-  const toolEvidence = requiresToolProtocol4(fact.evidence);
+  const toolEvidence = evidenceProtocolVersion(fact.evidence) >= 4;
   if (toolEvidence) identity.push("tool-v4");
   if (fact.evidence.kind === "resource-access") {
     identity.push(fact.evidence.resource.filesystemId, fact.evidence.resource.canonicalPath);
     if (!toolEvidence) identity.push(fact.evidence.resource.observedPath);
+    if (fact.evidence.access === "execute") identity.push(fact.evidence.access);
   }
   const receipt = createHash("sha256").update(JSON.stringify(identity)).digest("hex");
   const configuration = readNativeAccountConfiguration(env);

@@ -24,7 +24,8 @@ export type ToolReadContext = {
 export type WorkBudget = { remaining: number };
 export type ShellGlob = (pattern: string, cwd: string, budget: WorkBudget) => readonly string[] | null;
 type OpaqueReason = Extract<ToolCoverageEvidence["recognition"], { kind: "opaque" }>["reason"];
-type Target = { path: string; requested: ReadPortion; outcome: ToolOutcome };
+type Use = { access: "read"; requested: ReadPortion } | { access: "execute" };
+type Target = { path: string; outcome: ToolOutcome } & Use;
 type Opaque = { kind: "opaque"; reason: OpaqueReason; targets: readonly Target[] };
 type Recognition = { kind: "recognized"; targets: readonly Target[] } | Opaque;
 const MAX_INPUT = 32_768;
@@ -46,20 +47,23 @@ export function captureToolReads(input: {
   const outcome = reportedOutcome(tool.outcome);
   const cwd = (tool.kind === "shell" || tool.kind === "python" ? tool.cwd : context.cwd) ?? context.cwd;
   const resources = new Map<string, ResourceAccessEvidence>();
+  let foreignExecution = false;
   for (const target of recognition.targets) {
     const resource = qualifyResource({ path: target.path, cwd, roots: context.roots });
-    if (!resource) continue;
-    const key = JSON.stringify([resource.filesystemId, resource.canonicalPath]);
+    if (!resource) { foreignExecution ||= target.access === "execute"; continue; }
+    const key = JSON.stringify([resource.filesystemId, resource.canonicalPath, target.access]);
     if (resources.has(key)) continue;
     const result = reportedOutcome(target.outcome);
+    const identity = { kind: "resource-access", resource, operationId, mechanism: "host-tool",
+      model: context.model, process: context.process, attribution: context.attribution } as const;
+    if (target.access === "execute") { resources.set(key, { ...identity, access: "execute", outcome: result === "success" ? "success" : "unknown" }); continue; }
     const toolRead: ToolReadMetadata = {
       kind: tool.kind === "file" ? "structured-read" : "literal-command",
       requested: target.requested,
       delivery: tool.kind === "file" && result === "success" ? tool.delivery : { kind: "unknown" },
       revision: { kind: "unknown" },
     };
-    const base = { kind: "resource-access", resource, operationId, mechanism: "host-tool",
-      model: context.model, process: context.process, attribution: context.attribution, toolRead } as const;
+    const base = { ...identity, toolRead } as const;
     const evidence: ResourceAccessEvidence = tool.kind === "file" && result !== "unknown"
       ? { ...base, access: "read", outcome: result, toolRead: { ...toolRead, kind: "structured-read" } }
       : tool.kind !== "file" && result === "success" ? { ...base, access: "inferred-read", outcome: "success", toolRead: { ...toolRead, kind: "literal-command" } }
@@ -67,7 +71,8 @@ export function captureToolReads(input: {
     resources.set(key, evidence);
   }
   return [...resources.values(), { kind: "tool-coverage", operationId, family, outcome, model: context.model,
-    recognition: recognition.kind === "opaque" ? { kind: "opaque", reason: recognition.reason } : { kind: "recognized", resourceCount: resources.size } }];
+    recognition: recognition.kind === "opaque" ? { kind: "opaque", reason: recognition.reason }
+      : foreignExecution ? { kind: "opaque", reason: "unsupported-syntax" } : { kind: "recognized", resourceCount: resources.size } }];
 }
 
 function reportedOutcome(outcome: ToolOutcome): ToolCoverageEvidence["outcome"] {
@@ -79,7 +84,7 @@ export function toolObservationIdentity(input: {
 }): Pick<Observation, "id" | "producerId" | "sequence"> {
   const { host, scope, evidence } = input;
   const operation = evidence.kind === "resource-access" || evidence.kind === "tool-coverage" ? evidence.operationId : evidence.toolCallId;
-  const target = evidence.kind === "resource-access" ? [evidence.resource.filesystemId, evidence.resource.canonicalPath]
+  const target = evidence.kind === "resource-access" ? [evidence.resource.filesystemId, evidence.resource.canonicalPath, ...evidence.access === "execute" ? [evidence.access] : []]
     : evidence.kind === "tool-coverage" ? [] : [evidence.skill.canonicalPath];
   const receipt = createHash("sha256").update(JSON.stringify([host, scope.sessionId ?? scope.segmentId, operation, evidence.kind, ...target])).digest("hex");
   return { id: `native:tool:${receipt}`, producerId: `native:tool:${receipt}`, sequence: 0 };
@@ -88,7 +93,7 @@ export function toolObservationIdentity(input: {
 function recognize(tool: ReadTool, env: Omit<Env, "trace">): Recognition {
   switch (tool.kind) {
     case "file": return validPath(tool.path) && isReadPortion(tool.requested) && isReadDelivery(tool.delivery)
-      ? { kind: "recognized", targets: [{ path: tool.path, requested: tool.requested, outcome: tool.outcome }] } : opaque("missing-input");
+      ? { kind: "recognized", targets: [{ path: tool.path, access: "read", requested: tool.requested, outcome: tool.outcome }] } : opaque("missing-input");
     case "shell": return tool.command.length > MAX_INPUT ? opaque("limit") : shellReads(tool.command, knownCwd(tool.cwd), env);
     case "python": return tool.code.length > MAX_INPUT ? opaque("limit")
       : interpret([{ connector: "start", command: { kind: "pipeline", stages: [{ assignments: [], words: [literal("python3"), literal("-c"), literal(tool.code)], redirects: [] }] } }], knownCwd(tool.cwd), env);
@@ -120,7 +125,7 @@ type Trace = { targets: Target[]; reason: OpaqueReason | null; opaque: boolean }
 type Env = { home: string; outcome: ToolOutcome; glob: ShellGlob | null; budget: WorkBudget; trace: Trace };
 type Effect = { cwd: boolean; vars: boolean; halts: boolean; jumps: boolean; wild: boolean };
 type Field = { text: string; unmatched: boolean };
-type Resolved = { kind: "empty" } | { kind: "opaque"; effect: Effect }
+type Resolved = { kind: "empty" } | { kind: "opaque"; effect: Effect; sourced: string | null }
   | { kind: "command"; program: string; role: Role; args: readonly string[]; redirects: readonly Redirect<string>[]; unmatched: ReadonlySet<string> };
 type ReaderRequest = { paths: readonly string[]; requested: ReadPortion };
 const unknownCwd = { kind: "unknown" } as const;
@@ -599,6 +604,35 @@ const filters: Readonly<Record<string, { programs: number; values: readonly stri
   cat: { programs: 0, values: [] }, less: { programs: 0, values: [] },
 };
 
+type Launch = { via: readonly string[]; options: RegExp | null; operand: "any" | "file" };
+const shellLaunch: readonly Launch[] = [{ via: [], options: /^-[euxv]+$/u, operand: "any" }];
+const pythonLaunch: readonly Launch[] = [{ via: [], options: /^-[IuBEsSO]+$/u, operand: "any" }];
+const plainLaunch: readonly Launch[] = [{ via: [], options: null, operand: "any" }];
+const fileLaunch: readonly Launch[] = [{ via: [], options: null, operand: "file" }];
+const launches: Readonly<Record<string, readonly Launch[]>> = {
+  bash: shellLaunch, sh: shellLaunch, zsh: shellLaunch, dash: shellLaunch, python: pythonLaunch, python3: pythonLaunch,
+  node: fileLaunch, tsx: fileLaunch, ruby: plainLaunch, perl: plainLaunch,
+  bun: [{ via: ["run"], options: null, operand: "file" }, { via: [], options: null, operand: "file" }],
+  deno: [{ via: ["run"], options: null, operand: "file" }], npx: [{ via: ["tsx"], options: null, operand: "file" }], uv: [{ via: ["run"], options: null, operand: "file" }],
+};
+
+function scriptOf(program: string, args: readonly string[]): string | null {
+  if (program.includes("/")) return program;
+  const launch = (Object.hasOwn(launches, program) ? launches[program] : undefined)?.find(item => item.via.every((word, index) => args[index] === word));
+  if (!launch) return null;
+  const rest = args.slice(launch.via.length);
+  const index = rest.findIndex(arg => arg === "--" || !/^[-+]/u.test(arg) || !launch.options?.test(arg));
+  const operand = rest[index] === "--" ? rest[index + 1] : rest[index];
+  return operand !== undefined && validPath(operand) && !/^[-+]/u.test(operand) && !/^[A-Za-z][\w+.-]*:/u.test(operand)
+    && (launch.operand === "any" || /\/|\.(?:[cm]?[jt]s|[jt]sx|py)$/u.test(operand)) ? operand : null;
+}
+
+function sourceOperand(fields: readonly Field[]): string | null {
+  const [first, second] = fields;
+  const operand = first?.text === "--" ? second : first;
+  return operand !== undefined && !operand.unmatched && operand.text.includes("/") && !operand.text.startsWith("-") ? operand.text : null;
+}
+
 function operands(args: readonly string[], requested: ReadPortion): ReaderRequest | null {
   const literal = args[0] === "--";
   const paths = literal ? args.slice(1) : args;
@@ -616,7 +650,7 @@ function pythonCommand(args: readonly string[]): ReaderRequest | null {
 }
 
 function stdinFilter(program: string, args: readonly string[]): boolean {
-  const filter = filters[program];
+  const filter = Object.hasOwn(filters, program) ? filters[program] : undefined;
   if (!filter) return false;
   let programs = 0;
   for (let index = 0; index < args.length; index += 1) {
@@ -762,9 +796,9 @@ function expand(word: Word, scope: Scope, env: Env, mode: "files" | "fixed" | "i
 function resolveStage(stage: Stage, scope: Scope, env: Env): Resolved {
   const [head, ...rest] = stage.words;
   const values = stage.assignments.every(assignment => assignment.value === null || expand(assignment.value, scope, env, "inert") !== null);
-  if (head === undefined) return values && !stage.redirects.some(redirect => redirect.target.some(part => part.kind === "opaque")) ? { kind: "empty" } : { kind: "opaque", effect: merge(calm, { vars: assigns(stage) }) };
+  if (head === undefined) return values && !stage.redirects.some(redirect => redirect.target.some(part => part.kind === "opaque")) ? { kind: "empty" } : { kind: "opaque", effect: merge(calm, { vars: assigns(stage) }), sourced: null };
   const [command, ...extra] = expand(head, scope, env, "fixed") ?? [];
-  if (command === undefined || extra.length > 0) return { kind: "opaque", effect: chaos };
+  if (command === undefined || extra.length > 0) return { kind: "opaque", effect: chaos, sourced: null };
   const program = command.text;
   const mode = program === "cd" || program === "pushd" ? "fixed" : program === "[[" ? "inert" : "files";
   const fields: Field[] = [];
@@ -784,7 +818,8 @@ function resolveStage(stage: Stage, scope: Scope, env: Env): Resolved {
   const role = roleOf(program, args, scope.functions);
   const effect = merge(effectOf(role), { vars: assigns(stage) });
   const scripted = interpreters.has(program) && redirects.findLast(redirect => (redirect.op === "<" || redirect.op === "<<") && (redirect.fd ?? 0) === 0)?.op === "<<";
-  return !resolved || role.kind === "unsafe" || scripted ? { kind: "opaque", effect }
+  const sourced = resolved && role.kind === "unsafe" && (program === "source" || program === ".") && !scope.functions.has(program) ? sourceOperand(fields) : null;
+  return !resolved || role.kind === "unsafe" || scripted ? { kind: "opaque", effect, sourced }
     : { kind: "command", program, role, args, redirects, unmatched: new Set(fields.filter(field => field.unmatched).map(field => field.text)) };
 }
 
@@ -793,7 +828,7 @@ function assign(scope: Scope, assignments: readonly Assignment[], connector: Con
   for (const { name, value, subscript } of assignments) {
     spend(env.budget, current.vars.size + 1);
     if (subscript) { current = { ...current, vars: new Map() }; continue; }
-    const [field] = value !== null && (connector === "start" || connector === "seq") ? expand(value, current, env, "inert") ?? [] : [];
+    const [field] = value !== null && connector !== "or" ? expand(value, current, env, "inert") ?? [] : [];
     const vars = new Map(current.vars);
     if (field === undefined) vars.delete(name);
     else vars.set(name, field.text);
@@ -842,24 +877,41 @@ function run(steps: readonly ShellStep[], initial: Scope, env: Env, settled: boo
   let reach = { ok: true, fail: false };
   const confirmed = { or: false, seq: false };
   let unconfirmed = confirmed;
+  const unbound: { or: ReadonlySet<string>; seq: ReadonlySet<string> } = { or: new Set(), seq: new Set() };
+  let conditional = unbound;
   for (const [index, { connector, command }] of steps.entries()) {
-    if (!spend(env.budget, STEP_COST)) return { scope, alive: false };
+    if (!spend(env.budget, STEP_COST)) return { scope: forget(scope, conditional.seq), alive: false };
     if (!(connector === "and" ? reach.ok : connector === "or" ? reach.fail : reach.ok || reach.fail)) { env.trace.reason ??= "unsupported-syntax"; continue; }
     const broken = connector === "or" ? unconfirmed.or : connector === "seq" && unconfirmed.seq;
     if (broken) scope = { ...scope, cwd: unknownCwd };
     if (broken || connector === "seq") unconfirmed = confirmed;
+    const forgotten = connector === "or" ? conditional.or : connector === "seq" ? conditional.seq : unbound.or;
+    scope = forget(scope, forgotten);
+    if (forgotten.size > 0 || connector === "seq") conditional = unbound;
+    const track = (from: Scope, names: readonly string[]): Scope => {
+      if (connector === "or") return forget(from, new Set(names));
+      conditional = { or: new Set([...conditional.or, ...names]), seq: connector === "and" ? new Set([...conditional.seq, ...names]) : conditional.seq };
+      return from;
+    };
+    const bind = (from: Scope, assignments: readonly Assignment[]): Scope => track(assign(from, assignments, connector, env), assignments.map(assignment => assignment.name));
     let effect = calm;
     switch (command.kind) {
       case "pipeline": {
         const single = command.stages.length === 1 ? command.stages[0] : undefined;
         if (single && single.words.length === 0 && single.assignments.length > 0) {
           if (resolveStage(single, scope, env).kind === "opaque") obscure(env.trace);
-          scope = assign(assigns(single) ? affect(scope, merge(calm, { vars: true })) : scope, single.assignments, connector, env);
+          scope = bind(assigns(single) ? affect(scope, merge(calm, { vars: true })) : scope, single.assignments);
           break;
         }
         const resolved = command.stages.map(stage => resolveStage(stage, scope, env));
+        const aim = (path: string, use: Use): void => {
+          const target = validPath(path) && !path.split("/").includes("..") ? place(path, scope.cwd) : null;
+          if (target === null) env.trace.reason ??= validPath(path) ? "missing-input" : "unsupported-syntax";
+          else env.trace.targets.push({ path: target, outcome: settled && single ? env.outcome : unreported, ...use });
+        };
         const blocked = resolved.find(item => item.kind === "opaque");
         if (blocked?.kind === "opaque") {
+          for (const item of resolved) if (item.kind === "opaque" && item.sourced !== null) aim(item.sourced, { access: "execute" });
           obscure(env.trace);
           if (single) { scope = affect(scope, blocked.effect); effect = blocked.effect; }
           break;
@@ -878,25 +930,32 @@ function run(steps: readonly ShellStep[], initial: Scope, env: Env, settled: boo
           }
           if (single) {
             effect = effectOf(item.role);
-            scope = program === "export" ? assign(scope, args.flatMap(arg => assignmentOf([{ kind: "bare", value: arg }]) ?? []), connector, env) : affect(scope, effect);
+            scope = program === "export" ? bind(scope, args.flatMap(arg => assignmentOf([{ kind: "bare", value: arg }]) ?? [])) : affect(scope, effect);
           }
           if (item.role.kind === "modelled") continue;
-          const request = readers[program]?.(args) ?? null;
+          const request = Object.hasOwn(readers, program) ? readers[program]?.(args) ?? null : null;
+          const script = request === null ? scriptOf(program, args) : null;
+          if (script !== null) {
+            if (!item.unmatched.has(script)) aim(script, { access: "execute" });
+            continue;
+          }
           const input = item.redirects.findLast(redirect => (redirect.op === "<" || redirect.op === "<<") && (redirect.fd ?? 0) === 0);
           if (request && request.paths.length === 0 && input?.op === "<<") continue;
           if (request && (request.paths.length > 0 || input)) {
             if (!reachesTerminal(commands, stage)) continue;
             for (const path of request.paths.length > 0 ? request.paths : [input?.target ?? ""]) {
-              if (item.unmatched.has(path)) continue;
-              const target = validPath(path) && !path.split("/").includes("..") ? place(path, scope.cwd) : null;
-              if (target === null) env.trace.reason ??= validPath(path) ? "missing-input" : "unsupported-syntax";
-              else env.trace.targets.push({ path: target, requested: request.requested, outcome: settled && single ? env.outcome : unreported });
+              if (!item.unmatched.has(path)) aim(path, { access: "read", requested: request.requested });
             }
           } else if (input || stage === 0 || (request === null && !stdinFilter(program, args))) env.trace.reason ??= "unsupported-syntax";
         }
         break;
       }
-      case "for": ({ scope, effect } = loop(command, scope, env)); break;
+      case "for": {
+        const before = scope.vars;
+        ({ scope, effect } = loop(command, scope, env));
+        scope = track(scope, [...scope.vars].flatMap(([name, value]) => before.get(name) === value ? [] : [name]));
+        break;
+      }
       case "block": if (command.scope === "subshell") obscure(env.trace); else ({ scope, effect } = block(command.body, scope, env, {})); break;
       case "arithmetic": obscure(env.trace); scope = affect(scope, merge(calm, { vars: true })); break;
       case "function":
@@ -909,7 +968,10 @@ function run(steps: readonly ShellStep[], initial: Scope, env: Env, settled: boo
     const skipped = { ok: connector === "or" && reach.ok, fail: connector === "and" && reach.fail };
     reach = effect.wild ? { ok: false, fail: false } : effect.halts ? skipped : { ok: true, fail: true };
   }
-  return { scope, alive: reach.ok || reach.fail };
+  return { scope: forget(scope, conditional.seq), alive: reach.ok || reach.fail };
+}
+function forget(scope: Scope, names: ReadonlySet<string>): Scope {
+  return names.size === 0 ? scope : { ...scope, vars: new Map([...scope.vars].filter(([name]) => !names.has(name))) };
 }
 type PythonToken = { kind: "name" | "punctuation"; value: string } | { kind: "string"; value: string };
 function pythonReads(code: string): ReaderRequest | null {

@@ -334,11 +334,11 @@ async function proxyFixture(t: TestContext) {
   let duplicates = 0;
   let release: (() => void) | undefined;
   const proxy = createHttpServer((incoming, response) => {
-    if (incoming.url === "/api/ingest") ingestRequests += 1;
+    if (incoming.url === "/api/ingest" && incoming.method === "POST") ingestRequests += 1;
     if (mode === "outage" || (mode === "unauthorized" && incoming.url === "/api/ingest")) {
       incoming.resume(); response.writeHead(mode === "outage" ? 503 : 401).end(); return;
     }
-    if ((mode === "hang" && incoming.url === "/api/ingest") || (mode === "hang-enrollment" && incoming.url === "/api/enroll")) { incoming.resume(); return; }
+    if ((mode === "hang" && incoming.url === "/api/ingest" && incoming.method === "POST") || (mode === "hang-enrollment" && incoming.url === "/api/enroll")) { incoming.resume(); return; }
     if (incoming.url === "/api/enroll" && ["redirect", "oversized", "compressed"].includes(mode)) {
       incoming.resume();
       if (mode === "redirect") response.writeHead(307, { location: f.configuration.publicOrigin + "/api/enroll" }).end();

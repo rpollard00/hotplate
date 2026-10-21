@@ -26,10 +26,13 @@ A logical installation path that selects an exact physical content subtree. Mult
 The reported project or nearest repository or worktree boundary that limits a host's project skill discovery.
 
 **Resource access**:
-Evidence of a structured read, an inferred command read, a read attempt, or a filesystem open or access. It does not prove model consumption.
+Evidence of a structured read, an inferred command read, a read attempt, a resource execution, or a filesystem open or access. It does not prove model consumption.
+
+**Resource execution**:
+Evidence that a recognized tool command ran a file under a skill root, directly, through an interpreter, or with `source`. It is not a read of the file, and it does not prove that the model used the output.
 
 **Tool activity**:
-Recorded confirmed reads, inferred reads, read attempts, read failures, and native skill invocations with their outcomes. It excludes filesystem events, catalog discovery, command intents, and wrappers.
+Recorded confirmed reads, inferred reads, read attempts, read failures, resource executions, and native skill invocations with their outcomes. It excludes filesystem events, catalog discovery, command intents, and wrappers.
 
 **Recorded activity**:
 Evidence occurrences across selected content, including tool activity, filesystem events, requests, and wrappers. Mirrored skill and resource facts represent one occurrence, not unique content consumption.

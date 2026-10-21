@@ -144,7 +144,7 @@ test("populated v5 upgrades preserve resource tables, enrollment, outbox and rec
   const tables = db.prepare("SELECT name, rootpage, sql FROM sqlite_master WHERE type = 'table' ORDER BY name").all();
   const capture = openCaptureStore({ databasePath, enrollment });
   await capture.close();
-  assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 8);
+  assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 9);
   assert.deepEqual(storedState(db), before);
   const upgradedTables = db.prepare("SELECT name, rootpage, sql FROM sqlite_master WHERE type = 'table' ORDER BY name").all();
   const originalNames = new Set(tables.map(table => table.name));
@@ -182,7 +182,7 @@ test("dashboard and relay opens require a writer upgrade without mutating v5 dat
   assert.equal(relay.kind, "ready");
   if (relay.kind === "ready") {
     assert.equal((await relay.store.queryStatus()).pendingCount, 2);
-    assert.equal((await relay.store.selectPending({ maxCount: 100, maxPayloadBytes: 1024 * 1024 })).length, 2);
+    assert.equal((await relay.store.selectPending({ maxCount: 100, maxPayloadBytes: 1024 * 1024, maxVersion: 5 })).length, 2);
     await relay.store.close();
   }
   assert.deepEqual(await readFile(databasePath), upgraded);
@@ -206,7 +206,7 @@ test("v5 migration rolls back both new indexes when the second index cannot be c
   db.exec("DROP TABLE observations_evidence_time_idx");
   const capture = openCaptureStore({ databasePath, enrollment });
   await capture.close();
-  assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 8);
+  assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 9);
   assert.deepEqual(storedState(db), before);
 });
 
@@ -225,7 +225,7 @@ test("concurrent writers upgrade populated v5 once", async t => {
   for (const result of results) assert.equal(result.code, 0, result.stderr);
   const db = new DatabaseSync(databasePath, { readOnly: true });
   try {
-    assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 8);
+    assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 9);
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM resource_events").get()?.n, 1);
     assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
   } finally { db.close(); }

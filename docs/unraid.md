@@ -222,6 +222,14 @@ Monitor appdata and Docker storage. Review exact ownership before manual retenti
 
 The image sets `SQLITE_TMPDIR=/data` so SQLite can create temporary files with a read-only container root. The data mount remains the writable location for migrations and large queries.
 
+## Upgrade order for new evidence
+
+Deploy the aggregate before you update relays and agent integrations.
+Skill script executions need protocol version 5. A relay holds executions as pending while the aggregate does not advertise version 5, and it continues to deliver other entries.
+`hotplate relay --status` and `hotplate setup --status` report held entries as `heldCount`. The relay delivers them within 60 seconds after the upgraded aggregate starts, or at its next restart.
+A relay never sends a protocol version above the one its own release supports, even when the aggregate advertises a newer version.
+After you upgrade clients, restart every long-running relay. A relay process from before the upgrade stops at the first version-5 entry. The `hotplate-relay.service` user service restarts automatically after that failure. A managed Pi connection needs a reconnect with `/hotplate connect`.
+
 ## Failure and manual recovery
 
 CAUTION: Do not delete the journal to bypass a refusal. A candidate can already have written new observations.

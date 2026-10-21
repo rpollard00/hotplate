@@ -67,8 +67,8 @@ Tool capture qualifies paths against selected resource roots. It includes suppor
 Relative paths require a working directory established by the host's tool contract. The host project directory is used only when that contract defines it as the tool's default.
 Missing model and run attribution stays unknown.
 
-Confirmed reads, inferred reads, attempts, and native invocations retain separate counts.
-Inferred reads and attempts do not increase confirmed reads or legacy read-based skill shares.
+Confirmed reads, inferred reads, attempts, executions, and native invocations retain separate counts.
+Inferred reads, attempts, and executions do not increase confirmed reads or legacy read-based skill shares.
 Codex and Claude Bash output text cannot establish success. Hotplate does not inspect that text to guess an outcome.
 
 New Pi observations identify their host. Existing untagged data remains `unknown`, because library-created rows cannot reliably be identified as Pi. The dashboard's Agent host filter separates integrations, including OpenCode majors.
@@ -93,7 +93,7 @@ Shell capture statically parses a command and recognizes these readers:
 | `python -c 'expression'` or `python3 -c 'expression'` | Whole file from the supported Python forms |
 
 `N` and `M` must be positive integers, with `M` no smaller than `N`.
-`sed` accepts one file. A reader without file operands reads `< path` as its target. Other flags and executable paths remain unsupported.
+`sed` accepts one file. A reader without file operands reads `< path` as its target. Other reader flags remain unsupported.
 Readers can appear in any pipeline stage and in lists joined by `&&`, `||`, `;`, or newlines.
 `#` comments, leading `NAME=value` prefix assignments, unquoted `~` and `~/...`, and `$HOME` or `${HOME}` are supported.
 Literal quoting and escaped spaces are supported.
@@ -127,7 +127,8 @@ A function definition emits nothing and makes the directory unknown.
 Unterminated quotes, substitutions or heredocs, control characters, nesting deeper than 32 levels, and the size limits make the whole command opaque.
 
 Assignment-only steps (`S=/x/skills`, `export S=/x/skills`) define variables for later steps. Values expand `~`, `$HOME`, and known variables. An opaque value makes the variable unknown.
-Only assignments reached by `;`, a newline, or the start define a variable. Assignments after `&&` or `||`, prefix assignments, and assignments inside multi-command pipelines do not.
+An assignment holds for the later steps of its `&&` chain. A later `||` makes the variable unknown. After `;` or a newline, the variable remains only when the assignment was unconditional. `export` follows the same rule.
+Assignments reached through `||`, prefix assignments, and assignments inside multi-command pipelines define no variable.
 `$NAME` and `${NAME}` expand known variables, unquoted or in double quotes. An unquoted value with whitespace or glob characters makes the word opaque.
 `${NAME:=...}`, `$((...))`, `$[...]`, `((...))`, `for ((...))`, array subscript assignments, and `[[ ... -eq ... ]]` make all variables unknown, also in assignment values and redirect targets.
 An assignment or `export` of `HOME`, `CDPATH`, `PWD`, `OLDPWD`, `GLOBIGNORE`, `FIGNORE`, `GLOBSORT`, `BASH_ENV`, `ENV`, `POSIXLY_CORRECT`, `SHELLOPTS` or `BASHOPTS`, and a persistent `IFS=` assignment, make the whole command opaque.
@@ -144,6 +145,26 @@ A `( ... )` subshell keeps the directory and variables. Other blocks make the di
 
 Heredoc bodies (`<<DELIM`, `<<-DELIM`, `<<'DELIM'`, `<<"DELIM"`) and herestrings (`<<<word`) are data. A reader whose stdin is a heredoc or herestring reads no file.
 `a |& b` is `a 2>&1 | b`.
+
+### Supported executions
+
+A shell step that runs a file produces an execution of that file. It produces no read of the file.
+Hotplate recognizes these forms:
+
+| Form | Executed file |
+| --- | --- |
+| A command word that contains `/`, such as `./scripts/x.sh`, `~/.claude/skills/x/scripts/log.sh`, or `$L` after `L=/path/log.sh` | The command word |
+| `bash`, `sh`, `zsh`, or `dash` `[-e -u -x -v ...] [--] path` | The first operand. `-c`, `-s`, `-n`, and other options produce no execution |
+| `python` or `python3` `[-I -u -B -E -s -S -O ...] path` | The first operand. `-c`, `-m`, and other options produce no execution |
+| `node path`, `tsx path`, `ruby path`, `perl path`, `deno run path`, `npx tsx path` | The first operand. Any option before it produces no execution |
+| `bun path`, `bun run path`, `uv run path` | The first operand when it contains `/` or ends in `.py`, `.js`, `.mjs`, `.cjs`, `.ts`, `.mts`, `.cts`, `.tsx`, or `.jsx`. `bun run build` and `uv run pytest` produce no execution |
+| `source path` or `. path` | The operand, when it contains `/` |
+
+Executions follow the same rules as reads: variables, `~`, globs, `for` loops, the tracked directory, `..` segments, and unknown directories.
+The reported tool outcome makes an execution `success` only when every connector is `&&` and the step is alone in its pipeline. Other executions have an `unknown` outcome.
+`source` and `.` are opaque steps after they record the execution. No later step emits, and coverage becomes opaque `unsupported-syntax`.
+An execution of a file outside every resource root, such as `/usr/local/bin/tool`, makes coverage opaque `unsupported-syntax`, because Hotplate cannot see what that program reads.
+A command that reads and runs the same file produces one read and one execution.
 
 The Python parser accepts these forms:
 
@@ -217,9 +238,12 @@ Capture has a bounded process deadline and reports failures without blocking the
 
 Upgrade the aggregate before enabling updated producers.
 New tool-read metadata, inferred reads, and tool coverage use protocol version 4.
-Existing version-1, version-2, and version-3 payloads, receipts, and canonical digests retain their interpretation.
-Schema version 7 adds storage for tool coverage.
-An incompatible receiver leaves new evidence in the delivery backlog until the receiver is upgraded.
+Executions use protocol version 5.
+Existing version-1 to version-4 payloads, receipts, and canonical digests retain their interpretation.
+Schema version 7 adds storage for tool coverage. Schema version 9 records the protocol version of each pending delivery and the version that the receiver last advertised.
+An authenticated `GET /api/ingest` returns `{"ok":true,"protocol":{"versions":[1,2,3,4,5]}}`. The relay requests it at start, every 60 seconds, and after a failed delivery.
+An older receiver answers `405`, and the relay then sends only payloads that need version 4 or lower.
+Executions stay pending as held entries until the receiver advertises version 5. Later lower-version entries continue to deliver. Relay status reports these entries as `heldCount`.
 
 Writer opens migrate existing databases. Back up databases before upgrading. The current read-only dashboard requires a writer migration before it can read an older database.
 
