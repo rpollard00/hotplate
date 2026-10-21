@@ -158,6 +158,7 @@ Upgrade the aggregate before enabling updated producers.
 New tool-read metadata, inferred reads, and tool coverage use protocol version 4.
 Schema version 7 adds storage for tool coverage.
 Existing version-1, version-2, and version-3 payloads and their canonical digests remain unchanged.
+Skill script executions use protocol version 5. The relay holds them while the receiver does not advertise version 5, and delivers other entries meanwhile.
 An older receiver cannot accept the new evidence. Pending deliveries remain in the backlog until a compatible receiver is available.
 
 Skills Explorer is not required for any of these operations. A future annotation importer can add its relationships without changing the capture or inventory contract.

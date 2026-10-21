@@ -88,6 +88,7 @@ function copyEvidence(evidence: Evidence): Evidence {
         case "attempt": return { ...base, mechanism: evidence.mechanism, access: evidence.access, outcome: evidence.outcome, ...metadata };
         case "inferred-read": return { ...base, mechanism: evidence.mechanism, access: evidence.access, outcome: evidence.outcome,
           toolRead: { ...copyToolRead(evidence.toolRead), kind: "literal-command" } };
+        case "execute": return { ...base, mechanism: evidence.mechanism, access: evidence.access, outcome: evidence.outcome };
         default: { const exhaustive: never = evidence; return exhaustive; }
       }
     }
@@ -127,9 +128,15 @@ function copyToolRead(metadata: ToolReadMetadata): ToolReadMetadata {
     revision: metadata.revision.kind === "unknown" ? { kind: "unknown" } : { kind: "known", value: metadata.revision.value } };
 }
 
-export function requiresToolProtocol4(evidence: Evidence): boolean {
-  return evidence.kind === "tool-coverage" || (evidence.kind === "resource-access"
-    && (evidence.access === "inferred-read" || evidence.toolRead !== undefined));
+export type ProtocolVersion = 1 | 2 | 3 | 4 | 5;
+export function evidenceProtocolVersion(evidence: Evidence): ProtocolVersion {
+  if (evidence.kind === "resource-access" && evidence.mechanism === "host-tool" && evidence.access === "execute") return 5;
+  if (evidence.kind === "tool-coverage" || (evidence.kind === "resource-access" && (evidence.access === "inferred-read" || evidence.toolRead !== undefined))) return 4;
+  return isResourceEvidence(evidence) ? 3 : 1;
+}
+export function observationProtocolVersion(observation: Observation): ProtocolVersion {
+  const version = evidenceProtocolVersion(observation.evidence);
+  return version === 1 && observation.host !== undefined ? 2 : version;
 }
 
 function copyResource(resource: ResourceLocation): ResourceLocation {
@@ -189,7 +196,8 @@ export function isResourceEvidence(value: unknown): value is ResourceEvidence {
         && ((value.mechanism === "fanotify" && (value.access === "open" || value.access === "access") && value.outcome === "unknown" && value.toolRead === undefined)
           || (value.mechanism === "host-tool" && ((value.access === "attempt" && value.outcome === "unknown")
             || (value.access === "read" && (value.outcome === "success" || value.outcome === "error"))
-            || (value.access === "inferred-read" && value.outcome === "success" && isToolReadMetadata(value.toolRead) && value.toolRead.kind === "literal-command"))
+            || (value.access === "inferred-read" && value.outcome === "success" && isToolReadMetadata(value.toolRead) && value.toolRead.kind === "literal-command")
+            || (value.access === "execute" && (value.outcome === "success" || value.outcome === "unknown") && value.toolRead === undefined))
             && (value.toolRead === undefined || (isToolReadMetadata(value.toolRead)
               && (value.access !== "read" || value.toolRead.kind === "structured-read")
               && (value.outcome === "success" || value.toolRead.delivery.kind === "unknown")))))

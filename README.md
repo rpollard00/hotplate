@@ -331,7 +331,7 @@ node /path/to/hotplate/dist/src/cli.js relay --config /private/account/hotplate.
 ```
 
 Status is JSON on stdout. The `kind` is `missing`, `not-enrolled`, or `ready`.
-A ready status includes `delivery.pendingCount`, `pendingBytes`, `oldestPendingAt`, and `blockedCount`.
+A ready status includes `delivery.pendingCount`, `pendingBytes`, `oldestPendingAt`, `blockedCount`, and `heldCount`. Held entries wait for a receiver that advertises their protocol version.
 Pending totals include blocked entries. Bytes measure retained serialized payloads, not database size or SQLite overhead.
 The oldest time is the local outbox capture time. Status does not read the token file or send requests.
 

@@ -73,7 +73,7 @@ test("v1 readers require an upgrade without mutation; writer migration preserves
     assert.equal((await store.querySkillTable({})).rows[0]?.machineId, LOCAL_MACHINE_ID);
     await store.close();
     db = new DatabaseSync(databasePath);
-    assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 8);
+    assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 9);
     assert.deepEqual({ ...db.prepare("SELECT machine_id, source_id, digest FROM observations").get() }, { machine_id: LOCAL_MACHINE_ID, source_id: LOCAL_SOURCE_ID, digest: null });
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM delivery_outbox").get()?.n, 0);
     db.close();
@@ -194,7 +194,7 @@ test("capture and full allowlisted catalog delivery commit atomically, and dupli
     const extra = { ...base, prompt: "secret", scope: { ...base.scope, text: "secret" } };
     assert.deepEqual(await capture.record(extra), { accepted: 1, duplicate: 0, dropped: 0 });
     const outbox = relay(databasePath);
-    const candidates = await outbox.selectPending({ maxCount: 100, maxPayloadBytes: 1024 * 1024 });
+    const candidates = await outbox.selectPending({ maxCount: 100, maxPayloadBytes: 1024 * 1024, maxVersion: 5 });
     assert.deepEqual(candidates, [{ kind: "ready", observation: base, payloadBytes: Buffer.byteLength(serializeObservation(base)) }]);
     assert.equal((await capture.queryOverview({})).catalogSkillCount, 2);
     await outbox.settle({ settlement: { kind: "committed", observationIds: [base.id] } });
@@ -214,7 +214,7 @@ test("outbox bounds payload reads, retains oversized entries and settles exact I
     const first = relay(databasePath);
     const second = relay(databasePath);
     const size = Buffer.byteLength(serializeObservation(small));
-    const selected = await first.selectPending({ maxCount: 100, maxPayloadBytes: size });
+    const selected = await first.selectPending({ maxCount: 100, maxPayloadBytes: size, maxVersion: 5 });
     assert.equal(selected.length, 2);
     assert.deepEqual(selected[0], { kind: "oversized", observationId: huge.id, payloadBytes: Buffer.byteLength(serializeObservation(huge)) });
     assert.equal(selected[1]?.kind, "ready");
@@ -228,7 +228,7 @@ test("outbox bounds payload reads, retains oversized entries and settles exact I
     assert.equal(status.blockedCount, 1);
     assert.equal(status.pendingBytes, Buffer.byteLength(serializeObservation(huge)) + size);
     assert.ok(status.oldestPendingAt);
-    const remaining = await second.selectPending({ maxCount: 100, maxPayloadBytes: 1024 * 1024 });
+    const remaining = await second.selectPending({ maxCount: 100, maxPayloadBytes: 1024 * 1024, maxVersion: 5 });
     assert.equal(remaining.length, 1);
     assert.equal(remaining[0]?.kind === "ready" && remaining[0].observation.id, "obs-3");
     const signal = AbortSignal.abort();

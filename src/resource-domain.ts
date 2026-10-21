@@ -37,6 +37,7 @@ export type ResourceAccessEvidence = ResourceAccessIdentity & (
     | { access: "read"; outcome: "success" | "error"; toolRead?: ToolReadMetadata & { kind: "structured-read" } }
     | { access: "attempt"; outcome: "unknown"; toolRead?: ToolReadMetadata }
     | { access: "inferred-read"; outcome: "success"; toolRead: ToolReadMetadata & { kind: "literal-command" } }
+    | { access: "execute"; outcome: "success" | "unknown"; toolRead?: never }
   ))
 );
 export type ToolCoverageEvidence = {
@@ -96,6 +97,7 @@ export type ResourceRow = {
   successfulReadCount: number;
   inferredReadCount: number;
   failedReadCount: number;
+  executeCount: number;
   openCount: number;
   accessCount: number;
   attributedAccessCount: number;

@@ -119,7 +119,7 @@ test("inventory variants retain the last member in a batch even when that varian
     await store.record([batch("earlier", [two], 0), batch("latest", [one, two], 1)]);
     const rows = (await store.queryResources({})).rows;
     assert.equal(rows.length, 1); assert.equal(rows[0]?.resource.observedPath, two.observedPath);
-    assert.deepEqual(Object.keys(rows[0] ?? {}).sort(), ["resourceId", "machineId", "sourceId", "resource", "rootPaths", "presence", "firstInventoriedAt", "lastInventoriedAt", "lastAccessAt", "attemptCount", "successfulReadCount", "inferredReadCount", "failedReadCount", "openCount", "accessCount", "attributedAccessCount", "unattributedAccessCount", "nonAgentAccessCount", "observation", "coverageFrom", "coverageTo"].sort());
+    assert.deepEqual(Object.keys(rows[0] ?? {}).sort(), ["resourceId", "machineId", "sourceId", "resource", "rootPaths", "presence", "firstInventoriedAt", "lastInventoriedAt", "lastAccessAt", "attemptCount", "successfulReadCount", "inferredReadCount", "failedReadCount", "executeCount", "openCount", "accessCount", "attributedAccessCount", "unattributedAccessCount", "nonAgentAccessCount", "observation", "coverageFrom", "coverageTo"].sort());
   } finally { await store.close(); }
 });
 
@@ -151,7 +151,7 @@ test("v7 backfill is atomic, preserves raw history/outbox/receipts and matches o
   assert.deepEqual(raw(), before);
   const upgraded = openCaptureStore({ databasePath, enrollment });
   try {
-    assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 8);
+    assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 9);
     assert.deepEqual(raw(), before); assert.deepEqual(await upgraded.queryResources({}), resources); assert.deepEqual(await upgraded.queryContentAnalytics(query), content);
     assert.deepEqual(await upgraded.record(first), { accepted: 0, duplicate: 1, dropped: 0 });
     assert.equal(db.prepare("SELECT SUM(fact_count) AS n FROM filesystem_access_buckets").get()?.n, 1);

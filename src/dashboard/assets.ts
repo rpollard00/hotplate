@@ -73,7 +73,7 @@ export const dashboardHtml = `<!doctype html>
             <p id="resource-scroll-hint" class="resource-scroll-hint footnote">Scroll horizontally for access counts and attribution.</p>
             <div id="resource-table" class="table-wrap" tabindex="0" role="region" aria-label="Resource access evidence"></div>
             <div id="resource-pagination"></div>
-            <p id="resource-evidence-note" class="footnote">This inventory includes filesystem diagnostics. Confirmed reads have native read results. Inferred reads come from recognized commands. Observed access can include catalog polling.</p>
+            <p id="resource-evidence-note" class="footnote">This inventory includes filesystem diagnostics. Confirmed reads have native read results. Inferred reads come from recognized commands. Executions record commands that ran a file under a skill root. Observed access can include catalog polling.</p>
           </section>
         </section>
         <section id="paths-workspace" aria-labelledby="paths-heading" hidden>
@@ -94,7 +94,8 @@ export const dashboardHtml = `<!doctype html>
       <p>Each path represents one recorded run. A session can contain multiple runs. Order within a read group is unknown.</p>
       <p>Capture gaps represent lost records. Filtered gaps represent records hidden by filters.</p>
       <p>Agent comparisons use evidence from Hotplate integrations. Each integration records different evidence. For example, the Codex integration records read attempts with no known outcome.</p>
-      <p>Tool activity counts confirmed reads, inferred reads, read attempts, read failures, and native invocations from enabled agent integrations.</p>
+      <p>Tool activity counts confirmed reads, inferred reads, read attempts, read failures, executions, and native invocations from enabled agent integrations.</p>
+      <p>An execution records a recognized command that ran a file under a skill root, such as a bundled script. An execution is not a read, and it does not establish that the agent used the output.</p>
       <p>Inferred reads come from recognized literal commands with successful tool outcomes. A file read does not establish which instructions the agent followed.</p>
       <p>All recorded activity includes filesystem observers, requests, and wrappers. Filesystem activity can include catalog polling.</p>
       <p>Resource inventory records files found in skill directories. Files without observed tool access are not known to be unused. Filesystem covered dates do not establish complete tool coverage.</p>
@@ -1054,7 +1055,7 @@ function mountTimeBrush(plot, activity, readout, onChange, onReadout) {
     selected = next; paint(selected); publish();
   };
 }
-const metricUnit = () => ({ successfulReads: 'read', inferredReads: 'inferred read', toolActivity: 'tool record', activity: 'record', fsOpens: 'filesystem open', fsAccesses: 'filesystem access' })[presentation().measure] || measureLabels[presentation().measure].toLowerCase().replace(/s$/, '');
+const metricUnit = () => ({ successfulReads: 'read', inferredReads: 'inferred read', executions: 'execution', toolActivity: 'tool record', activity: 'record', fsOpens: 'filesystem open', fsAccesses: 'filesystem access' })[presentation().measure] || measureLabels[presentation().measure].toLowerCase().replace(/s$/, '');
 const metricCount = value => count(value, metricUnit(), presentation().measure === 'fsAccesses' ? 'filesystem accesses' : undefined);
 const measureLabels = { failedReads: 'Read failures', uses: 'Skill uses', invocations: 'Native invocations', invocationFailures: 'Invocation failures', readAttempts: 'Read attempts', requests: 'Requests', wrappers: 'Wrappers', ...Object.fromEntries(Object.entries(contentMeasures).map(([key, value]) => [key, value.label])), get successfulReads() { return isContentView() ? contentMeasures.successfulReads.label : 'Successful reads'; } };
 const contentMode = () => $('metric-content').value;
@@ -1154,9 +1155,10 @@ function contentMetricView(report) {
 function renderContentMetrics(redraw = true) {
   const report = contentReport(); state.metricView = contentMetricView(report);
   const p = presentation(); document.querySelector('.overview-grid').classList.toggle('matrix-layout', p.split !== 'skill');
-  $('metric-explanation').textContent = p.measure === 'toolActivity' ? 'Agent tool reads, attempts, failures, and native invocations. Repeated operations count separately.'
+  $('metric-explanation').textContent = p.measure === 'toolActivity' ? 'Agent tool reads, attempts, failures, executions, and native invocations. Repeated operations count separately.'
     : p.measure === 'activity' ? 'All recorded evidence, including filesystem activity, requests, and wrappers. Catalog polling can appear here.'
     : p.measure === 'readAttempts' ? 'Unconfirmed tool read attempts. The outcome is unknown.'
+    : p.measure === 'executions' ? 'Recognized commands that ran a file under a skill root. An execution is not a read of the file.'
     : p.measure === 'fsOpens' || p.measure === 'fsAccesses' ? 'Filesystem observations. Repeated events count separately.'
     : p.measure === 'successfulReads' ? 'Successful native read results. Returned portions can be unknown.'
     : p.measure === 'inferredReads' ? 'Recognized literal read commands with successful tool outcomes. Returned portions can be unknown.' : measureLabels[p.measure] + ' in the selected content.';
@@ -2070,7 +2072,7 @@ function renderResources() {
     $('resource-pagination').replaceChildren();
     return;
   }
-  const listing = table(['File', 'Observation', 'Confirmed', 'Inferred', 'Failures', 'Attempts', 'Opens', 'Accesses', 'Attribution', 'Last access'], 'Inventory and access evidence');
+  const listing = table(['File', 'Observation', 'Confirmed', 'Inferred', 'Failures', 'Attempts', 'Executions', 'Opens', 'Accesses', 'Attribution', 'Last access'], 'Inventory and access evidence');
   listing.className = 'resource-table';
   for (const row of pageItems(rows, 'resources', 25)) {
     const item = node('tr'); item.dataset.resourceId = row.resourceId; item.dataset.observation = row.observation;
@@ -2085,7 +2087,7 @@ function renderResources() {
     if (row.observation === 'not-observed') status.append(node('span', 'Covered ' + date(row.coverageFrom, true) + ' to ' + date(row.coverageTo, true) + ' UTC', 'resource-meta'));
     else if (row.observation === 'unknown') status.append(node('span', row.unattributedAccessCount ? 'Access could not be assigned to this scope.' : 'Availability or observation coverage is incomplete.', 'resource-meta'));
     item.append(status);
-    for (const value of [row.successfulReadCount, row.inferredReadCount, row.failedReadCount, row.attemptCount, row.openCount, row.accessCount]) item.append(node('td', number(value)));
+    for (const value of [row.successfulReadCount, row.inferredReadCount, row.failedReadCount, row.attemptCount, row.executeCount, row.openCount, row.accessCount]) item.append(node('td', number(value)));
     const attribution = node('td');
     for (const [label, value] of [['Agent', row.attributedAccessCount], ['Unknown', row.unattributedAccessCount], ['Non-agent', row.nonAgentAccessCount]]) attribution.append(node('span', label + ': ' + number(value), 'resource-meta'));
     const lastAccess = node('td'); lastAccess.append(node('span', row.lastAccessAt ? date(row.lastAccessAt, true) + ' UTC' : 'None observed', 'resource-meta'));

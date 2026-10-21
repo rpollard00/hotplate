@@ -65,7 +65,7 @@ test("native shell adapters preserve targets, outcome strength, ranges, and opaq
         assert.equal(resources.length, 0, host);
         const coverage = parsed[0]?.evidence;
         assert.equal(coverage?.kind, "tool-coverage");
-        if (coverage?.kind === "tool-coverage") assert.deepEqual(coverage.recognition, { kind: "opaque", reason: "unsupported-syntax" });
+        if (coverage?.kind === "tool-coverage") assert.deepEqual(coverage.recognition, { kind: "opaque", reason: host === "codex" ? "missing-input" : "unsupported-syntax" });
       }
       for (const fact of parsed) {
         assert.equal((await captureFact({ fact, env: data.env })).kind, "recorded");

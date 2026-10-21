@@ -3,6 +3,7 @@ import type { CaptureFact } from "../capture.js";
 import type { ModelRef, NativeHostId, SkillRef } from "../domain.js";
 import type { ReadPortion, ResourceLocation } from "../resource-domain.js";
 import { qualifyResource, type ResourceRoot } from "../resource-paths.js";
+import { shellGlob } from "../shell-glob.js";
 import { captureToolReads, type ReadTool, type ToolOutcome } from "../tool-reads.js";
 
 export function object(value: unknown): Record<string, unknown> | null {
@@ -35,7 +36,7 @@ export function exitOutcome(exitCode: unknown): ToolOutcome {
 
 export function toolReadFacts(context: Omit<CaptureFact, "evidence">, tool: ReadTool, roots: readonly ResourceRoot[], model: ModelRef = null): CaptureFact[] {
   return captureToolReads({ operationId: context.occurrenceId, tool, context: {
-    cwd: context.scope.projectCwd, roots, model, process: null,
+    cwd: context.scope.projectCwd, roots, model, process: null, glob: shellGlob,
     attribution: context.sessionId === null ? "harness" : "session",
   } }).map((evidence) => ({ ...context, evidence }));
 }

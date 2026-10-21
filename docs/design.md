@@ -91,7 +91,7 @@ Authentication failures stop delivery with a redacted diagnostic. Configuration 
 
 Permanent rejections trigger bounded binary subdivision. Successful siblings settle independently.
 Invalid, conflicting, and oversized singletons remain blocked in the account database. Catalog snapshots are never fragmented.
-The backlog has no eviction or capacity limit. Status reports pending count, payload bytes, oldest capture time, and blocked count.
+The backlog has no eviction or capacity limit. Status reports pending count, payload bytes, oldest capture time, blocked count, and held count. Held entries need a protocol version that the receiver has not advertised.
 
 ## Catalog and query scope
 

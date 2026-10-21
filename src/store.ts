@@ -1,8 +1,9 @@
-import type { TokenDigest } from "./network-protocol.js";
+import { BASELINE_PROTOCOL_VERSION, type TokenDigest } from "./network-protocol.js";
 import { createHash } from "node:crypto";
 import {
   isObservation, isInputSource, isGapReason, LOCAL_IDENTITY, LOCAL_SOURCE_ID,
-  parseHostId, parseMachineId, parseSourceId, parseObservation, serializeObservation, validateEnrollment, validateNetworkIdentity,
+  observationProtocolVersion, parseHostId, parseMachineId, parseSourceId, parseObservation, serializeObservation, validateEnrollment, validateNetworkIdentity,
+  type ProtocolVersion,
 } from "./observation.js";
 import { existsSync, chmodSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -42,7 +43,7 @@ import type {
   SkillTableView,
 } from "./domain.js";
 
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 9;
 export const MAX_DYNAMIC_SOURCES = 10_000;
 export const ENROLLMENTS_PER_MINUTE = 30;
 const DEFAULT_BUSY_TIMEOUT_MS = 25;
@@ -581,8 +582,8 @@ class SqliteHotplateStore implements HotplateStore {
       accepted += 1;
       if (this.#enrollment) {
         const payload = serializeObservation(observation);
-        this.#db.prepare(`INSERT INTO delivery_outbox (source_id, observation_id, payload, payload_bytes, captured_at)
-          VALUES (?, ?, ?, ?, ?)`).run(this.#enrollment.sourceId, observation.id, payload, Buffer.byteLength(payload), new Date().toISOString());
+        this.#db.prepare(`INSERT INTO delivery_outbox (source_id, observation_id, payload, payload_bytes, captured_at, protocol_version)
+          VALUES (?, ?, ?, ?, ?, ?)`).run(this.#enrollment.sourceId, observation.id, payload, Buffer.byteLength(payload), new Date().toISOString(), observationProtocolVersion(observation));
       }
     }
     this.#db.exec("COMMIT");
@@ -677,9 +678,10 @@ export type DeliveryBlockReason = "oversized" | "invalid" | "conflict";
 export type DeliverySettlement =
   | { kind: "committed"; observationIds: readonly Observation["id"][] }
   | { kind: "blocked"; observationIds: readonly Observation["id"][]; reason: DeliveryBlockReason };
-export type DeliveryStatus = { pendingCount: number; pendingBytes: number; oldestPendingAt: string | null; blockedCount: number };
+export type DeliveryStatus = { pendingCount: number; pendingBytes: number; oldestPendingAt: string | null; blockedCount: number; heldCount: number };
 export interface RelayStore {
-  selectPending(args: { maxCount: number; maxPayloadBytes: number }): Promise<readonly DeliveryCandidate[]>;
+  selectPending(args: { maxCount: number; maxPayloadBytes: number; maxVersion: ProtocolVersion }): Promise<readonly DeliveryCandidate[]>;
+  recordReceiverVersion(version: ProtocolVersion): Promise<void>;
   settle(args: { settlement: DeliverySettlement; signal?: AbortSignal }): Promise<void>;
   queryStatus(): Promise<DeliveryStatus>;
   close(): Promise<void>;
@@ -705,7 +707,7 @@ class SqliteRelayStore implements RelayStore {
   #closed = false;
   constructor(readonly db: DatabaseSync, readonly sourceId: SourceId) {}
 
-  async selectPending(args: { maxCount: number; maxPayloadBytes: number }): Promise<readonly DeliveryCandidate[]> {
+  async selectPending(args: { maxCount: number; maxPayloadBytes: number; maxVersion: ProtocolVersion }): Promise<readonly DeliveryCandidate[]> {
     assertOpen(this.#closed);
     if (!Number.isSafeInteger(args.maxCount) || args.maxCount <= 0 || !Number.isSafeInteger(args.maxPayloadBytes) || args.maxPayloadBytes <= 0) {
       throw new Error("Delivery selection limits must be positive safe integers");
@@ -713,7 +715,7 @@ class SqliteRelayStore implements RelayStore {
     const result: DeliveryCandidate[] = [];
     let bytes = 0;
     const rows = this.db.prepare(`SELECT observation_id, payload_bytes FROM delivery_outbox
-      WHERE source_id = ? AND blocked_reason IS NULL ORDER BY captured_at, observation_id LIMIT ?`).all(this.sourceId, args.maxCount);
+      WHERE source_id = ? AND blocked_reason IS NULL AND protocol_version <= ? ORDER BY captured_at, observation_id LIMIT ?`).all(this.sourceId, args.maxVersion, args.maxCount);
     for (const row of rows) {
       const observationId = requireString(row.observation_id, "observation_id");
       const payloadBytes = numberValue(row.payload_bytes);
@@ -745,11 +747,21 @@ class SqliteRelayStore implements RelayStore {
     }, args.signal);
   }
 
+  async recordReceiverVersion(version: ProtocolVersion): Promise<void> {
+    await retryTransaction(this.db, () => {
+      assertOpen(this.#closed);
+      this.db.prepare("UPDATE database_state SET receiver_protocol_version = ? WHERE singleton = 1").run(version);
+    });
+  }
+
   async queryStatus(): Promise<DeliveryStatus> {
     assertOpen(this.#closed);
     const row = this.db.prepare(`SELECT COUNT(*) AS pending, COALESCE(SUM(payload_bytes), 0) AS bytes,
-      MIN(captured_at) AS oldest, COUNT(blocked_reason) AS blocked FROM delivery_outbox WHERE source_id = ?`).get(this.sourceId);
-    return { pendingCount: numberValue(row?.pending), pendingBytes: numberValue(row?.bytes), oldestPendingAt: nullableString(row?.oldest), blockedCount: numberValue(row?.blocked) };
+      MIN(captured_at) AS oldest, COUNT(blocked_reason) AS blocked,
+      COUNT(*) FILTER (WHERE blocked_reason IS NULL AND protocol_version > (SELECT COALESCE(receiver_protocol_version, ?) FROM database_state WHERE singleton = 1)) AS held
+      FROM delivery_outbox WHERE source_id = ?`).get(BASELINE_PROTOCOL_VERSION, this.sourceId);
+    return { pendingCount: numberValue(row?.pending), pendingBytes: numberValue(row?.bytes), oldestPendingAt: nullableString(row?.oldest),
+      blockedCount: numberValue(row?.blocked), heldCount: numberValue(row?.held) };
   }
 
   async close(): Promise<void> { if (!this.#closed) { this.#closed = true; this.db.close(); } }
@@ -1108,6 +1120,17 @@ function migrate(db: DatabaseSync, busyRetries: number): void {
       db.exec(`INSERT INTO resource_events SELECT * FROM resource_events_previous;
         DROP TABLE resource_events_previous; DROP TABLE observations_previous;`);
       for (const index of indexes) db.exec(index);
+    }
+    if (version < 9) {
+      const columns = (table: string) => new Set(db.prepare(`PRAGMA table_info(${table})`).all().map(row => row.name));
+      if (!columns("delivery_outbox").has("protocol_version")) db.exec("ALTER TABLE delivery_outbox ADD COLUMN protocol_version INTEGER NOT NULL DEFAULT 1 CHECK(protocol_version BETWEEN 1 AND 5)");
+      if (!columns("database_state").has("receiver_protocol_version")) {
+        db.exec("ALTER TABLE database_state ADD COLUMN receiver_protocol_version INTEGER CHECK(receiver_protocol_version IS NULL OR receiver_protocol_version BETWEEN 1 AND 5)");
+      }
+      const update = db.prepare("UPDATE delivery_outbox SET protocol_version = ? WHERE source_id = ? AND observation_id = ?");
+      for (const row of db.prepare("SELECT source_id, observation_id, payload FROM delivery_outbox").all()) {
+        update.run(observationProtocolVersion(parseObservation(JSON.parse(requireString(row.payload, "payload")))), requireString(row.source_id, "source_id"), requireString(row.observation_id, "observation_id"));
+      }
     }
     db.exec(`CREATE INDEX IF NOT EXISTS observations_sequence_lookup_idx ON observations(machine_id, source_id, producer_id, sequence);
       CREATE INDEX IF NOT EXISTS observations_evidence_time_idx ON observations(evidence_kind, observed_at);`);

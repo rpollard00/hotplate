@@ -13,6 +13,7 @@ import { inventoryResources } from "../resource-inventory.js";
 import { registerHarnessProcess, unregisterHarnessProcess, type ProcessRegistration } from "../process-attribution.js";
 import { normalizePiTool } from "../integrations/pi.js";
 import { captureToolReads, toolObservationIdentity } from "../tool-reads.js";
+import { shellGlob } from "../shell-glob.js";
 
 const MAX_QUEUE = 1_000;
 const SHUTDOWN_DEADLINE_MS = 500;
@@ -154,7 +155,7 @@ export class HotplateCollector {
       const parent = "parentToolCallId" in event && typeof event.parentToolCallId === "string" ? event.parentToolCallId : null;
       const model = this.#toolCallModels.get(event.toolCallId) ?? (parent ? this.#toolCallModels.get(parent) : null) ?? null;
       const evidence = captureToolReads({ operationId: event.toolCallId, tool, context: {
-        cwd: ctx.cwd, roots: this.#roots, model, process: this.#registration?.process ?? null,
+        cwd: ctx.cwd, roots: this.#roots, model, process: this.#registration?.process ?? null, glob: shellGlob,
         attribution: this.#scope.sessionId === null ? "harness" : "session",
       } });
       if (tool.kind === "file") {

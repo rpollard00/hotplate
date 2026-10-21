@@ -5,6 +5,7 @@ import { connect, createServer as createTcpServer } from "node:net";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { test, type TestContext } from "node:test";
 import { startAggregationServer } from "../src/aggregation.js";
@@ -232,7 +233,7 @@ test("aggregate enforces exact authority and canonical Origin without trusting p
 test("ingest rejects malformed metadata, unknown fields, unsafe counters, timestamps, strings and catalogs", async t => {
   const f = await fixture(t);
   const obs = observation();
-  const invalid = ["not json", envelope([]), JSON.stringify({ version: 5, sourceId, observations: [obs] }), envelope([obs, obs]),
+  const invalid = ["not json", envelope([]), JSON.stringify({ version: 6, sourceId, observations: [obs] }), envelope([obs, obs]),
     envelope([{ ...obs, prompt: "private raw prompt" }]), envelope([{ ...obs, scope: { ...obs.scope, text: "private" } }]),
     envelope([{ ...obs, evidence: { ...obs.evidence, output: "private" } }]), envelope([{ ...obs, sequence: -1 }]),
     envelope([{ ...obs, sequence: Number.MAX_SAFE_INTEGER + 1 }]), envelope([{ ...obs, observedAt: "yesterday" }]),
@@ -522,5 +523,93 @@ test("relay request deadline and aggregate header deadline stop unresponsive pee
   await Promise.all([headerClosed, waitFor(async () => requests >= 2, 13_000)]);
   assert.match(response, /408 Request Timeout/);
   await running.stop();
+  assert.equal(await pending(f.account), 1);
+});
+
+function execution(id: string): Observation {
+  const path = "/skills/example/scripts/log.sh";
+  return { ...observation(id), host: "claude-code", evidence: { kind: "resource-access", operationId: id, mechanism: "host-tool", access: "execute", outcome: "success",
+    resource: { filesystemId: "filesystem", canonicalPath: path, observedPath: path, rootPath: "/skills", kind: "script", ownerSkillPath: "/skills/example/SKILL.md" },
+    model: null, process: null, attribution: "session" } };
+}
+function receiverProxy(port: number, receiver: { versions: number[] | null; sent: number[] }): Server {
+  return createServer((downstream, response) => {
+    const chunks: Buffer[] = [];
+    downstream.on("data", chunk => chunks.push(chunk));
+    downstream.on("end", () => {
+      const body = Buffer.concat(chunks);
+      if (downstream.method === "GET" && downstream.url === "/api/ingest") {
+        if (receiver.versions === null) response.writeHead(405, { allow: "POST" }).end();
+        else response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, protocol: { versions: receiver.versions } }));
+        return;
+      }
+      if (downstream.method === "POST") {
+        const version = Number(JSON.parse(body.toString()).version);
+        receiver.sent.push(version);
+        if (version > Math.max(...receiver.versions ?? [4])) { response.writeHead(400, { "content-type": "application/json" }).end('{"error":"invalid-envelope"}'); return; }
+      }
+      const upstream = request({ hostname: "127.0.0.1", port, path: downstream.url, method: downstream.method, headers: downstream.headers, agent: false }, received => {
+        response.writeHead(received.statusCode ?? 500, received.headers);
+        received.pipe(response);
+      });
+      upstream.on("error", () => response.destroy());
+      upstream.end(body);
+    });
+  });
+}
+async function delivery(account: AccountConfiguration) {
+  const status = await readRelayStatus({ configuration: account });
+  assert.ok(status.kind === "ready");
+  return status.delivery;
+}
+
+test("aggregate advertises accepted protocol versions to authenticated relays only", async t => {
+  const f = await fixture(t);
+  const advertised = await http({ url: `${f.origin}/api/ingest`, headers: { authorization: bearer } });
+  assert.equal(advertised.status, 200);
+  assert.deepEqual(JSON.parse(advertised.body), { ok: true, protocol: { versions: [1, 2, 3, 4, 5] } });
+  assert.equal((await http({ url: `${f.origin}/api/ingest` })).status, 401);
+  assert.equal((await http({ url: `${f.origin}/api/ingest`, method: "PUT", headers: { authorization: bearer } })).headers.allow, "GET, POST");
+});
+
+test("relay holds version five rows for an older receiver, keeps later rows flowing, and delivers after upgrade", async t => {
+  const f = await fixture(t, true);
+  const receiver: { versions: number[] | null; sent: number[] } = { versions: null, sent: [] };
+  const proxy = receiverProxy(f.port, receiver);
+  await listen(proxy, f.publicPort); t.after(() => close(proxy));
+  await capture(f.account, [execution("exec-1")]);
+  await delay(5);
+  await capture(f.account, [observation("obs-2"), { ...observation("obs-3"), host: "claude-code" }]);
+  const before = await delivery(f.account);
+  assert.deepEqual([before.pendingCount, before.heldCount, before.blockedCount], [3, 1, 0]);
+  const legacy = relay(t, f.account);
+  await waitFor(async () => await count(f.aggregate.databasePath) === 2);
+  await delay(100);
+  await legacy.stop();
+  assert.deepEqual(receiver.sent.filter(version => version >= 5), [], "held rows are never offered to an older receiver");
+  const held = await delivery(f.account);
+  assert.deepEqual([held.pendingCount, held.heldCount, held.blockedCount], [1, 1, 0]);
+  receiver.versions = [1, 2, 3, 4, 5, 6];
+  const upgraded = relay(t, f.account);
+  await waitFor(async () => await pending(f.account) === 0);
+  await upgraded.stop();
+  assert.equal(await count(f.aggregate.databasePath), 3);
+  assert.deepEqual(await delivery(f.account), { pendingCount: 0, pendingBytes: 0, oldestPendingAt: null, blockedCount: 0, heldCount: 0 });
+  assert.ok(receiver.sent.includes(5));
+  assert.equal(Math.max(...receiver.sent), 5, "a newer receiver cannot raise the relay above its own protocol");
+  const db = new DatabaseSync(f.account.databasePath, { readOnly: true });
+  try { assert.equal(db.prepare("SELECT receiver_protocol_version AS value FROM database_state").get()?.value, 5); } finally { db.close(); }
+});
+
+test("relay pause names the envelope version the receiver refused", async t => {
+  const f = await fixture(t, true);
+  const refusing = createServer((downstream, response) => {
+    downstream.resume();
+    if (downstream.method === "GET") response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, protocol: { versions: [1, 2, 3, 4, 5] } }));
+    else response.writeHead(400, { "content-type": "application/json" }).end('{"error":"invalid-envelope"}');
+  });
+  await listen(refusing, f.publicPort); t.after(() => close(refusing));
+  await capture(f.account, [execution("exec-1")]);
+  await assert.rejects(runRelay({ configuration: f.account, signal: new AbortController().signal }), /Receiver refused protocol version 5\./);
   assert.equal(await pending(f.account), 1);
 });

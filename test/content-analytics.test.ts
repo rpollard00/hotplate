@@ -59,6 +59,7 @@ test("content measures conserve disjoint evidence and group support-only owners 
       fact("legacy", read()), fact("mirror", access(), 1),
       fact("failure", access("/skills/mako/references/error.md", { operationId: "failure", outcome: "error" }), 2),
       fact("attempt", access("/skills/mako/references/attempt.md", { operationId: "attempt", access: "attempt", outcome: "unknown", model: null }), 3),
+      fact("execute", access("/skills/mako/scripts/run.sh", { operationId: "execute", access: "execute", outcome: "success" }), 3),
       fact("open", access("/skills/mako/references/open.md", { operationId: "open", mechanism: "fanotify", access: "open", outcome: "unknown", model: null, attribution: "harness" }), 4),
       fact("access", access("/skills/mako/references/access.md", { operationId: "access", mechanism: "fanotify", access: "access", outcome: "unknown", model: null }), 5),
       fact("invoke", { kind: "skill-invocation", skill: { ...skill, canonicalPath: null }, toolCallId: "invoke", outcome: "success", model }),
@@ -68,11 +69,11 @@ test("content measures conserve disjoint evidence and group support-only owners 
       fact("support-only", access("/skills/other/references/support.md", { operationId: "support", resource: location("/skills/other/references/support.md", { ownerSkillPath: "/skills/other/SKILL.md" }) })),
       fact("inventory", { kind: "inventory-snapshot", scanId: "inventory", filesystemId: "mount-one", rootPath: "/skills", origin: "configured", scope: "account", phase: "batch", batchIndex: 0, resources: [location("/skills/inventory-only.md", { ownerSkillPath: null })], error: null }),
     ]);
-    const expected = { successfulReads: 2, inferredReads: 0, failedReads: 1, readAttempts: 1, fsOpens: 1, fsAccesses: 1, invocations: 1, invocationFailures: 1, requests: 1, wrappers: 1 };
+    const expected = { successfulReads: 2, inferredReads: 0, failedReads: 1, readAttempts: 1, executions: 1, fsOpens: 1, fsAccesses: 1, invocations: 1, invocationFailures: 1, requests: 1, wrappers: 1 };
     for (const measure of Object.keys(contentMeasures)) if (isContentMeasure(measure)) for (const split of ["item", "agent", "model", "agent-model"] as const) {
       const result = await store.queryContentAnalytics({ ...query, measure, split });
       assert.deepEqual(result.overall.counts, expected);
-      assert.equal(result.overall.count, measure === "activity" ? 10 : measure === "toolActivity" ? 6 : expected[measure]);
+      assert.equal(result.overall.count, measure === "activity" ? 11 : measure === "toolActivity" ? 7 : expected[measure]);
       conserved(result);
       const owner = result.selection.rows.find(row => row.identity.kind === "owner" && row.identity.location.canonicalPath === skill.canonicalPath);
       assert.ok(owner); assert.equal(owner.counts.fsOpens, 1); assert.equal(owner.counts.failedReads, 1);
@@ -82,7 +83,7 @@ test("content measures conserve disjoint evidence and group support-only owners 
     assert.ok(result.selection.rows.some(row => row.identity.kind === "owner" && row.label === "other" && row.count === 1));
     assert.equal((await store.queryOverview({})).successfulReadCount, 1);
     const resources = await store.queryContentAnalytics({ ...query, content: "resources", measure: "activity" });
-    assert.equal(resources.overall.count, 6); assert.ok(resources.selection.rows.every(row => row.identity.kind === "file" && row.children.length === 0));
+    assert.equal(resources.overall.count, 7); assert.ok(resources.selection.rows.every(row => row.identity.kind === "file" && row.children.length === 0));
     assert.equal(resources.overall.lastEvidenceAt, at(5));
   } finally { await store.close(); }
 });

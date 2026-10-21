@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Observation, SourceId } from "./domain.js";
-import { isResourceEvidence, requiresToolProtocol4, parseObservation, parseSourceId, serializeObservation, validateObservationMetadata } from "./observation.js";
+import { observationProtocolVersion, parseObservation, type ProtocolVersion, parseSourceId, serializeObservation, validateObservationMetadata } from "./observation.js";
 
 export const MAX_ENVELOPE_BYTES = 1024 * 1024;
 export const MAX_OBSERVATIONS = 100;
@@ -8,29 +8,54 @@ export const REQUEST_DEADLINE_MS = 10_000;
 const ENVELOPE_OVERHEAD_BYTES = 1024;
 export const MAX_PAYLOAD_BYTES = MAX_ENVELOPE_BYTES - ENVELOPE_OVERHEAD_BYTES;
 
+export const ACCEPTED_PROTOCOL_VERSIONS = [1, 2, 3, 4, 5] as const satisfies readonly ProtocolVersion[];
+export const BASELINE_PROTOCOL_VERSION: ProtocolVersion = 4;
+
+export function envelopeVersion(observations: readonly Observation[]): ProtocolVersion {
+  return observations.reduce<ProtocolVersion>((version, item) => {
+    const required = observationProtocolVersion(item);
+    return required > version ? required : version;
+  }, 1);
+}
+
 export function encodeEnvelope(sourceId: SourceId, observations: readonly Observation[]): string {
-  const version = observations.some(item => requiresToolProtocol4(item.evidence)) ? 4 : observations.some(item => isResourceEvidence(item.evidence)) ? 3 : observations.some(item => item.host !== undefined) ? 2 : 1;
-  return `{"version":${version},"sourceId":${JSON.stringify(sourceId)},"observations":[${observations.map(serializeObservation).join(",")}]}`;
+  return `{"version":${envelopeVersion(observations)},"sourceId":${JSON.stringify(sourceId)},"observations":[${observations.map(serializeObservation).join(",")}]}`;
 }
 
 export function parseEnvelope(value: unknown): { sourceId: SourceId; observations: readonly Observation[] } {
   const envelope = record(value);
   exactKeys(envelope, ["version", "sourceId", "observations"]);
-  if ((envelope.version !== 1 && envelope.version !== 2 && envelope.version !== 3 && envelope.version !== 4) || !Array.isArray(envelope.observations)
+  const version = ACCEPTED_PROTOCOL_VERSIONS.find(item => item === envelope.version);
+  if (version === undefined || !Array.isArray(envelope.observations)
     || envelope.observations.length < 1 || envelope.observations.length > MAX_OBSERVATIONS) throw new Error("Invalid envelope");
   const sourceId = parseSourceId(envelope.sourceId);
   const ids = new Set<string>();
   const observations = envelope.observations.map((raw: unknown) => {
     const parsed = parseObservation(raw);
     validateObservationMetadata(raw, parsed);
-    if (envelope.version === 1 && parsed.host !== undefined) throw new Error("Host metadata requires protocol version 2");
-    if (envelope.version !== 4 && requiresToolProtocol4(parsed.evidence)) throw new Error("Tool read metadata requires protocol version 4");
-    if (envelope.version !== 3 && envelope.version !== 4 && isResourceEvidence(parsed.evidence)) throw new Error("Resource metadata requires protocol version 3");
+    const required = observationProtocolVersion(parsed);
+    if (required > version) throw new Error(`Observation requires protocol version ${required}`);
     if (ids.has(parsed.id)) throw new Error("Repeated observation identity");
     ids.add(parsed.id);
     return parsed;
   });
   return { sourceId, observations };
+}
+
+export function protocolCapabilities(): { ok: true; protocol: { versions: readonly ProtocolVersion[] } } {
+  return { ok: true, protocol: { versions: ACCEPTED_PROTOCOL_VERSIONS } };
+}
+
+export function parseProtocolCapabilities(value: unknown): ProtocolVersion {
+  const input = record(value);
+  if (input.ok !== true) throw new Error("Invalid protocol capabilities");
+  if (input.protocol === undefined) return BASELINE_PROTOCOL_VERSION;
+  const versions = record(input.protocol).versions;
+  if (!Array.isArray(versions)) throw new Error("Invalid protocol capabilities");
+  const known = ACCEPTED_PROTOCOL_VERSIONS.filter(version => versions.includes(version));
+  const max = known.at(-1);
+  if (max === undefined) throw new Error("Invalid protocol capabilities");
+  return max;
 }
 
 export function committedAcknowledgment(args: {
