@@ -49,6 +49,12 @@ The physical skill entrypoint associated with a supporting file, identified by m
 **Inventory snapshot**:
 A metadata-only enumeration of files available in a root. A completed scan can establish presence or absence. An incomplete scan cannot establish absence. Session scope comes from host-advertised roots when available; conventional roots provide inferred scope. Roots learned from other sessions remain unassigned and establish global presence only.
 
+**Physical inventory membership**:
+An immutable set of full resource locations in one machine, account source, filesystem namespace, and root. Identical sets share membership across scan order, batch partitions, and sessions. Membership alone does not establish availability.
+
+**Inventory publication**:
+The scoped scan evidence that observes physical inventory membership. It retains host, project, session, run, observation time, and scan phases. Separate publications can share membership without sharing availability.
+
 **Observer coverage**:
 The recorded operating state of an observation mechanism for a root and filesystem namespace. Heartbeats bound observed intervals. Missing or stale coverage is unknown, not zero use.
 

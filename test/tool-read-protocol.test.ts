@@ -105,7 +105,7 @@ test("schema six migration preserves historical payloads, native receipts, outbo
     assert.equal((await upgraded.queryResources({})).rows[0]?.successfulReadCount, 1);
     await upgraded.close();
     const db = new DatabaseSync(databasePath);
-    assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 9);
+    assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 10);
     assert.equal(db.prepare("SELECT payload FROM resource_events WHERE observation_id='legacy-resource'").get()?.payload, saved);
     assert.equal(db.prepare("SELECT payload FROM delivery_outbox").get()?.payload, outbox);
     assert.equal(db.prepare("SELECT protocol_version FROM delivery_outbox").get()?.protocol_version, 3);

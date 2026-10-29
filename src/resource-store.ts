@@ -3,28 +3,18 @@ import { isAbsolute, relative } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { DashboardFilter, MachineId, Observation, SourceId } from "./domain.js";
 import { isResourceEvidence, parseMachineId, parseObservation, parseSourceId, serializeObservation } from "./observation.js";
-import type { InventorySnapshotEvidence, ObserverCoverageEvidence, ResourceCoverageRow, ResourceCoverageView, ResourceEvidence, ResourceLocation, ResourceRow, ResourceView } from "./resource-domain.js";
+import type { ObserverCoverageEvidence, ResourceCoverageRow, ResourceCoverageView, ResourceEvidence, ResourceLocation, ResourceRow, ResourceView } from "./resource-domain.js";
 import { readResourceAccessFacts, recordAnalyticsFact } from "./analytics-read-model.js";
-import { readInventoryScanFacts, readInventoryLocationHistory, readInventoryCompletionPaths } from "./inventory-read-model.js";
+import { readInventoryState, readInventoryLocationHistory } from "./inventory-read-model.js";
 
 type StoredSource = { machineId: MachineId; sourceId: SourceId | "local" };
 type ResourceObservation = Observation & { evidence: ResourceEvidence };
-type StoredEvent = { source: StoredSource; observation: ResourceObservation; count?: number; digest?: string | null };
+type StoredEvent = { source: StoredSource; observation: ResourceObservation; };
 type ResourceState = {
   row: ResourceRow;
   latestLocationOrder: Pick<Observation, "observedAt" | "producerId" | "sequence" | "id">;
   roots: Map<string, { firstSeen: string | null; lastSeen: string | null }>;
 };
-type Scan = {
-  source: StoredSource;
-  identity: InventorySnapshotEvidence;
-  startedAt: string | null;
-  firstObservedAt: string;
-  batches: Map<number, { digest: string | null }>;
-  complete: { batchCount: number; observedAt: string } | null;
-  invalid: boolean;
-};
-type InventoryCompletion = { observedAt: string; paths: Set<string> };
 type CoverageInterval = { from: number; to: number };
 type CoverageHeartbeat = { at: number; heartbeatMs: number; status: ObserverCoverageEvidence["status"] };
 type CoverageTimeline = { last: CoverageHeartbeat; intervals: CoverageInterval[] };
@@ -69,7 +59,6 @@ export function recordResourceObservation(db: DatabaseSync, source: StoredSource
 export function queryResources(db: DatabaseSync, filter: DashboardFilter): ResourceView {
   if (filter.source !== undefined) return { rows: [] };
   const resources = new Map<string, ResourceState>();
-  const scans = new Map<string, Scan>();
   for (const history of readInventoryLocationHistory(db, filter)) {
     const order = { observedAt: history.lastAt, producerId: history.producerId, sequence: history.sequence, id: history.observationId };
     const state = resourceState(resources, { machineId: history.machineId, sourceId: history.sourceId }, history.resource, history.lastAt, order);
@@ -78,34 +67,10 @@ export function queryResources(db: DatabaseSync, filter: DashboardFilter): Resou
     state.row.firstInventoriedAt = earliest(state.row.firstInventoriedAt, history.firstAt);
     state.row.lastInventoriedAt = latest(state.row.lastInventoriedAt, history.lastAt);
   }
-  for (const { source, observation, count = 1, digest = null } of readResourceEvents(db, filter)) {
+  for (const observation of readResourceAccessFacts(db, filter, { kind: "resources" })) {
+    const source = { machineId: observation.machineId, sourceId: observation.sourceId };
+    const count = observation.aggregate?.count ?? 1;
     const evidence = observation.evidence;
-    if (evidence.kind === "observer-coverage" || evidence.kind === "tool-coverage") continue;
-    if (evidence.kind === "inventory-snapshot") {
-      const key = JSON.stringify([source.machineId, source.sourceId, evidence.filesystemId, evidence.rootPath, evidence.scanId]);
-      let scan = scans.get(key);
-      if (!scan) {
-        scan = { source, identity: evidence, startedAt: null, firstObservedAt: observation.observedAt, batches: new Map(), complete: null, invalid: false };
-        scans.set(key, scan);
-      }
-      if (evidence.origin !== scan.identity.origin || evidence.scope !== scan.identity.scope) scan.invalid = true;
-      switch (evidence.phase) {
-        case "started": scan.startedAt = earliest(scan.startedAt, observation.observedAt); break;
-        case "batch": {
-          const previous = scan.batches.get(evidence.batchIndex);
-          if (previous && previous.digest !== digest) scan.invalid = true;
-          scan.batches.set(evidence.batchIndex, { digest });
-          break;
-        }
-        case "complete":
-          if (scan.complete && scan.complete.batchCount !== evidence.batchCount) scan.invalid = true;
-          scan.complete = { batchCount: evidence.batchCount, observedAt: observation.observedAt };
-          break;
-        case "incomplete": scan.invalid = true; break;
-        default: { const exhaustive: never = evidence; return exhaustive; }
-      }
-      continue;
-    }
     const scope = accessScope(observation, filter);
     if (scope === "excluded" || (scope === "ambiguous" && evidence.attribution === "non-agent")) continue;
     const state = resourceState(resources, source, evidence.resource, observation.observedAt, observation);
@@ -124,7 +89,7 @@ export function queryResources(db: DatabaseSync, filter: DashboardFilter): Resou
     else if (evidence.attribution === "non-agent") row.nonAgentAccessCount += count;
     else row.unattributedAccessCount += count;
   }
-  const inventory = inventoryState(scans, scan => readInventoryCompletionPaths(db, scan, filter));
+  const inventory = readInventoryState(db, filter);
   let coverageByRoot: Map<string, RootCoverage> | undefined;
   const combinedCoverage = new Map<string, RootCoverage>();
   const to = filter.toObservedAt === undefined ? Date.now() : Date.parse(filter.toObservedAt);
@@ -163,7 +128,7 @@ export function queryResources(db: DatabaseSync, filter: DashboardFilter): Resou
     const combinationKey = JSON.stringify(rootKeys);
     let covered = combinedCoverage.get(combinationKey);
     if (!covered) {
-      const byRoot = coverageByRoot ??= coverageState(db, filter);
+      const byRoot = coverageByRoot ??= coverageState(db, filter, to);
       const roots = rootKeys.flatMap(key => byRoot.get(key) ?? []);
       covered = { intervals: mergeIntervals(roots.flatMap(root => root.intervals)), active: roots.flatMap(root => root.active) };
       combinedCoverage.set(combinationKey, covered);
@@ -198,23 +163,6 @@ export function queryResourceCoverage(db: DatabaseSync, filter: DashboardFilter)
     }
   }
   return { rows: [...rows.values()].sort((a, b) => a.rootPath.localeCompare(b.rootPath) || a.observerId.localeCompare(b.observerId)) };
-}
-
-function* readResourceEvents(db: DatabaseSync, filter: DashboardFilter): Generator<StoredEvent> {
-  const inventory = readInventoryScanFacts(db, filter);
-  const access = readResourceAccessFacts(db, filter, { kind: "resources" });
-  let nextInventory = inventory.next();
-  let nextAccess = access.next();
-  while (!nextInventory.done || !nextAccess.done) {
-    if (!nextAccess.done && (nextInventory.done || compareObservations(nextAccess.value, nextInventory.value.observation) < 0)) {
-      const fact = nextAccess.value;
-      yield { source: { machineId: fact.machineId, sourceId: fact.sourceId }, observation: fact, count: fact.aggregate?.count ?? 1 };
-      nextAccess = access.next();
-    } else if (!nextInventory.done) {
-      yield nextInventory.value;
-      nextInventory = inventory.next();
-    }
-  }
 }
 
 function compareObservations(left: Pick<Observation, "observedAt" | "producerId" | "sequence" | "id">, right: Pick<Observation, "observedAt" | "producerId" | "sequence" | "id">): number {
@@ -296,32 +244,26 @@ function resourceState(resources: Map<string, ResourceState>, source: StoredSour
   return state;
 }
 
-function inventoryState(scans: Map<string, Scan>, paths: (scan: Scan) => readonly string[]): { completions: Map<string, InventoryCompletion>; uncertainty: Map<string, string> } {
-  const result = new Map<string, InventoryCompletion>();
-  const selected = new Map<string, Scan>();
-  const uncertainty = new Map<string, string>();
-  for (const scan of scans.values()) {
-    const complete = scan.complete;
-    const key = rootKey(scan.source, scan.identity.filesystemId, scan.identity.rootPath);
-    let valid = scan.startedAt !== null && !scan.invalid && complete !== null && scan.batches.size === complete.batchCount;
-    if (valid && complete) {
-      for (let i = 0; i < complete.batchCount; i += 1) if (!scan.batches.has(i)) { valid = false; break; }
+function coverageCanReachEnd(db: DatabaseSync, filter: DashboardFilter, to: number): boolean {
+  if (filter.toObservedAt !== undefined) {
+    const machine = filter.machineId === undefined ? "" : " AND machine_id = ?";
+    const values = filter.machineId === undefined ? [] : [filter.machineId];
+    for (const row of db.prepare(`SELECT observed_at FROM observations WHERE evidence_kind = 'observer-coverage'${machine}`).iterate(...values)) {
+      if (typeof row.observed_at !== "string") throw new Error("Invalid coverage timestamp");
+      if (Date.parse(row.observed_at) >= to) return true;
     }
-    if (!valid || !complete) {
-      const since = scan.startedAt ?? scan.firstObservedAt;
-      uncertainty.set(key, latest(uncertainty.get(key) ?? null, since));
-      continue;
-    }
-    const previous = result.get(key);
-    if (previous && previous.observedAt >= complete.observedAt) continue;
-    result.set(key, { observedAt: complete.observedAt, paths: new Set() });
-    selected.set(key, scan);
+    return false;
   }
-  for (const [key, scan] of selected) { const completion = result.get(key); if (completion) completion.paths = new Set(paths(scan)); }
-  return { completions: result, uncertainty };
+  for (const { observation } of readEvents(db, filter, "latest-coverage")) {
+    const evidence = observation.evidence;
+    if (evidence.kind === "observer-coverage" && evidence.mechanism === "fanotify" && evidence.status === "active"
+      && to - Date.parse(observation.observedAt) <= evidence.heartbeatMs * 3) return true;
+  }
+  return false;
 }
 
-function coverageState(db: DatabaseSync, filter: DashboardFilter): Map<string, RootCoverage> {
+function coverageState(db: DatabaseSync, filter: DashboardFilter, to: number): Map<string, RootCoverage> {
+  if (!coverageCanReachEnd(db, filter, to)) return new Map();
   const observers = new Map<string, { source: StoredSource; filesystemId: string; roots: Map<string, CoverageTimeline> }>();
   for (const { source, observation } of readEvents(db, filter, "coverage-history")) {
     const evidence = observation.evidence;

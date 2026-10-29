@@ -377,9 +377,12 @@ Back up the capture database, including enrollment and backlog, separately from 
 Protect backups as sensitive metadata. Restore file ownership for the writer account or container UID 1000.
 Do not use `docker compose down -v` unless you intend to delete the aggregate database.
 
-Writer opens migrate version 1/2/3 databases transactionally to version 4. The version-2 migration creates an empty backlog; version 3 adds the dynamic registry. Version 4 adds host identity and native evidence while preserving observations, existing bindings, and retained delivery payloads.
-A read-only version 1 dashboard reports an upgrade error without changing the file.
+Writer opens migrate older databases transactionally to schema version 10. The version-2 migration creates an empty backlog; version 3 adds the dynamic registry. Version 4 adds host identity and native evidence while preserving observations, existing bindings, and retained delivery payloads.
+Schema 10 adds [shared inventory membership and compact reports](docs/resources.md#stored-inventory) while preserving raw evidence and historical tables.
+A read-only dashboard reports an upgrade error for schemas 1–9 without changing the file.
 Back up first, then open the database with the current local Pi collector or `openHotplateStore` to migrate it.
+Large upgrades can exceed host hook timeouts. Before you update timed host hooks, upgrade the capture database through `openHotplateStore` in a process without that timeout.
+The aggregate completes migration before it starts listening.
 Aggregate databases start empty or reopen existing aggregate databases. A populated local database cannot become an aggregate.
 
 ### Delivery and scale limits

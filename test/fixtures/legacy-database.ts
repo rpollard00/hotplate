@@ -1,8 +1,9 @@
 import { DatabaseSync } from "node:sqlite";
 
 export function removeAnalyticsProjectionSchema(db: DatabaseSync): void {
-  db.exec(`DROP TABLE IF EXISTS filesystem_access_buckets; DROP TABLE IF EXISTS resource_access_facts;
-    DROP TABLE IF EXISTS observer_coverage_facts; DROP TABLE IF EXISTS inventory_scan_facts;
+  db.exec(`DROP TABLE IF EXISTS inventory_scan_current; DROP TABLE IF EXISTS inventory_location_current; DROP TABLE IF EXISTS inventory_membership_members;
+    DROP TABLE IF EXISTS inventory_scan_facts; DROP TABLE IF EXISTS inventory_memberships; DROP TABLE IF EXISTS filesystem_access_buckets; DROP TABLE IF EXISTS resource_access_facts;
+    DROP TABLE IF EXISTS observer_coverage_facts;
     DROP TABLE IF EXISTS inventory_location_buckets; DROP TABLE IF EXISTS inventory_location_variants;`);
 }
 
