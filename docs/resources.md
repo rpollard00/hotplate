@@ -9,6 +9,18 @@ The [integration guide](integrations.md#supported-tool-reads) lists the supporte
 Filesystem observation remains a separate diagnostic source. Catalog polling and background loaders can open files without an agent tool read.
 Neither a filesystem event nor frontmatter in context establishes that the agent used the instructions.
 
+## Stored inventory
+
+Schema 10 shares complete physical inventory membership across repeated session and root publications. Membership identity ignores enumeration order and batch partitions. Each publication retains its exact scope and scan phases. Shared membership alone never establishes availability in another scope.
+
+New captures retain their original observations, raw resource events, and delivery payloads. Protocols 1–5 remain unchanged, so raw storage and wire payloads still repeat inventory metadata. The upgrade preserves historical tables and does not reclaim disk space.
+
+The first writer upgrades an older database in one transaction. Schema-9 analytics remain intact. Current resource reports use compact location summaries and scan summaries. Scoped and historical reports can reconstruct new inventory positives from retained raw frames. Incomplete scans retain positive evidence and cannot establish absence.
+
+Large upgrades can exceed host hook timeouts. The aggregate completes migration before it starts listening.
+
+Before you update timed host hooks, upgrade a large capture database through `openHotplateStore`. Use a process without the hook timeout.
+
 ## Configure roots
 
 Hotplate discovers installed account collections, exact host advertisements, and explicitly configured content roots. The watcher does not infer project scope from its working directory or home directory. A session supplies its host and project boundary for project discovery.

@@ -13,6 +13,7 @@ import { DatabaseSync } from "node:sqlite";
 import { createResourceSchema, recordResourceObservation, queryResources, queryResourceCoverage } from "./resource-store.js";
 import type { ResourceView, ResourceCoverageView, ToolCoverageEvidence } from "./resource-domain.js";
 import { buildContentAnalytics, buildContentTimelines, type ContentInput, type ContentFact, type ContentQuery, type ContentReport, type ContentSkillEvidence, type ContentTimelineRequest, type ContentTimelines } from "./content-analytics.js";
+import { createSharedInventory } from "./inventory-membership.js";
 import { createAnalyticsReadModel, readResourceAccessFacts, readResourceProjectFacets } from "./analytics-read-model.js";
 import type {
   HostId,
@@ -43,7 +44,7 @@ import type {
   SkillTableView,
 } from "./domain.js";
 
-const SCHEMA_VERSION = 9;
+const SCHEMA_VERSION = 10;
 export const MAX_DYNAMIC_SOURCES = 10_000;
 export const ENROLLMENTS_PER_MINUTE = 30;
 const DEFAULT_BUSY_TIMEOUT_MS = 25;
@@ -1134,7 +1135,9 @@ function migrate(db: DatabaseSync, busyRetries: number): void {
     }
     db.exec(`CREATE INDEX IF NOT EXISTS observations_sequence_lookup_idx ON observations(machine_id, source_id, producer_id, sequence);
       CREATE INDEX IF NOT EXISTS observations_evidence_time_idx ON observations(evidence_kind, observed_at);`);
-    createAnalyticsReadModel(db);
+    const analyticsTables = ["resource_access_facts", "filesystem_access_buckets", "observer_coverage_facts", "inventory_scan_facts", "inventory_location_variants", "inventory_location_buckets"];
+    if (version < 9 || analyticsTables.some(name => !db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name))) createAnalyticsReadModel(db);
+    createSharedInventory(db);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}; COMMIT;`);
   } catch (error) {
     rollbackBestEffort(db);

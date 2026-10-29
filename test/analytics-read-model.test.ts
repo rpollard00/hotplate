@@ -151,7 +151,7 @@ test("v7 backfill is atomic, preserves raw history/outbox/receipts and matches o
   assert.deepEqual(raw(), before);
   const upgraded = openCaptureStore({ databasePath, enrollment });
   try {
-    assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 9);
+    assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 10);
     assert.deepEqual(raw(), before); assert.deepEqual(await upgraded.queryResources({}), resources); assert.deepEqual(await upgraded.queryContentAnalytics(query), content);
     assert.deepEqual(await upgraded.record(first), { accepted: 0, duplicate: 1, dropped: 0 });
     assert.equal(db.prepare("SELECT SUM(fact_count) AS n FROM filesystem_access_buckets").get()?.n, 1);
@@ -166,7 +166,7 @@ test("derived access, buckets and inventory roll back on aggregate conflicts wit
   const first = observation("first", 1);
   assert.deepEqual(await store.ingest({ source, observations: [first, first] }), { kind: "committed", accepted: 1, duplicate: 1 });
   const db = new DatabaseSync(databasePath, { readOnly: true }); t.after(() => db.close());
-  const state = () => Object.fromEntries(["observations", "resource_access_facts", "filesystem_access_buckets", "inventory_scan_facts", "inventory_location_buckets", "inventory_location_variants"].map(table => [table, db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()]));
+  const state = () => Object.fromEntries(["observations", "resource_access_facts", "filesystem_access_buckets", "inventory_scan_facts", "inventory_location_buckets", "inventory_location_variants", "inventory_location_current", "inventory_scan_current", "inventory_memberships", "inventory_membership_members"].map(table => [table, db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()]));
   const before = state();
   const inventory: Observation = { ...observation("inventory", 2), evidence: { kind: "inventory-snapshot", scanId: "scan", filesystemId: "fs", rootPath: "/skills", origin: "configured", scope: "account", phase: "batch", batchIndex: 0, resources: [resource], error: null } };
   assert.deepEqual(await store.ingest({ source, observations: [observation("new", 2), inventory, { ...first, observedAt: at(5) }] }), { kind: "conflict", observationIds: [first.id] });

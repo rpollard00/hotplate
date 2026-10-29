@@ -250,3 +250,19 @@ test("aggregate resource identity includes source and projects survive duplicate
     }
   } finally { await aggregate.close(); await rm(directory, { recursive: true, force: true }); }
 });
+
+test("coverage proof bounds retain future heartbeats and do not revive retired observation", async t => {
+  const store = openHotplateStore({ databasePath: ":memory:" }); t.after(() => store.close());
+  t.mock.method(Date, "now", () => Date.parse("2026-10-18T00:00:04.500Z"));
+  await store.record([scan("bound", "started", 0), batch("bound", [location("bounded.md")], 1), scan("bound", "complete", 1, 1),
+    coverage("coverage-bound-start", 0), coverage("coverage-bound-heartbeat", 2), coverage("coverage-bound-stop", 3, "stopped")]);
+  assert.equal((await store.queryResources({})).rows[0]?.observation, "unknown");
+  assert.equal((await store.queryResources({ toObservedAt: at(4) })).rows[0]?.observation, "unknown");
+  const historical = (await store.queryResources({ toObservedAt: "2026-10-18T00:00:01.500Z" })).rows[0];
+  assert.equal(historical?.observation, "not-observed");
+  assert.equal(historical?.coverageTo, "2026-10-18T00:00:01.500Z");
+  await store.record([coverage("coverage-bound-resume", 4), coverage("coverage-bound-future", 5)]);
+  const current = (await store.queryResources({ fromObservedAt: at(4) })).rows[0];
+  assert.equal(current?.observation, "not-observed");
+  assert.equal(current?.coverageTo, "2026-10-18T00:00:04.500Z");
+});
